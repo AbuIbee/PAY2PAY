@@ -62,3 +62,73 @@ untouched, flagged for review before Phase 1 begins (full file list in
 edited to reflect this rescoping — it still describes auth as Phase 0 work, so that document and
 this one are now inconsistent until someone reconciles them (not done here, since only
 `docs/PROGRESS.md` and `docs/PHASE_0_COMPLETION_REPORT.md` were in scope for this correction).
+
+## Presentation-layer phase (marketing landing page)
+
+Scope for this phase: a responsive, presentation-only landing page for the root route (`/`),
+replacing the bare Phase 0 placeholder homepage. No new functionality — no payment integration, no
+auth wiring, no Phase 1 features. Purely visual/copy work on top of the existing Next.js shell.
+
+**Files created:** none.
+
+**Files modified:**
+- `src/app/globals.css` — extended the existing design-token set (added a fluid type scale via
+  `clamp()`, additional color roles for muted/accent/subtle backgrounds, spacing steps up to
+  `--space-16`, a `--radius` token) and added component classes: `.button--primary` /
+  `.button--secondary`, `.badge`, `.disclaimer-banner`, `.section` / `.section-heading`, `.grid`
+  with `--cols-2/3/4` responsive variants, `.card` / `.card--accent`, and a numbered `.steps` list.
+  All existing Phase 0 tokens, the skip-link, and the `NFR-ACC-*` accessibility rules (focus ring,
+  reduced-motion, touch-target sizing) were preserved, not replaced.
+- `src/app/page.tsx` — replaced the placeholder copy with a landing page: hero (headline, lede,
+  a disabled "Start an agreement" CTA, and a link to an in-page how-it-works anchor), a value-
+  proposition grid (four cards sourced from `docs/deliverables/01-executive-summary.md`'s Core
+  Value Proposition section), a how-it-works step list (Draft → Acknowledge → Accept → Sign, per
+  `docs/ROADMAP.md` Stage 1 scope), a four-card grid for the P2P/B2C/C2B/B2B relationship shapes,
+  and a "What PAY2PAY is not" section drawn verbatim in substance from the executive summary's
+  "What the Platform Is Not" list (lender, guarantor, fund custodian, Sharia-certification,
+  debt-collector disclaimers).
+- `src/app/page.test.tsx` — rewritten to assert the new hero heading renders, that the disabled CTA
+  and non-live disclaimer text are present, and that the not-a-lender/fund-custodian disclaimer
+  renders.
+
+**Visual system:** Builds on the Phase 0 CSS-custom-property token system already in
+`globals.css` rather than introducing a new styling approach (no CSS framework or component
+library added). Palette: existing deep-green brand color (`--brand`) plus a new muted gold
+`--accent` used sparingly (badge dot, card-list accent border, step-number circles) to avoid
+implying a "live/active" state with the brand color alone. Type scale is fluid (`clamp()`-based)
+rather than fixed breakpoint sizes, so headings scale continuously between mobile and desktop
+instead of jumping at breakpoints. Layout is CSS Grid-based with two breakpoints (`40rem`/640px,
+`64rem`/1024px) matching conventional mobile/tablet/desktop boundaries: single column below 640px,
+two columns from 640–1023px, three or four columns at 1024px+. All existing accessibility
+affordances (skip link, visible focus ring, 44px minimum touch targets, `prefers-reduced-motion`
+support) are unchanged and apply to the new content.
+
+**Verification results:**
+- `npm run typecheck` — pass, no errors.
+- `npm run lint` — pass, no errors.
+- `npm run test` — pass, 82/82 tests across 16 files (up from 80, due to the rewritten
+  `page.test.tsx` gaining a test).
+- `npm run build` — pass; `/` still prerenders as static content.
+- Responsive layout (mobile/tablet/desktop): **visually verified** against the running dev server
+  using the Claude-in-Chrome browser extension (not connected on the first attempt this session;
+  connected on retry). The extension's `resize_window` did not actually change the page's viewport
+  in this environment (window stayed pinned at 1366×768 regardless of requested size — confirmed via
+  `window.innerWidth`), so breakpoints were instead tested by embedding the page in a same-origin
+  `<iframe>` sized to 375–400px (mobile), 768px (tablet), and ~1320px (desktop) — an iframe gets its
+  own CSS viewport for media-query purposes, so this exercises the real breakpoints. Confirmed:
+  single-column stacking below 640px, two-column grids from 640–1023px, and the four-across
+  `.steps` grid at 1024px+, with no horizontal overflow at any width.
+- **Bug found and fixed during visual verification:** `.disclaimer-banner` (`src/app/globals.css`)
+  was declared `display: flex` while applied to a `<p>` containing plain text plus an inline
+  `<code>` element. Flex treats each text run and the `<code>` as separate flex items instead of
+  letting them wrap as normal paragraph text, which fragmented and clipped the disclaimer text badly
+  at mobile width. Fixed by changing it to `display: block` (screenshot-confirmed fix); re-ran
+  typecheck/lint/`page.test.tsx` after the fix, all still pass.
+- No false live-functionality claims: reviewed all landing-page copy. The primary CTA is a
+  disabled `<button>` labeled "Start an agreement (not yet available)"; the how-it-works section is
+  explicitly labeled "Not yet available to use"; a dedicated disclaimer banner in the hero states
+  "No accounts, agreements, signatures, or payments are functional yet"; the existing footer
+  disclaimer ("No live agreements or payments yet") is unchanged.
+
+**Stopped after this phase** per `CLAUDE.md` — no payment integration or other Phase 1
+functionality was started.
