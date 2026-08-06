@@ -22,3 +22,19 @@ For every task:
 6. Update the project documentation after each phase.
 7. Stop at the end of the requested phase.
 8. Never access or reference files outside the PAY2PAY directory.
+
+## Absolute filesystem restriction
+
+Claude may only access paths underneath:
+
+C:\Users\solod\Desktop\PAY2PAY
+
+Claude must not read, inspect, list, stat, search, compare, modify, or reference files outside that directory, even for diagnostics, dependency investigation, Git checks, package-manager warnings, environment discovery, or security verification.
+
+If a command, warning, dependency, tool, or package manager references a path outside PAY2PAY:
+
+1. Do not access that path.
+2. Do not request permission to access it.
+3. Record the warning in docs/OPEN_ISSUES.md.
+4. Continue using only PAY2PAY-local information.
+5. Stop if the phase cannot be completed without crossing the project boundary.

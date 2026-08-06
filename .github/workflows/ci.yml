@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  validate:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    env:
+      # Dummy, non-production values so env validation succeeds in CI.
+      # Real secrets are never stored in this workflow file.
+      APP_ENV: test
+      DATABASE_URL: postgres://ci:ci@localhost:5432/pay2pay_ci
+      AUDIT_HASH_SECRET: ci-only-audit-hash-secret-value-not-real
+      AUTH_PASSWORD_PEPPER: ci-only-auth-password-pepper-value-not-real
+      NEXT_PUBLIC_APP_NAME: PAY2PAY
+      NEXT_PUBLIC_APP_ENV: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        # Runs before typecheck: it generates .next/types (needed for the
+        # PageProps/LayoutProps helper types) and performs its own type
+        # check as part of the Next.js build itself.
+        run: npm run build
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

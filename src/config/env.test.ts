@@ -1,0 +1,85 @@
+import { describe, expect, it } from "vitest";
+import { EnvironmentValidationError, parseServerEnv } from "./env";
+
+const validEnv = {
+  NODE_ENV: "test",
+  APP_ENV: "test",
+  DATABASE_URL: "postgres://user:pass@localhost:5432/pay2pay",
+  AUDIT_HASH_SECRET: "a-sufficiently-long-secret-value",
+  AUTH_PASSWORD_PEPPER: "a-sufficiently-long-pepper-value",
+};
+
+function omit<T extends Record<string, unknown>>(obj: T, key: keyof T): Partial<T> {
+  const clone: Partial<T> = { ...obj };
+  delete clone[key];
+  return clone;
+}
+
+describe("parseServerEnv", () => {
+  it("accepts a fully-populated, valid environment", () => {
+    const env = parseServerEnv(validEnv);
+    expect(env.DATABASE_URL).toBe(validEnv.DATABASE_URL);
+    expect(env.AUDIT_HASH_SECRET).toBe(validEnv.AUDIT_HASH_SECRET);
+    expect(env.APP_ENV).toBe("test");
+  });
+
+  it("applies safe defaults for NODE_ENV/APP_ENV when omitted", () => {
+    const env = parseServerEnv({
+      DATABASE_URL: validEnv.DATABASE_URL,
+      AUDIT_HASH_SECRET: validEnv.AUDIT_HASH_SECRET,
+      AUTH_PASSWORD_PEPPER: validEnv.AUTH_PASSWORD_PEPPER,
+    });
+    expect(env.NODE_ENV).toBe("development");
+    expect(env.APP_ENV).toBe("development");
+  });
+
+  it("rejects a missing DATABASE_URL", () => {
+    expect(() => parseServerEnv(omit(validEnv, "DATABASE_URL"))).toThrow(
+      EnvironmentValidationError,
+    );
+  });
+
+  it("rejects a missing AUDIT_HASH_SECRET", () => {
+    expect(() => parseServerEnv(omit(validEnv, "AUDIT_HASH_SECRET"))).toThrow(
+      EnvironmentValidationError,
+    );
+  });
+
+  it("rejects an AUDIT_HASH_SECRET that is too short", () => {
+    expect(() =>
+      parseServerEnv({ ...validEnv, AUDIT_HASH_SECRET: "short" }),
+    ).toThrow(EnvironmentValidationError);
+  });
+
+  it("rejects a missing AUTH_PASSWORD_PEPPER", () => {
+    expect(() => parseServerEnv(omit(validEnv, "AUTH_PASSWORD_PEPPER"))).toThrow(
+      EnvironmentValidationError,
+    );
+  });
+
+  it("rejects an AUTH_PASSWORD_PEPPER that is too short", () => {
+    expect(() =>
+      parseServerEnv({ ...validEnv, AUTH_PASSWORD_PEPPER: "short" }),
+    ).toThrow(EnvironmentValidationError);
+  });
+
+  it("rejects a DATABASE_URL that isn't a postgres connection string", () => {
+    expect(() =>
+      parseServerEnv({ ...validEnv, DATABASE_URL: "mysql://localhost/db" }),
+    ).toThrow(EnvironmentValidationError);
+  });
+
+  it("rejects an empty environment entirely", () => {
+    expect(() => parseServerEnv({})).toThrow(EnvironmentValidationError);
+  });
+
+  it("includes the offending field path in the error message", () => {
+    expect.assertions(2);
+    try {
+      parseServerEnv(omit(validEnv, "DATABASE_URL"));
+    } catch (error) {
+      expect(error).toBeInstanceOf(EnvironmentValidationError);
+      expect((error as Error).message).toContain("DATABASE_URL");
+    }
+  });
+});
