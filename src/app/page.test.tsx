@@ -8,19 +8,32 @@ describe("HomePage", () => {
     expect(
       screen.getByRole("heading", {
         level: 1,
-        name: /turn what.s owed into a documented, signed repayment plan/i,
+        name: /turn an obligation into a plan both sides can trust/i,
       }),
     ).toBeInTheDocument();
   });
 
   it("does not claim agreements or payments are live", () => {
     render(<HomePage />);
-    expect(screen.getByText(/no accounts, agreements, signatures, or payments are functional yet/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /not yet available/i })).toBeDisabled();
+    expect(
+      screen.getByText(/account creation, agreements, signatures, and payments are not yet enabled/i),
+    ).toBeInTheDocument();
   });
 
-  it("states the platform is not a lender or fund custodian", () => {
+  it("states the platform is not a lender or guarantor", () => {
     render(<HomePage />);
-    expect(screen.getByText(/not a lender, and not in the business of advancing loan proceeds/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", {
+        name: /a repayment platform—not a lender, collector, or guarantor/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows all four relationship types", () => {
+    render(<HomePage />);
+    expect(screen.getByText("P2P")).toBeInTheDocument();
+    expect(screen.getByText("B2C")).toBeInTheDocument();
+    expect(screen.getByText("C2B")).toBeInTheDocument();
+    expect(screen.getByText("B2B")).toBeInTheDocument();
   });
 });

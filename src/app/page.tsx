@@ -1,153 +1,363 @@
 const VALUE_PROPS = [
   {
-    title: "No interest, ever",
-    body: "No compounding, no percentage-based late fees, and no charges for taking longer to pay. Repayment terms cannot silently grow the debt.",
+    eyebrow: "Clear terms",
+    title: "No interest. No moving target.",
+    body: "The balance does not grow simply because repayment takes time. Both parties see the same principal, dates, and fee allocation before signing.",
+    icon: "document",
   },
   {
-    title: "Money moves only when it clears",
-    body: "Recipients are paid through a qualified payment processor as each installment settles. PAY2PAY is not a lender and does not advance or hold customer funds.",
+    eyebrow: "Mutual control",
+    title: "Changes require both parties.",
+    body: "Payment pauses, reduced installments, settlements, and schedule changes are documented as amendments instead of silent edits.",
+    icon: "handshake",
   },
   {
-    title: "Full lifecycle support",
-    body: "Failed-payment retries, hardship requests, partial payments, early payoff, settlements, and disputes are first-class, auditable workflows.",
+    eyebrow: "Direct repayment",
+    title: "Funds move after they clear.",
+    body: "PAY2PAY is designed to route cleared installments through a qualified processor to the verified recipient—without acting as a lender.",
+    icon: "transfer",
   },
   {
-    title: "Built-in evidence and audit trail",
-    body: "Supporting documents, tamper-evident signed records, witness attestations, and an append-only audit log make an agreement defensible later.",
+    eyebrow: "Defensible records",
+    title: "Every important action is recorded.",
+    body: "Signed versions, supporting documents, payment history, and later evidence remain tied to an auditable agreement timeline.",
+    icon: "shield",
   },
 ];
 
 const STEPS = [
   {
-    title: "Draft",
-    body: "One party states what's owed, why, and the proposed repayment schedule.",
+    number: "01",
+    title: "Create the terms",
+    body: "Document what is owed, why it is owed, prior payments, the first payment, and the proposed schedule.",
   },
   {
-    title: "Acknowledge",
-    body: "Both parties confirm the same facts: amount, reason, prior payments, and remaining balance.",
+    number: "02",
+    title: "Review together",
+    body: "The debtor acknowledges the obligation and both parties review the same plain-language summary.",
   },
   {
-    title: "Accept",
-    body: "A mandatory final review screen surfaces the full terms in plain language before anything is binding.",
+    number: "03",
+    title: "Approve and sign",
+    body: "Both parties confirm the final terms. The signed version is locked and preserved.",
   },
   {
-    title: "Sign",
-    body: "Both parties sign electronically and receive a tamper-evident copy of the agreement.",
+    number: "04",
+    title: "Track repayment",
+    body: "Installments, failed payments, amendments, settlements, and supporting evidence follow one timeline.",
   },
 ];
 
 const RELATIONSHIP_SHAPES = [
   {
-    title: "Personal-to-personal",
-    body: "Friends and family formalizing an informal loan into a documented, trackable repayment plan.",
+    title: "Personal repayment",
+    body: "Turn an informal debt between friends or family into a clear plan without awkward spreadsheets or scattered messages.",
+    tag: "P2P",
   },
   {
-    title: "Business-to-consumer",
-    body: "Small businesses, contractors, and service providers offering installment repayment on completed work.",
+    title: "Customer payment plans",
+    body: "Give customers a structured way to repay completed work or delivered goods while preserving the original invoice terms.",
+    tag: "B2C",
   },
   {
-    title: "Consumer-to-business",
-    body: "An individual repaying a verified business for goods or services already delivered.",
+    title: "Business repayment",
+    body: "Let an individual repay a verified business through a transparent, mutually approved schedule.",
+    tag: "C2B",
   },
   {
-    title: "Business-to-business",
-    body: "Verified businesses collecting past-due or scheduled invoices from another business, both acting through authorized representatives.",
+    title: "Commercial receivables",
+    body: "Create B2B repayment agreements tied to invoices, purchase orders, contracts, and authorized representatives.",
+    tag: "B2B",
   },
 ];
 
-const NOT_STATEMENTS = [
-  "Not a lender, and not in the business of advancing loan proceeds.",
-  "Not a guarantor of repayment.",
-  "Not an intentional custodian of customer funds.",
-  'Not a Sharia-certified financial product — "influenced by" Islamic debt principles, but no formal compliance claim is made absent qualified scholarly review.',
-  "Not a debt collector, debt buyer, or payday lender.",
+const TRUST_POINTS = [
+  "Interest-free by design",
+  "Both parties approve changes",
+  "No platform-funded loans",
+  "No repayment guarantees",
 ];
+
+function FeatureIcon({ name }: { name: string }) {
+  if (name === "document") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 3.75h7.25L18.25 7.75V20.25H7V3.75Z" />
+        <path d="M14 3.75V8H18.25M9.5 12H15.5M9.5 15.5H14" />
+      </svg>
+    );
+  }
+
+  if (name === "handshake") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8.25 8.75 11 6.25c.8-.72 2.02-.7 2.8.05l1.2 1.15h3.25l2 2.25-5.78 5.8a2 2 0 0 1-2.82 0L8.25 12.1" />
+        <path d="m3.75 8.25 3-2.5 3 3.5-3.5 3.25-2.5-4.25Zm16.5.5-2-2.5-2.75 2.5 3 3.25 1.75-3.25ZM8 13.75l1.75 1.75M10.25 16l1.5 1.5" />
+      </svg>
+    );
+  }
+
+  if (name === "transfer") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 8.25h13.5M14.5 5.25l3 3-3 3M20 15.75H6.5M9.5 12.75l-3 3 3 3" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3.5 19 6v5.25c0 4.6-2.85 7.68-7 9.25-4.15-1.57-7-4.65-7-9.25V6l7-2.5Z" />
+      <path d="m8.75 11.75 2.1 2.1 4.4-4.7" />
+    </svg>
+  );
+}
+
+function ProductPreview() {
+  return (
+    <div className="product-preview" aria-label="Preview of a PAY2PAY agreement dashboard">
+      <div className="preview-window">
+        <div className="preview-window__bar">
+          <span />
+          <span />
+          <span />
+          <p>Agreement overview</p>
+        </div>
+        <div className="preview-window__content">
+          <div className="preview-sidebar" aria-hidden="true">
+            <div className="preview-logo">P2P</div>
+            <span className="preview-nav-item preview-nav-item--active" />
+            <span className="preview-nav-item" />
+            <span className="preview-nav-item" />
+            <span className="preview-nav-item" />
+          </div>
+          <div className="preview-dashboard">
+            <div className="preview-dashboard__heading">
+              <div>
+                <span className="preview-kicker">ACTIVE AGREEMENT</span>
+                <h2>Equipment repayment</h2>
+              </div>
+              <span className="status-pill">On schedule</span>
+            </div>
+
+            <div className="preview-stats">
+              <div>
+                <span>Remaining balance</span>
+                <strong>$2,400</strong>
+              </div>
+              <div>
+                <span>Next payment</span>
+                <strong>$200</strong>
+              </div>
+              <div>
+                <span>Payments made</span>
+                <strong>3 of 15</strong>
+              </div>
+            </div>
+
+            <div className="preview-progress">
+              <div className="preview-progress__meta">
+                <span>Repayment progress</span>
+                <strong>20%</strong>
+              </div>
+              <div className="preview-progress__track">
+                <span />
+              </div>
+            </div>
+
+            <div className="preview-timeline">
+              <div className="timeline-row timeline-row--complete">
+                <span className="timeline-dot" />
+                <div>
+                  <strong>Agreement signed</strong>
+                  <small>Both parties approved</small>
+                </div>
+                <time>May 4</time>
+              </div>
+              <div className="timeline-row timeline-row--complete">
+                <span className="timeline-dot" />
+                <div>
+                  <strong>Payment received</strong>
+                  <small>Cleared and recorded</small>
+                </div>
+                <time>Jul 1</time>
+              </div>
+              <div className="timeline-row">
+                <span className="timeline-dot" />
+                <div>
+                  <strong>Next installment</strong>
+                  <small>Scheduled payment</small>
+                </div>
+                <time>Aug 1</time>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="floating-card floating-card--top">
+        <span className="floating-card__icon">✓</span>
+        <div>
+          <strong>Mutually approved</strong>
+          <small>Terms locked after signing</small>
+        </div>
+      </div>
+      <div className="floating-card floating-card--bottom">
+        <span className="floating-card__icon floating-card__icon--gold">$</span>
+        <div>
+          <strong>Interest-free</strong>
+          <small>Principal does not grow with time</small>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function HomePage() {
   return (
     <>
-      <section className="hero">
-        <span className="badge">Presentation preview — no live agreements or payments</span>
-        <h1>Turn what&apos;s owed into a documented, signed repayment plan</h1>
-        <p className="hero__lede">
-          PAY2PAY is an ethical, interest-free repayment platform. It helps two parties document
-          an existing debt, get both signatures, and track repayment through a qualified payment
-          processor — without ever acting as a lender or holding customer funds.
-        </p>
-        <div className="hero__actions">
-          <button type="button" className="button button--primary" aria-disabled="true" disabled>
-            Start an agreement (not yet available)
-          </button>
-          <a className="button button--secondary" href="#how-it-works">
-            See how it works
-          </a>
-        </div>
-        <p className="disclaimer-banner">
-          This is a presentation-layer preview of the PAY2PAY product. No accounts, agreements,
-          signatures, or payments are functional yet. See <code>docs/IMPLEMENTATION_PLAN.md</code>{" "}
-          for build status.
-        </p>
-      </section>
-
-      <section className="section" aria-labelledby="value-props-heading">
-        <div className="section-heading">
-          <h2 id="value-props-heading">What makes it different</h2>
-          <p>Principles carried through every part of the platform, not just marketing copy.</p>
-        </div>
-        <div className="grid grid--cols-2">
-          {VALUE_PROPS.map((item) => (
-            <div className="card" key={item.title}>
-              <h3>{item.title}</h3>
-              <p>{item.body}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="section" id="how-it-works" aria-labelledby="how-it-works-heading">
-        <div className="section-heading">
-          <h2 id="how-it-works-heading">How an agreement will work</h2>
-          <p>The planned draft-to-signature flow. Not yet available to use.</p>
-        </div>
-        <ol className="steps">
-          {STEPS.map((step) => (
-            <li key={step.title}>
-              <h3>{step.title}</h3>
-              <p>{step.body}</p>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section className="section" aria-labelledby="relationships-heading">
-        <div className="section-heading">
-          <h2 id="relationships-heading">Built for four kinds of relationships</h2>
-          <p>The same plain-language agreement flow, adapted to who&apos;s involved.</p>
-        </div>
-        <div className="grid grid--cols-2">
-          {RELATIONSHIP_SHAPES.map((shape) => (
-            <div className="card card--accent" key={shape.title}>
-              <h3>{shape.title}</h3>
-              <p>{shape.body}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="section" aria-labelledby="trust-heading">
-        <div className="section-heading">
-          <h2 id="trust-heading">What PAY2PAY is not</h2>
-          <p>
-            Stated plainly so the platform&apos;s scope is never overclaimed, live or otherwise.
+      <section className="hero" aria-labelledby="hero-heading">
+        <div className="hero__copy">
+          <span className="eyebrow"><span /> A clearer way to repay what&apos;s owed</span>
+          <h1 id="hero-heading">
+            Turn an obligation into a plan <em>both sides can trust.</em>
+          </h1>
+          <p className="hero__lede">
+            PAY2PAY helps people and businesses create clear, interest-free repayment agreements,
+            approve changes together, and keep every important step in one documented timeline.
+          </p>
+          <div className="hero__actions">
+            <a className="button button--primary button--large" href="#how-it-works">
+              Explore how it works
+              <span aria-hidden="true">→</span>
+            </a>
+            <a className="button button--ghost button--large" href="#use-cases">
+              See who it&apos;s for
+            </a>
+          </div>
+          <div className="hero__trust" aria-label="PAY2PAY product principles">
+            {TRUST_POINTS.map((point) => (
+              <span key={point}><b aria-hidden="true">✓</b>{point}</span>
+            ))}
+          </div>
+          <p className="preview-note">
+            Product preview: account creation, agreements, signatures, and payments are not yet enabled.
           </p>
         </div>
-        <div className="card" style={{ maxWidth: "var(--max-text-width)", marginInline: "auto" }}>
-          <ul style={{ margin: 0, paddingInlineStart: "1.25rem" }}>
-            {NOT_STATEMENTS.map((statement) => (
-              <li key={statement}>{statement}</li>
-            ))}
-          </ul>
+        <ProductPreview />
+      </section>
+
+      <section className="proof-strip" aria-label="Core product capabilities">
+        <div>
+          <strong>P2P</strong>
+          <span>Personal repayment</span>
         </div>
+        <div>
+          <strong>B2C</strong>
+          <span>Customer payment plans</span>
+        </div>
+        <div>
+          <strong>C2B</strong>
+          <span>Business repayment</span>
+        </div>
+        <div>
+          <strong>B2B</strong>
+          <span>Commercial receivables</span>
+        </div>
+      </section>
+
+      <section className="section section--features" aria-labelledby="value-props-heading">
+        <div className="section-heading section-heading--split">
+          <div>
+            <span className="eyebrow"><span /> Built around the agreement</span>
+            <h2 id="value-props-heading">Structure without turning repayment into another loan.</h2>
+          </div>
+          <p>
+            PAY2PAY is designed to make obligations clearer—not larger. The experience centers on
+            mutual consent, transparent records, and a repayment schedule both parties understand.
+          </p>
+        </div>
+        <div className="feature-grid">
+          {VALUE_PROPS.map((item) => (
+            <article className="feature-card" key={item.title}>
+              <div className="feature-card__icon"><FeatureIcon name={item.icon} /></div>
+              <span>{item.eyebrow}</span>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="section section--process" id="how-it-works" aria-labelledby="how-it-works-heading">
+        <div className="process-layout">
+          <div className="process-intro">
+            <span className="eyebrow eyebrow--light"><span /> One shared record</span>
+            <h2 id="how-it-works-heading">From conversation to signed repayment plan.</h2>
+            <p>
+              Replace vague promises and scattered messages with a structured process that preserves
+              what both parties agreed to—and what happens next.
+            </p>
+            <a className="text-link" href="#use-cases">Explore repayment use cases <span aria-hidden="true">→</span></a>
+          </div>
+          <ol className="steps">
+            {STEPS.map((step) => (
+              <li key={step.title}>
+                <span className="steps__number">{step.number}</span>
+                <div>
+                  <h3>{step.title}</h3>
+                  <p>{step.body}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      <section className="section" id="use-cases" aria-labelledby="relationships-heading">
+        <div className="section-heading">
+          <span className="eyebrow"><span /> Flexible by relationship</span>
+          <h2 id="relationships-heading">Built for personal obligations and business receivables.</h2>
+          <p>The same transparent agreement model, adapted to the people and organizations involved.</p>
+        </div>
+        <div className="relationship-grid">
+          {RELATIONSHIP_SHAPES.map((shape) => (
+            <article className="relationship-card" key={shape.title}>
+              <div className="relationship-card__tag">{shape.tag}</div>
+              <div>
+                <h3>{shape.title}</h3>
+                <p>{shape.body}</p>
+              </div>
+              <span className="relationship-card__arrow" aria-hidden="true">↗</span>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="section section--trust" aria-labelledby="trust-heading">
+        <div className="trust-panel">
+          <div className="trust-panel__copy">
+            <span className="eyebrow eyebrow--light"><span /> Honest by design</span>
+            <h2 id="trust-heading">A repayment platform—not a lender, collector, or guarantor.</h2>
+            <p>
+              PAY2PAY is being built to document and facilitate repayment through qualified providers.
+              It does not advance funds, guarantee repayment, or claim formal Sharia certification.
+            </p>
+          </div>
+          <div className="trust-panel__facts">
+            <div><strong>0%</strong><span>interest added by PAY2PAY</span></div>
+            <div><strong>2</strong><span>parties required for term changes</span></div>
+            <div><strong>1</strong><span>shared agreement timeline</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section className="closing-cta" aria-labelledby="closing-heading">
+        <div>
+          <span className="eyebrow"><span /> In active development</span>
+          <h2 id="closing-heading">Repayment should be clear before money ever moves.</h2>
+          <p>PAY2PAY is currently in its product-development stage. Functional accounts and payment flows will arrive in later builds.</p>
+        </div>
+        <a className="button button--primary button--large" href="#how-it-works">Review the planned flow <span aria-hidden="true">→</span></a>
       </section>
     </>
   );

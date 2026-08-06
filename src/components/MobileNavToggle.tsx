@@ -2,24 +2,44 @@
 
 import { useState } from "react";
 
-/**
- * Deliberately minimal client component: demonstrates the server/client
- * boundary convention for Phase 0 (interactive state requires "use client";
- * everything else in the shell stays a server component by default). Not a
- * real navigation menu — there's nothing to navigate to yet.
- */
+const NAV_ITEMS = [
+  { href: "#how-it-works", label: "How it works" },
+  { href: "#use-cases", label: "Use cases" },
+  { href: "#main-content", label: "Why PAY2PAY" },
+];
+
 export function MobileNavToggle() {
   const [open, setOpen] = useState(false);
 
   return (
-    <button
-      type="button"
-      className="button"
-      aria-expanded={open}
-      aria-controls="mobile-nav-placeholder"
-      onClick={() => setOpen((value) => !value)}
-    >
-      {open ? "Close menu" : "Open menu"}
-    </button>
+    <div className="nav-shell">
+      <nav className="desktop-nav" aria-label="Primary navigation">
+        {NAV_ITEMS.map((item) => (
+          <a key={item.label} href={item.href}>{item.label}</a>
+        ))}
+        <span className="nav-status">Preview build</span>
+      </nav>
+      <button
+        type="button"
+        className="menu-button"
+        aria-expanded={open}
+        aria-controls="mobile-navigation"
+        aria-label={open ? "Close menu" : "Open menu"}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span />
+        <span />
+      </button>
+      <nav
+        id="mobile-navigation"
+        className={`mobile-nav${open ? " mobile-nav--open" : ""}`}
+        aria-label="Mobile navigation"
+      >
+        {NAV_ITEMS.map((item) => (
+          <a key={item.label} href={item.href} onClick={() => setOpen(false)}>{item.label}</a>
+        ))}
+        <span className="nav-status">Preview build</span>
+      </nav>
+    </div>
   );
 }

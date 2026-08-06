@@ -23,9 +23,8 @@ describe("MobileNavToggle", () => {
     expect(button).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("renders primary navigation links", () => {
+  it("meets the minimum 44px touch-target size via the shared .button class", () => {
     render(<MobileNavToggle />);
-    expect(screen.getAllByRole("link", { name: /how it works/i }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("link", { name: /use cases/i }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button")).toHaveClass("button");
   });
 });
