@@ -93,6 +93,23 @@ export class AccountDisabledError extends AppError {
   }
 }
 
+/**
+ * Correctly authenticated, but not authorized for the specific resource
+ * requested (Sprint 3: selecting another user's business profile). Distinct
+ * from AuthenticationError (401, "who are you") — this is "we know who you
+ * are, but you can't do this."
+ */
+export class ForbiddenError extends AppError {
+  constructor(message = "You do not have access to this resource.") {
+    super(message, {
+      statusCode: 403,
+      code: "FORBIDDEN",
+      isOperational: true,
+    });
+    this.name = "ForbiddenError";
+  }
+}
+
 export class RateLimitedError extends AppError {
   constructor(message = "Too many requests. Please try again later.") {
     super(message, {

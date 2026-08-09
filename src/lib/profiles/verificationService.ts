@@ -1,0 +1,174 @@
+import "server-only";
+import type { AuditService } from "@/lib/audit/auditService";
+import { ConflictError, ValidationError } from "@/lib/errors";
+
+export type ProfileKind = "personal" | "business";
+export type VerificationTier = "basic" | "full";
+export type VerificationRecordStatus = "pending" | "verified" | "rejected";
+export type VerificationState = "UNVERIFIED" | "BASIC" | "FULL_PENDING" | "FULL_VERIFIED" | "FULL_REJECTED";
+
+export interface IdentityVerificationRecordRecord {
+  id: string;
+  profileKind: ProfileKind;
+  profileId: string;
+  tier: VerificationTier;
+  status: VerificationRecordStatus;
+  reviewerUserId: string | null;
+  decidedAt: Date | null;
+  decisionReason: string | null;
+  createdAt: Date;
+}
+
+/**
+ * Sprint 3 (docs/sprints/SPRINT_03_Personal_Business_Profiles.md) identity
+ * verification architecture. This is the *only* write path to this data —
+ * there is no column on personal_profile/business_profile a caller could
+ * flip directly (see src/db/schema/identity.ts's doc comments), so
+ * "verification status cannot self-report as FULL_VERIFIED" is structural,
+ * not just a runtime check that could have a bug in it.
+ */
+export interface IdentityVerificationRecordRepository {
+  insert(input: {
+    profileKind: ProfileKind;
+    profileId: string;
+    tier: VerificationTier;
+  }): Promise<IdentityVerificationRecordRecord>;
+  findLatestByProfile(
+    profileKind: ProfileKind,
+    profileId: string,
+  ): Promise<IdentityVerificationRecordRecord | null>;
+  updateDecision(
+    id: string,
+    input: { status: "verified" | "rejected"; reviewerUserId: string; reason: string | null },
+  ): Promise<void>;
+}
+
+/**
+ * Whether the owning user has verified their email (Sprint 2). BASIC tier
+ * per the master spec also names "verified phone number" — this codebase
+ * has no phone-verification flow yet, so BASIC is currently derived from
+ * email verification alone. Flagged here rather than silently overclaiming
+ * phone verification that doesn't exist.
+ */
+export interface EmailVerificationReader {
+  isEmailVerified(userId: string): Promise<boolean>;
+}
+
+export interface ProfileOwnerReader {
+  getOwnerUserId(profileKind: ProfileKind, profileId: string): Promise<string | null>;
+}
+
+export class VerificationService {
+  constructor(
+    private readonly records: IdentityVerificationRecordRepository,
+    private readonly emailVerification: EmailVerificationReader,
+    private readonly profileOwners: ProfileOwnerReader,
+    private readonly audit: AuditService,
+  ) {}
+
+  /**
+   * The gating interface Sprint 6 (signing) and Sprints 9–12 (payments)
+   * depend on, per this sprint's text. Depends only on this architecture,
+   * never on Sprint 9's real KYC/KYB provider being wired up.
+   */
+  async isFullyVerified(profileKind: ProfileKind, profileId: string): Promise<boolean> {
+    const latest = await this.records.findLatestByProfile(profileKind, profileId);
+    return latest?.tier === "full" && latest.status === "verified";
+  }
+
+  async getVerificationState(profileKind: ProfileKind, profileId: string): Promise<VerificationState> {
+    const latest = await this.records.findLatestByProfile(profileKind, profileId);
+    if (latest?.tier === "full") {
+      if (latest.status === "verified") return "FULL_VERIFIED";
+      if (latest.status === "rejected") return "FULL_REJECTED";
+      return "FULL_PENDING";
+    }
+
+    const ownerUserId = await this.profileOwners.getOwnerUserId(profileKind, profileId);
+    if (!ownerUserId) return "UNVERIFIED";
+    const emailVerified = await this.emailVerification.isEmailVerified(ownerUserId);
+    return emailVerified ? "BASIC" : "UNVERIFIED";
+  }
+
+  async submitFullVerificationRequest(
+    profileKind: ProfileKind,
+    profileId: string,
+  ): Promise<IdentityVerificationRecordRecord> {
+    const existing = await this.records.findLatestByProfile(profileKind, profileId);
+    if (existing?.status === "pending") {
+      throw new ConflictError("A verification request is already pending for this profile.");
+    }
+    const record = await this.records.insert({ profileKind, profileId, tier: "full" });
+    await this.recordAudit(profileKind, profileId, "identity_verification_requested", null, null);
+    return record;
+  }
+
+  /**
+   * The audited manual/mock decision path this sprint's text requires —
+   * "Until Sprint 9 wires a real or sandbox KYC/KYB provider, FULL_PENDING/
+   * FULL_VERIFIED may be reached only through an explicit, audited
+   * manual/mock verification path — never silently defaulted to verified."
+   *
+   * No HTTP route calls this yet (see docs/PROGRESS.md's Sprint 3 section):
+   * exposing it publicly requires an admin-role/authorization system, which
+   * is Sprint 18's scope, not this one's. Building the endpoint without
+   * that authorization would create a real "anyone can self-verify" hole —
+   * worse than not exposing it yet.
+   */
+  async recordManualVerificationDecision(input: {
+    profileKind: ProfileKind;
+    profileId: string;
+    decision: "verified" | "rejected";
+    reviewerUserId: string;
+    reason: string | null;
+  }): Promise<void> {
+    const ownerUserId = await this.profileOwners.getOwnerUserId(input.profileKind, input.profileId);
+    if (ownerUserId && ownerUserId === input.reviewerUserId) {
+      throw new ValidationError("A profile's own owner cannot review their own verification request.");
+    }
+
+    const latest = await this.records.findLatestByProfile(input.profileKind, input.profileId);
+    if (!latest || latest.status !== "pending") {
+      throw new ValidationError("No pending verification request found for this profile.");
+    }
+
+    await this.records.updateDecision(latest.id, {
+      status: input.decision,
+      reviewerUserId: input.reviewerUserId,
+      reason: input.reason,
+    });
+    await this.recordAudit(
+      input.profileKind,
+      input.profileId,
+      input.decision === "verified" ? "identity_verification_approved" : "identity_verification_rejected",
+      input.reviewerUserId,
+      input.reason,
+    );
+  }
+
+  private async recordAudit(
+    profileKind: ProfileKind,
+    profileId: string,
+    action: string,
+    actorUserId: string | null,
+    reason: string | null,
+  ): Promise<void> {
+    await this.audit.record({
+      actorUserId,
+      actorRole: actorUserId ? "reviewer" : "personal_user",
+      profileKind,
+      profileId,
+      agreementId: null,
+      action,
+      occurredAt: new Date().toISOString(),
+      ipAddress: null,
+      deviceInfo: null,
+      previousValue: null,
+      newValue: null,
+      reason,
+      authStrength: null,
+      relatedDocumentId: null,
+      relatedCaseId: null,
+    });
+  }
+}

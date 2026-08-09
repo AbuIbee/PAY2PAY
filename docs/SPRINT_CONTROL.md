@@ -120,8 +120,18 @@ execution.
 |---|---|
 | 1 | **COMPLETE.** All 13 required-work items and all 8 acceptance criteria in `docs/sprints/SPRINT_01_PublicPreview _VercelReadiness.md` satisfied. Tests: 99/99 passing (18 files). Build: succeeds. Git commit: `82b2d98` ("Complete Sprint 1 public preview and early access") — verified present on `master`, contents match this sprint's file list. Vercel preview/production reference: `https://paid2you.com` — fetched and confirmed live, serving this build (disclaimer copy matches verbatim). ChatGPT/Product Owner review: **PASS**. Full report in `docs/PROGRESS.md`. |
 | 2 | **COMPLETE.** All 12 required-functionality items and the MFA/step-up primitive from `docs/sprints/SPRINT_02_Authentication.md` implemented on branch `sprint-02-authentication`. Local `lint`/`typecheck`/`test`/`build` all pass (165/165 tests). GitHub CI: **success** (run [31323009535](https://github.com/AbuIbee/PAY2PAY/actions/runs/31323009535)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO). ChatGPT/Product Owner review: **PASS** — architecture condition satisfied by `docs/AUTH_ARCHITECTURE_DECISION.md` (Supabase Auth adoptability, migration path, and risk analysis for the retained-custom-auth decision). **Not merged into `master`. Not deployed to production**, per governance — this sprint's branch is not auto-merged even on a PASS review. |
-| 3 | **READY.** Dependency (Sprint 2 auth/account foundation) satisfied — `user_account`/`personal_profile` exist, session validation and the `requireStepUp` MFA primitive are available for Sprint 3 to build on. Not yet implemented. |
+| 3 | **Local verification complete; branch/CI/Vercel status pending.** All required items from `docs/sprints/SPRINT_03_Personal_Business_Profiles.md` implemented on branch `sprint-03-profiles` (branched from `sprint-02-authentication`'s merged tip). Local `lint`/`typecheck`/`test`/`build` all pass (221/221 tests). Git commit / GitHub CI / Vercel preview: see Section below, pending this step's push + PR. |
 | 4–20 | Not started. Sprint plan documents for 4, 6, 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 3 branch/CI/Vercel record
+
+- **Branch:** `sprint-03-profiles`, branched from `sprint-02-authentication`'s merged tip (not from
+  an earlier point on `master`) — confirmed via `git merge-base` before starting, since Sprint 3
+  depends on Sprint 2's `user_account`/`personal_profile`/session/MFA foundation.
+- **Commit:** _pending — recorded after commit below._
+- **Pull request:** _pending — will be opened targeting `master`, per this sprint's explicit CI-gate instruction._
+- **GitHub CI:** _pending._
+- **Vercel preview:** _pending._
 
 ### Sprint 2 branch/CI/Vercel record
 
