@@ -479,4 +479,114 @@ re-fetched directly shows only Sprint 2's state (no "Dashboard" mention).
 
 ### ChatGPT/Product Owner review
 
-**NOT REVIEWED.**
+**PASS.**
+
+## Sprint 4 — Business Staff Permissions
+
+Source: `docs/sprints/SPRINT_04_BusinessStaff_Permissions.md`. Developed on branch
+`sprint-04-business-permissions`, branched from `sprint-03-profiles`'s merged tip (confirmed via
+`git merge-base` before starting — Sprint 4 depends on Sprint 3's `business_staff_member`/
+`custom_role` tables and `ProfileAccessService`, per `docs/SPRINT_CONTROL.md`'s dependency graph).
+
+### Scope delivered
+
+- **Capability model** (`src/lib/staff/capabilities.ts`): the exact 13-capability list from the
+  sprint text (`create_agreement` … `approve_high_value_action`). Every authorization check goes
+  through `StaffService.hasCapability`/`requireCapability` — never a bare `role === "manager"`
+  comparison — per "Do not use role names alone as authorization." `DEFAULT_ROLE_CAPABILITIES`
+  covers `manager`/`receivables_staff`/`accountant_viewer`; `owner` always has every capability;
+  `custom` has only what its own `custom_role.permissions` row grants. `HIGH_RISK_CAPABILITIES`
+  (`approve_settlement`, `forgive_principal`, `manage_staff`, `change_payout_configuration`,
+  `approve_high_value_action`) drives the step-up requirement on high-risk staff removal.
+- **Staff membership & RBAC** (`src/lib/staff/staffService.ts`): invitation (token-hash pattern,
+  7-day expiry, bound to a specific email, one pending invitation per business+email), acceptance
+  (rejects if the accepting account's email doesn't match the invited email), removal (immediate
+  session revocation via Sprint 2's `SessionRepository.revokeAllForUser`, plus a required fresh
+  step-up when the removed member holds a high-risk capability), custom-role create/edit, and
+  role changes — with a self-promotion guard (no staff member, including an owner, can change their
+  own role) and a privilege-escalation guard (only an existing owner can grant the `owner` role,
+  whether via invitation or a role change).
+- **Approval limits** (`src/lib/staff/approvalService.ts`): `business_approval_policy` (one row per
+  business+capability: an optional minor-units threshold, `requiresDualApproval`, `requiresOwner`)
+  gates `proposeAction`/`decideAction` on top of — never instead of — the plain capability check.
+  "Two-person approval" falls directly out of `staff_approval_request`'s shape: one proposer, one
+  *different* approver, enforced both by a DB `CHECK` constraint and by `decideAction`'s own
+  no-self-approval check. `requiresOwner` further restricts who may decide to staff with the `owner`
+  role.
+- **High-risk step-up hooks**: per the sprint's explicit list, `requireStepUp` (Sprint 2's
+  primitive, unmodified — no second/competing MFA mechanism was built) is called before staff role
+  changes, custom-role create/edit, approval-policy changes, and high-risk staff removal.
+- **RLS**: all three new tables (`business_staff_invitation`, `business_approval_policy`,
+  `staff_approval_request`) have `.enableRLS()` plus `REVOKE ALL ... FROM anon, authenticated` in
+  the migration, matching every prior sprint's defense-in-depth pattern.
+- **API routes**: `src/app/api/staff/{route,invite,accept-invitation,remove,role}.ts`,
+  `src/app/api/staff/custom-roles/{route,update/route}.ts`,
+  `src/app/api/staff/approval-policy/route.ts`,
+  `src/app/api/staff/approval-requests/{route,decide/route}.ts` — every route requires a session
+  (`requireSession`) and delegates authorization entirely to `StaffService`/`ApprovalService`;
+  no route re-implements a capability or ownership check itself.
+- **Payments**: deliberately not implemented — no payment-execution code was added or touched,
+  per the sprint's explicit "Do not implement payments yet."
+
+### Files created (27)
+
+Schema: `src/db/schema/staff.ts` (`business_staff_invitation`, `business_approval_policy`,
+`staff_approval_request` — `business_staff_member`/`custom_role` already existed from Phase 0).
+Services + interfaces: `src/lib/staff/{capabilities,staffService,approvalService}.ts`. Drizzle
+repositories: `src/lib/staff/drizzle{BusinessStaffMemberRepository,CustomRoleRepository,
+StaffInvitationRepository,BusinessApprovalPolicyRepository,StaffApprovalRequestRepository,
+UserEmailReader}.ts`. Lazy-singleton factories: `src/lib/staff/get{StaffService,
+ApprovalService}.ts`. Test fakes + tests: `src/lib/staff/testFakes.ts`,
+`src/lib/staff/{staffService,approvalService}.test.ts`. API routes:
+`src/app/api/staff/{route,invite/route,accept-invitation/route,remove/route,role/route,
+custom-roles/route,custom-roles/update/route,approval-policy/route,approval-requests/route,
+approval-requests/decide/route}.ts`. Migration: `drizzle/migrations/0004_smiling_shiver_man.sql`
+(+ `meta/0004_snapshot.json`).
+
+### Files modified (3)
+
+`src/db/schema/enums.ts` (added `approvalRequestStatusEnum`, `staffInvitationStatusEnum`),
+`src/db/schema/index.ts` (export the new `staff` schema module), `drizzle/migrations/meta/
+_journal.json` (drizzle-kit's own migration index).
+
+### Scope note: no UI built this sprint
+
+Unlike Sprints 2/3, `docs/sprints/SPRINT_04_BusinessStaff_Permissions.md` does not include a "UI"
+bullet in its required-work list (only "Update docs"). No staff-management UI was built —
+API routes only. Flagged here rather than silently assumed out of scope by omission.
+
+### Tests
+
+243/243 passing across 44 files (up from 221/42 at the end of Sprint 3 — 22 net new:
+`staffService.test.ts` covers owner permissions, manager permissions, viewer denial, custom
+permission, privilege escalation attempt (both at invitation time and at role-change time), staff
+self-promotion attempt, removed staff (including the high-risk step-up gate), cross-business
+access, invitation acceptance/email-mismatch/expiration, and duplicate-invitation rejection.
+`approvalService.test.ts` covers threshold enforcement (under/over), dual approval (self-approval
+rejected; a different staff member approves), owner-required thresholds, and approval-policy
+step-up gating. All 10 of the sprint's named required-test scenarios are covered.
+
+### Verification commands run
+
+`npm run lint` — pass, no errors. `npm run typecheck` — pass, no errors. `npm run test` — pass,
+243/243. `npm run build` — pass; all 11 new `/api/staff/*` routes generated correctly as dynamic
+(ƒ) routes, no change to any existing static/dynamic route classification.
+
+### Git commit
+
+`89c48c8` — "Implement Sprint 4: business staff permissions, RBAC, and approval limits", on branch
+`sprint-04-business-permissions` (branched from `sprint-03-profiles`'s merged tip). Not merged into
+`master`.
+
+### GitHub CI / Vercel preview
+
+Full detail in `docs/SPRINT_CONTROL.md`'s Sprint 4 record. Summary: the user opened
+[PR #3](https://github.com/AbuIbee/PAY2PAY/pull/3) (`sprint-04-business-permissions` → `master`,
+left open, not merged) to trigger CI, same pattern as Sprints 2–3. Both gates passed: GitHub CI run
+[31328386726](https://github.com/AbuIbee/PAY2PAY/actions/runs/31328386726) — `conclusion: success`;
+Vercel's status report on commit `89c48c8` — `state: success`. No production deployment occurred:
+`master` unchanged at `4a62d6d` (the Sprint 3 merge commit), PR #3 unmerged.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**
