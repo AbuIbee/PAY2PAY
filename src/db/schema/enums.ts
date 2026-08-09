@@ -47,3 +47,21 @@ export const businessProfileStatusEnum = pgEnum("business_profile_status", [
 /** Sprint 3 (master spec §19): personal vs. business pricing catalogs are distinct. */
 export const pricingPlanKindEnum = pgEnum("pricing_plan_kind", ["personal", "business"]);
 export const subscriptionStatusEnum = pgEnum("subscription_status", ["active", "canceled"]);
+
+/**
+ * Sprint 4 (docs/sprints/SPRINT_04_BusinessStaff_Permissions.md) — matches
+ * docs/DATA_MODEL.md §4's illustrative `staff_approval_request.status`.
+ */
+export const approvalRequestStatusEnum = pgEnum("approval_request_status", [
+  "pending",
+  "approved",
+  "rejected",
+]);
+
+/** Sprint 4: staff invitation lifecycle — mirrors docs/DATA_MODEL.md §4's `invitation.status` shape. */
+export const staffInvitationStatusEnum = pgEnum("staff_invitation_status", [
+  "pending",
+  "accepted",
+  "expired",
+  "revoked",
+]);
