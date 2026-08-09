@@ -30,6 +30,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                 <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
                 <span>PAY2PAY</span>
               </Link>
+              <Link href="/login" className="button button--ghost" style={{ marginInlineStart: "auto", marginInlineEnd: "0.75rem" }}>
+                Sign in
+              </Link>
               <MobileNavToggle />
             </div>
           </header>

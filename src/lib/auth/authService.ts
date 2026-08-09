@@ -1,14 +1,18 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
-import { AuthenticationError, ConflictError } from "@/lib/errors";
+import { AccountDisabledError, AuthenticationError, ConflictError, ValidationError } from "@/lib/errors";
+import type { EmailSender } from "@/lib/notify/emailSender";
 import { UNUSABLE_PASSWORD_HASH, hashPassword, verifyPassword } from "./password";
 import { generateSessionToken, hashSessionToken } from "./session";
+import { generateOpaqueToken, hashOpaqueToken } from "./token";
 
 export interface UserAccountRecord {
   id: string;
   email: string;
   authCredentialRef: string;
   status: string;
+  dateOfBirth: string | null;
+  emailVerifiedAt: Date | null;
 }
 
 /**
@@ -21,7 +25,31 @@ export interface UserAccountRecord {
 export interface UserAccountRepository {
   findByEmail(email: string): Promise<UserAccountRecord | null>;
   findById(id: string): Promise<UserAccountRecord | null>;
-  insert(input: { email: string; authCredentialRef: string }): Promise<UserAccountRecord>;
+  insert(input: {
+    email: string;
+    authCredentialRef: string;
+    dateOfBirth: string;
+  }): Promise<UserAccountRecord>;
+  markEmailVerified(userId: string): Promise<void>;
+  updateLastLogin(userId: string): Promise<void>;
+  updatePasswordHash(userId: string, authCredentialRef: string): Promise<void>;
+}
+
+export interface PersonalProfileRecord {
+  id: string;
+  userId: string;
+}
+
+/**
+ * Sprint 2 (docs/sprints/SPRINT_02_Authentication.md) account architecture:
+ * every user gets exactly one personal profile, created alongside signup —
+ * never client-specified, always derived from the just-created user's own
+ * id (see AuthService.signup — there is no parameter through which a caller
+ * could request a profile for a *different* user).
+ */
+export interface PersonalProfileRepository {
+  insert(userId: string): Promise<PersonalProfileRecord>;
+  findByUserId(userId: string): Promise<PersonalProfileRecord | null>;
 }
 
 export interface SessionRecord {
@@ -43,7 +71,45 @@ export interface SessionRepository {
   }): Promise<SessionRecord>;
   findByTokenHash(sessionTokenHash: string): Promise<SessionRecord | null>;
   revoke(id: string): Promise<void>;
+  /** Used by resetPassword: a successful password reset invalidates every existing session. */
+  revokeAllForUser(userId: string): Promise<void>;
   touchLastSeen(id: string): Promise<void>;
+}
+
+export interface EmailVerificationTokenRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+  consumedAt: Date | null;
+}
+
+export interface EmailVerificationTokenRepository {
+  insert(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<EmailVerificationTokenRecord>;
+  findByTokenHash(tokenHash: string): Promise<EmailVerificationTokenRecord | null>;
+  consume(id: string): Promise<void>;
+}
+
+export interface PasswordResetTokenRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+  consumedAt: Date | null;
+}
+
+export interface PasswordResetTokenRepository {
+  insert(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<PasswordResetTokenRecord>;
+  findByTokenHash(tokenHash: string): Promise<PasswordResetTokenRecord | null>;
+  consume(id: string): Promise<void>;
 }
 
 export interface AuthServiceOptions {
@@ -51,6 +117,10 @@ export interface AuthServiceOptions {
   pepper: string;
   /** How long a new session is valid for, in milliseconds. */
   sessionTtlMs: number;
+  /** Base URL used to build the links inside verification/reset emails (APP_URL). */
+  appUrl: string;
+  emailVerificationTtlMs?: number;
+  passwordResetTtlMs?: number;
 }
 
 export interface AuthActionContext {
@@ -66,36 +136,61 @@ export interface AuthResult {
 
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 256;
+const MIN_AGE_YEARS = 18;
+const DEFAULT_EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
+const DATE_OF_BIRTH_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+function calculateAgeYears(dateOfBirthIso: string, now: Date): number {
+  const dob = new Date(`${dateOfBirthIso}T00:00:00Z`);
+  let age = now.getUTCFullYear() - dob.getUTCFullYear();
+  const monthDiff = now.getUTCMonth() - dob.getUTCMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && now.getUTCDate() < dob.getUTCDate())) {
+    age -= 1;
+  }
+  return age;
+}
+
 /**
- * Orchestrates Phase 0 basic auth: signup, login, logout, and session
- * validation. Every state-changing action is recorded through AuditService
- * (NFR-AUDIT-002 — writes go through the Audit Service, not around it),
- * mirroring the single-write-path pattern AuditService itself documents.
+ * Orchestrates auth: signup, login, logout, session validation, email
+ * verification, and password reset. Every state-changing action is recorded
+ * through AuditService (NFR-AUDIT-002 — writes go through the Audit
+ * Service, not around it).
  */
 export class AuthService {
   constructor(
     private readonly users: UserAccountRepository,
     private readonly sessions: SessionRepository,
+    private readonly personalProfiles: PersonalProfileRepository,
+    private readonly emailVerificationTokens: EmailVerificationTokenRepository,
+    private readonly passwordResetTokens: PasswordResetTokenRepository,
     private readonly audit: AuditService,
+    private readonly emailSender: EmailSender,
     private readonly options: AuthServiceOptions,
   ) {}
 
   async signup(input: {
     email: string;
     password: string;
+    dateOfBirth: string;
     ipAddress: string | null;
     userAgent: string | null;
   }): Promise<AuthResult> {
     const email = normalizeEmail(input.email);
     if (input.password.length < MIN_PASSWORD_LENGTH || input.password.length > MAX_PASSWORD_LENGTH) {
-      throw new AuthenticationError(
+      throw new ValidationError(
         `Password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters.`,
       );
+    }
+    if (!DATE_OF_BIRTH_PATTERN.test(input.dateOfBirth) || Number.isNaN(Date.parse(input.dateOfBirth))) {
+      throw new ValidationError("A valid date of birth is required.");
+    }
+    if (calculateAgeYears(input.dateOfBirth, new Date()) < MIN_AGE_YEARS) {
+      throw new ValidationError("You must be at least 18 years old to create an account.");
     }
 
     const existing = await this.users.findByEmail(email);
@@ -104,7 +199,10 @@ export class AuthService {
     }
 
     const authCredentialRef = await hashPassword(input.password, this.options.pepper);
-    const user = await this.users.insert({ email, authCredentialRef });
+    const user = await this.users.insert({ email, authCredentialRef, dateOfBirth: input.dateOfBirth });
+
+    // Never client-specified — always the id of the user just created above.
+    await this.personalProfiles.insert(user.id);
 
     await this.audit.record({
       actorUserId: user.id,
@@ -124,7 +222,61 @@ export class AuthService {
       relatedCaseId: null,
     });
 
+    await this.sendVerificationEmail(user);
+
     return this.createSession(user, input);
+  }
+
+  /** Authenticated resend — deliberately not a public email-lookup endpoint (avoids an enumeration surface). */
+  async resendVerificationEmail(userId: string): Promise<void> {
+    const user = await this.users.findById(userId);
+    if (!user) throw new AuthenticationError("A valid session is required.");
+    if (user.emailVerifiedAt) return; // already verified — quietly no-ops
+    await this.sendVerificationEmail(user);
+  }
+
+  private async sendVerificationEmail(user: UserAccountRecord): Promise<void> {
+    const rawToken = generateOpaqueToken();
+    const expiresAt = new Date(
+      Date.now() + (this.options.emailVerificationTtlMs ?? DEFAULT_EMAIL_VERIFICATION_TTL_MS),
+    );
+    await this.emailVerificationTokens.insert({
+      userId: user.id,
+      tokenHash: hashOpaqueToken(rawToken),
+      expiresAt,
+    });
+    const link = `${this.options.appUrl}/verify-email?token=${rawToken}`;
+    await this.emailSender.send({
+      to: user.email,
+      subject: "Verify your PAY2PAY email address",
+      body: `Confirm your email address: ${link}\n\nThis link expires in 24 hours. If you didn't create a PAY2PAY account, you can ignore this email.`,
+    });
+  }
+
+  async verifyEmail(rawToken: string): Promise<void> {
+    const record = await this.emailVerificationTokens.findByTokenHash(hashOpaqueToken(rawToken));
+    if (!record || record.consumedAt || record.expiresAt.getTime() <= Date.now()) {
+      throw new ValidationError("This verification link is invalid or has expired.");
+    }
+    await this.emailVerificationTokens.consume(record.id);
+    await this.users.markEmailVerified(record.userId);
+    await this.audit.record({
+      actorUserId: record.userId,
+      actorRole: "personal_user",
+      profileKind: null,
+      profileId: null,
+      agreementId: null,
+      action: "email_verified",
+      occurredAt: new Date().toISOString(),
+      ipAddress: null,
+      deviceInfo: null,
+      previousValue: null,
+      newValue: null,
+      reason: null,
+      authStrength: "basic",
+      relatedDocumentId: null,
+      relatedCaseId: null,
+    });
   }
 
   async login(input: {
@@ -166,6 +318,30 @@ export class AuthService {
       throw new AuthenticationError("Invalid email or password.");
     }
 
+    if (user.status !== "active") {
+      // Only reached after a *correct* password — safe to be specific
+      // without creating an account-enumeration signal (see AccountDisabledError's doc comment).
+      await this.audit.record({
+        actorUserId: user.id,
+        actorRole: "personal_user",
+        profileKind: null,
+        profileId: null,
+        agreementId: null,
+        action: "login_blocked_account_disabled",
+        occurredAt: new Date().toISOString(),
+        ipAddress: input.ipAddress,
+        deviceInfo: input.userAgent ? { userAgent: input.userAgent } : null,
+        previousValue: null,
+        newValue: null,
+        reason: null,
+        authStrength: "basic",
+        relatedDocumentId: null,
+        relatedCaseId: null,
+      });
+      throw new AccountDisabledError();
+    }
+
+    await this.users.updateLastLogin(user.id);
     return this.createSession(user, input);
   }
 
@@ -182,6 +358,85 @@ export class AuthService {
       profileId: null,
       agreementId: null,
       action: "logout",
+      occurredAt: new Date().toISOString(),
+      ipAddress: null,
+      deviceInfo: null,
+      previousValue: null,
+      newValue: null,
+      reason: null,
+      authStrength: "basic",
+      relatedDocumentId: null,
+      relatedCaseId: null,
+    });
+  }
+
+  /**
+   * Always resolves without revealing whether `email` belongs to an
+   * account — enumeration resistance for the public "forgot password" entry
+   * point (unlike resendVerificationEmail, which is authenticated).
+   */
+  async requestPasswordReset(email: string, context: AuthActionContext): Promise<void> {
+    const normalized = normalizeEmail(email);
+    const user = await this.users.findByEmail(normalized);
+
+    await this.audit.record({
+      actorUserId: user?.id ?? null,
+      actorRole: "personal_user",
+      profileKind: null,
+      profileId: null,
+      agreementId: null,
+      action: user ? "password_reset_requested" : "password_reset_requested_unknown_email",
+      occurredAt: new Date().toISOString(),
+      ipAddress: context.ipAddress,
+      deviceInfo: context.userAgent ? { userAgent: context.userAgent } : null,
+      previousValue: null,
+      newValue: null,
+      reason: null,
+      authStrength: "basic",
+      relatedDocumentId: null,
+      relatedCaseId: null,
+    });
+
+    if (!user) return;
+
+    const rawToken = generateOpaqueToken();
+    const expiresAt = new Date(
+      Date.now() + (this.options.passwordResetTtlMs ?? DEFAULT_PASSWORD_RESET_TTL_MS),
+    );
+    await this.passwordResetTokens.insert({ userId: user.id, tokenHash: hashOpaqueToken(rawToken), expiresAt });
+    const link = `${this.options.appUrl}/reset-password?token=${rawToken}`;
+    await this.emailSender.send({
+      to: user.email,
+      subject: "Reset your PAY2PAY password",
+      body: `Reset your password: ${link}\n\nThis link expires in 1 hour. If you didn't request this, you can ignore this email — your password will not be changed.`,
+    });
+  }
+
+  async resetPassword(rawToken: string, newPassword: string): Promise<void> {
+    if (newPassword.length < MIN_PASSWORD_LENGTH || newPassword.length > MAX_PASSWORD_LENGTH) {
+      throw new ValidationError(
+        `Password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters.`,
+      );
+    }
+    const record = await this.passwordResetTokens.findByTokenHash(hashOpaqueToken(rawToken));
+    if (!record || record.consumedAt || record.expiresAt.getTime() <= Date.now()) {
+      throw new ValidationError("This password reset link is invalid or has expired.");
+    }
+
+    const authCredentialRef = await hashPassword(newPassword, this.options.pepper);
+    await this.users.updatePasswordHash(record.userId, authCredentialRef);
+    await this.passwordResetTokens.consume(record.id);
+    // A password reset invalidates every existing session, including
+    // whichever one an attacker may have established with the old password.
+    await this.sessions.revokeAllForUser(record.userId);
+
+    await this.audit.record({
+      actorUserId: record.userId,
+      actorRole: "personal_user",
+      profileKind: null,
+      profileId: null,
+      agreementId: null,
+      action: "password_reset_completed",
       occurredAt: new Date().toISOString(),
       ipAddress: null,
       deviceInfo: null,

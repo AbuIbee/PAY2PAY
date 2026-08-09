@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Preserved pre-redesign snapshot (see git history, "look and feel
+    // updates" commit) — not live code, should not be linted/typechecked.
+    "src-backup-before-redesign/**",
   ]),
 ]);
 

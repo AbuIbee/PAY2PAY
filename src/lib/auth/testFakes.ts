@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
+import type { EmailSender } from "@/lib/notify/emailSender";
 import { AuthService } from "./authService";
 import type {
+  EmailVerificationTokenRecord,
+  EmailVerificationTokenRepository,
+  PasswordResetTokenRecord,
+  PasswordResetTokenRepository,
+  PersonalProfileRecord,
+  PersonalProfileRepository,
   SessionRecord,
   SessionRepository,
   UserAccountRecord,
@@ -30,15 +37,41 @@ export class InMemoryUserAccountRepository implements UserAccountRepository {
     return this.byId.get(id) ?? null;
   }
 
-  async insert(input: { email: string; authCredentialRef: string }): Promise<UserAccountRecord> {
+  async insert(input: {
+    email: string;
+    authCredentialRef: string;
+    dateOfBirth: string;
+  }): Promise<UserAccountRecord> {
     const user: UserAccountRecord = {
       id: randomUUID(),
       email: input.email,
       authCredentialRef: input.authCredentialRef,
       status: "active",
+      dateOfBirth: input.dateOfBirth,
+      emailVerifiedAt: null,
     };
     this.byId.set(user.id, user);
     return user;
+  }
+
+  async markEmailVerified(userId: string): Promise<void> {
+    const user = this.byId.get(userId);
+    if (user) user.emailVerifiedAt = new Date();
+  }
+
+  async updateLastLogin(): Promise<void> {
+    // No last-login assertions in these tests; no-op is sufficient.
+  }
+
+  async updatePasswordHash(userId: string, authCredentialRef: string): Promise<void> {
+    const user = this.byId.get(userId);
+    if (user) user.authCredentialRef = authCredentialRef;
+  }
+
+  /** Test-only helper, not part of the UserAccountRepository interface. */
+  setStatus(userId: string, status: string): void {
+    const user = this.byId.get(userId);
+    if (user) user.status = status;
   }
 }
 
@@ -75,8 +108,94 @@ export class InMemorySessionRepository implements SessionRepository {
     if (session) session.revokedAt = new Date();
   }
 
+  async revokeAllForUser(userId: string): Promise<void> {
+    for (const session of this.byId.values()) {
+      if (session.userId === userId) session.revokedAt = new Date();
+    }
+  }
+
   async touchLastSeen(): Promise<void> {
     // No last-seen assertions in these tests; no-op is sufficient.
+  }
+}
+
+export class InMemoryPersonalProfileRepository implements PersonalProfileRepository {
+  byUserId = new Map<string, PersonalProfileRecord>();
+
+  async insert(userId: string): Promise<PersonalProfileRecord> {
+    const record: PersonalProfileRecord = { id: randomUUID(), userId };
+    this.byUserId.set(userId, record);
+    return record;
+  }
+
+  async findByUserId(userId: string): Promise<PersonalProfileRecord | null> {
+    return this.byUserId.get(userId) ?? null;
+  }
+}
+
+export class InMemoryEmailVerificationTokenRepository implements EmailVerificationTokenRepository {
+  private byId = new Map<string, EmailVerificationTokenRecord>();
+  private byHash = new Map<string, string>();
+
+  async insert(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<EmailVerificationTokenRecord> {
+    const record: EmailVerificationTokenRecord = { id: randomUUID(), consumedAt: null, ...input };
+    this.byId.set(record.id, record);
+    this.byHash.set(input.tokenHash, record.id);
+    return record;
+  }
+
+  async findByTokenHash(tokenHash: string): Promise<EmailVerificationTokenRecord | null> {
+    const id = this.byHash.get(tokenHash);
+    return id ? this.byId.get(id) ?? null : null;
+  }
+
+  async consume(id: string): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) record.consumedAt = new Date();
+  }
+}
+
+export class InMemoryPasswordResetTokenRepository implements PasswordResetTokenRepository {
+  private byId = new Map<string, PasswordResetTokenRecord>();
+  private byHash = new Map<string, string>();
+
+  async insert(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<PasswordResetTokenRecord> {
+    const record: PasswordResetTokenRecord = { id: randomUUID(), consumedAt: null, ...input };
+    this.byId.set(record.id, record);
+    this.byHash.set(input.tokenHash, record.id);
+    return record;
+  }
+
+  async findByTokenHash(tokenHash: string): Promise<PasswordResetTokenRecord | null> {
+    const id = this.byHash.get(tokenHash);
+    return id ? this.byId.get(id) ?? null : null;
+  }
+
+  async consume(id: string): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) record.consumedAt = new Date();
+  }
+}
+
+export class InMemoryEmailSender implements EmailSender {
+  sent: { to: string; subject: string; body: string }[] = [];
+
+  async send(input: { to: string; subject: string; body: string }): Promise<void> {
+    this.sent.push(input);
+  }
+
+  /** Extracts the verification/reset token from the last email sent to `to` (the link is `.../<path>?token=<token>`). */
+  lastTokenFor(to: string): string | undefined {
+    const email = [...this.sent].reverse().find((item) => item.to === to);
+    return email?.body.match(/token=([\w-]+)/)?.[1];
   }
 }
 
@@ -97,6 +216,9 @@ export class InMemoryAuditEventRepository implements AuditEventRepository {
 
 export const TEST_PEPPER = "test-pepper-value";
 export const TEST_SESSION_TTL_MS = 60 * 60 * 1000;
+export const TEST_APP_URL = "http://localhost:3000";
+/** A date of birth that is always >= 18 years old regardless of when tests run. */
+export const TEST_ADULT_DATE_OF_BIRTH = "1990-01-01";
 
 /**
  * Reads a cookie's value from a Response's Set-Cookie header(s). Route
@@ -123,11 +245,30 @@ export function readSetCookie(response: Response, name: string): string | undefi
 export function createTestAuthService(sessionTtlMs: number = TEST_SESSION_TTL_MS) {
   const users = new InMemoryUserAccountRepository();
   const sessions = new InMemorySessionRepository();
+  const personalProfiles = new InMemoryPersonalProfileRepository();
+  const emailVerificationTokens = new InMemoryEmailVerificationTokenRepository();
+  const passwordResetTokens = new InMemoryPasswordResetTokenRepository();
   const auditRepo = new InMemoryAuditEventRepository();
   const audit = new AuditService(auditRepo);
-  const authService = new AuthService(users, sessions, audit, {
-    pepper: TEST_PEPPER,
-    sessionTtlMs,
-  });
-  return { authService, users, sessions, auditRepo };
+  const emailSender = new InMemoryEmailSender();
+  const authService = new AuthService(
+    users,
+    sessions,
+    personalProfiles,
+    emailVerificationTokens,
+    passwordResetTokens,
+    audit,
+    emailSender,
+    { pepper: TEST_PEPPER, sessionTtlMs, appUrl: TEST_APP_URL },
+  );
+  return {
+    authService,
+    users,
+    sessions,
+    personalProfiles,
+    emailVerificationTokens,
+    passwordResetTokens,
+    auditRepo,
+    emailSender,
+  };
 }

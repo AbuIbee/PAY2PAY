@@ -63,6 +63,14 @@ export class DrizzleSessionRepository implements SessionRepository {
     await db.update(deviceSession).set({ revokedAt: new Date() }).where(eq(deviceSession.id, id));
   }
 
+  async revokeAllForUser(userId: string): Promise<void> {
+    const db = getDb();
+    await db
+      .update(deviceSession)
+      .set({ revokedAt: new Date() })
+      .where(eq(deviceSession.userId, userId));
+  }
+
   async touchLastSeen(id: string): Promise<void> {
     const db = getDb();
     await db.update(deviceSession).set({ lastSeenAt: new Date() }).where(eq(deviceSession.id, id));
