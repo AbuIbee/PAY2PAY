@@ -44,10 +44,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               </Link>
               <p>Clear terms. Mutual approval. Documented repayment.</p>
               <nav aria-label="Footer navigation">
-                <span>Privacy</span>
-                <span>Terms</span>
-                <span>Support</span>
-                <span>Accessibility</span>
+                <Link href="/privacy">Privacy</Link>
+                <Link href="/terms">Terms</Link>
+                <Link href="/support">Support</Link>
+                <Link href="/accessibility">Accessibility</Link>
               </nav>
               <small>© 2026 PAY2PAY. Product preview—financial functionality is not yet enabled.</small>
             </div>

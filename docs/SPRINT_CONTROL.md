@@ -118,7 +118,8 @@ execution.
 
 | Sprint | Status |
 |---|---|
-| 1–20 | Not started. Phase 0 foundation and the presentation-layer landing page (this repository's prior work) are complete. Sprint plan documents for 2, 3, 4, 6, 9, 15, 18, 20 were revised in this repair pass; no sprint's application code has been implemented. |
+| 1 | **COMPLETE — awaiting Product Owner/ChatGPT review.** All 13 required-work items and all 8 acceptance criteria in `docs/sprints/SPRINT_01_PublicPreview _VercelReadiness.md` satisfied. Tests: 99/99 passing (18 files). Build: succeeds. Git commit: **PENDING COMMIT** (not committed this session — commits are made only when explicitly requested). Vercel preview URL: **NOT DEPLOYED**. ChatGPT/Product Owner review: **NOT REVIEWED**. Full report in `docs/PROGRESS.md`. |
+| 2–20 | Not started. Sprint plan documents for 2, 3, 4, 6, 9, 15, 18, 20 were revised in the prior repair pass; no sprint's application code has been implemented. |
 
 ## F. Duplication report
 

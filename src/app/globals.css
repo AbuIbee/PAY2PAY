@@ -256,11 +256,54 @@ img, svg { display: block; max-width: 100%; }
 .closing-cta > div { max-width: 43rem; }
 .closing-cta h2 { font-size: clamp(1.8rem, 1.4rem + 1.6vw, 2.7rem); }
 
+.early-access { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(24rem, 1.1fr); gap: clamp(2.5rem, 6vw, 5rem); margin-bottom: var(--space-24); padding: clamp(2.25rem, 5vw, 3.75rem); border: 1px solid var(--border); border-radius: var(--radius-lg); background: linear-gradient(120deg, var(--cream), var(--forest-50)); }
+.early-access__copy h2 { margin: 0.8rem 0 1rem; font-family: Georgia, "Times New Roman", serif; font-size: var(--text-2xl); font-weight: 500; line-height: 1.08; letter-spacing: -0.045em; }
+.early-access__copy p { margin: 0; color: var(--ink-soft); font-size: var(--text-base); line-height: 1.7; }
+.early-access__copy ul { margin: 1.5rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.6rem; }
+.early-access__copy li { display: flex; align-items: flex-start; gap: 0.55rem; color: var(--ink-soft); font-size: 0.88rem; }
+.early-access__copy li b { display: grid; place-items: center; flex: none; width: 1.05rem; height: 1.05rem; margin-top: 0.1rem; border-radius: 50%; background: var(--forest-100); color: var(--forest-800); font-size: 0.65rem; }
+
+.early-access-form { display: grid; gap: 1rem; padding: clamp(1.5rem, 3vw, 2rem); border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--white); box-shadow: var(--shadow-sm); }
+.early-access-form__row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.field { display: grid; gap: 0.4rem; }
+.field label { font-size: 0.8rem; font-weight: 700; color: var(--ink); }
+.field small { color: var(--ink-soft); font-size: 0.72rem; }
+.field input, .field select, .field textarea {
+  width: 100%;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.6rem;
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.92rem;
+}
+.field input:focus-visible, .field select:focus-visible, .field textarea:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.field textarea { resize: vertical; min-height: 4.5rem; }
+.field-error { color: #a3372e; font-size: 0.76rem; font-weight: 650; }
+.checkbox-field { display: flex; align-items: flex-start; gap: 0.6rem; }
+.checkbox-field input { width: auto; margin-top: 0.2rem; }
+.checkbox-field label { font-size: 0.8rem; font-weight: 500; color: var(--ink-soft); }
+.checkbox-field a { color: var(--forest-700); font-weight: 650; }
+
+/* Honeypot: kept in the DOM and in tab order removed, positioned off-screen
+   rather than display:none, since some bots skip fields hidden that way. */
+.field--honeypot { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+.form-status { padding: 0.85rem 1rem; border-radius: 0.7rem; font-size: 0.85rem; font-weight: 600; }
+.form-status--success { background: var(--forest-100); color: var(--forest-800); }
+.form-status--error { background: #fbe9e7; color: #8c2f26; }
+
 .app-footer { background: #071e1b; color: var(--white); }
 .footer-inner { width: min(calc(100% - 2.5rem), var(--max-content-width)); margin-inline: auto; padding-block: 3.5rem; }
 .brand--footer { color: var(--white); }
 .footer-inner > p { max-width: 30rem; margin: 1.1rem 0 2rem; color: #a9c0bb; }
 .footer-inner nav { display: flex; flex-wrap: wrap; gap: 1.4rem; padding-block: 1.2rem; border-block: 1px solid rgba(255,255,255,0.12); color: #c6d5d2; font-size: 0.8rem; }
+.footer-inner nav a { color: inherit; text-decoration: none; }
+.footer-inner nav a:hover { color: var(--white); text-decoration: underline; }
 .footer-inner small { display: block; margin-top: 1.2rem; color: #809a95; font-size: 0.7rem; }
 
 @media (max-width: 70rem) {
@@ -290,6 +333,7 @@ img, svg { display: block; max-width: 100%; }
   .process-intro { position: static; }
   .trust-panel__facts { grid-template-columns: repeat(3, 1fr); }
   .closing-cta { align-items: flex-start; flex-direction: column; }
+  .early-access { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 40rem) {
@@ -321,4 +365,6 @@ img, svg { display: block; max-width: 100%; }
   .trust-panel__facts { grid-template-columns: 1fr; }
   .trust-panel__facts > div { min-height: auto; }
   .closing-cta { margin-bottom: 4rem; padding: 2rem 1.25rem; }
+  .early-access { margin-bottom: 4rem; padding: 1.5rem 1.1rem; }
+  .early-access-form__row { grid-template-columns: 1fr; }
 }

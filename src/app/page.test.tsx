@@ -31,9 +31,12 @@ describe("HomePage", () => {
 
   it("shows all four relationship types", () => {
     render(<HomePage />);
-    expect(screen.getByText("P2P")).toBeInTheDocument();
-    expect(screen.getByText("B2C")).toBeInTheDocument();
-    expect(screen.getByText("C2B")).toBeInTheDocument();
-    expect(screen.getByText("B2B")).toBeInTheDocument();
+    // Each tag appears more than once (proof strip, product-preview mockup,
+    // and the relationship-shape cards), so assert presence rather than a
+    // single unique match — same convention as MobileNavToggle.test.tsx.
+    expect(screen.getAllByText("P2P").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("B2C").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("C2B").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("B2B").length).toBeGreaterThan(0);
   });
 });

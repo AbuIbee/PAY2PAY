@@ -132,3 +132,134 @@ support) are unchanged and apply to the new content.
 
 **Stopped after this phase** per `CLAUDE.md` — no payment integration or other Phase 1
 functionality was started.
+
+## Sprint 1 — Public Preview / Vercel Readiness
+
+Source: `docs/sprints/SPRINT_01_PublicPreview _VercelReadiness.md`. Executed per
+`docs/SPRINT_CONTROL.md`'s governance rules: pre-implementation checklist confirmed (project root,
+git status/branch, dependencies satisfied — Sprint 1 is standalone, no duplicate-sprint warning
+active), Sprint 1 marked IN PROGRESS before starting, no Sprint 2 work begun.
+
+### Files created
+
+- `docs/ENVIRONMENT_VARIABLES.md` — classifies every env var by deployment context and
+  server-only/client-safe.
+- `drizzle/migrations/0000_nervous_speedball.sql` (+ `meta/0000_snapshot.json`, `meta/_journal.json`)
+  — first-ever migration for this project (no prior migration existed for any Phase 0 table either);
+  includes the new `early_access_leads` table plus hand-added RLS lockdown (`REVOKE ALL ... FROM
+  anon, authenticated`, no permissive policy) for Supabase's PostgREST surface.
+- `src/db/schema/marketing.ts` — `early_access_leads` Drizzle table, `.enableRLS()`.
+- `src/lib/us-states.ts` — shared USPS state/territory code list.
+- `src/lib/early-access/earlyAccessLeadRepository.ts` — repository interface.
+- `src/lib/early-access/drizzleEarlyAccessLeadRepository.ts` — Postgres-backed implementation
+  (upsert-by-email).
+- `src/lib/early-access/getEarlyAccessLeadRepository.ts` — lazy singleton factory (mirrors
+  `getAuthService.ts`).
+- `src/lib/early-access/testFakes.ts` — in-memory repository double for tests.
+- `src/app/api/early-access/route.ts` — `POST` handler: zod validation, per-IP rate limiting
+  (5/hour), honeypot, upsert-based duplicate handling, no PII beyond the spec's allowed field list.
+- `src/app/api/early-access/route.test.ts` — 9 tests.
+- `src/components/EarlyAccessForm.tsx` — client component: success/validation-error/failure states,
+  conditional business-name field, honeypot field, consent checkbox linking to the placeholder
+  privacy/terms pages.
+- `src/components/EarlyAccessForm.test.tsx` — 7 tests.
+- `src/components/LegalPlaceholder.tsx` — shared shell for the four placeholder legal routes,
+  explicitly marked as unfinished/not reviewed by counsel.
+- `src/app/privacy/page.tsx`, `src/app/terms/page.tsx`, `src/app/accessibility/page.tsx`,
+  `src/app/support/page.tsx` — footer route placeholders (item 10); no fabricated final legal text.
+
+### Files modified
+
+- `src/db/schema/enums.ts` — added `earlyAccessAccountTypeEnum`.
+- `src/db/schema/index.ts` — export the new `marketing` schema module.
+- `src/app/globals.css` — added early-access section/form styling and footer-nav link styling,
+  consistent with the existing forest/gold/serif design system; no existing rule changed.
+- `src/app/page.tsx` — the former static `.closing-cta` section is now the functional Early Access
+  CTA (`EarlyAccessForm`), with copy stating that joining early access does not create an account.
+- `src/app/page.test.tsx` — fixed a **pre-existing** test bug unrelated to this sprint (found while
+  running the full suite): "shows all four relationship types" used `getByText`, which now/already
+  matched multiple elements (proof strip, product-preview mockup, and the relationship cards all
+  render the same tags) — changed to `getAllByText(...).length` per the same convention already
+  used in `MobileNavToggle.test.tsx`.
+- `src/app/layout.tsx` — footer Privacy/Terms/Support/Accessibility now link to the new routes
+  (previously plain unlinked `<span>` text).
+- `docs/SPRINT_CONTROL.md` — Sprint 1 status updated to COMPLETE — awaiting review.
+
+### Tests
+
+`npm run test`: **99/99 passing across 18 files** (up from 82/16 at the end of the presentation-layer
+phase — 17 new tests added: 9 for the API route, 7 for the form component, 1 gained by the
+pre-existing-bug fix above net of no removals).
+
+### Security/verification findings
+
+- **Duplicate-submission handling**: implemented as upsert-by-email (unique index on `email`),
+  not a hard rejection — a second submission from the same address updates their details rather
+  than erroring or creating a second row.
+- **Honeypot**: a visually-hidden (off-screen-positioned, not `display:none`), out-of-tab-order
+  `website` field. A non-empty value causes the server to report success without writing to the
+  database or revealing detection.
+- **RLS**: `early_access_leads` has RLS enabled with `REVOKE ALL ... FROM anon, authenticated` and
+  no permissive policy for either role — the table has zero surface area through Supabase's
+  PostgREST API regardless of the anon key. The application's own writes go through
+  `DATABASE_URL`/`getDb()` only (never through `supabase-js` — this codebase has never used that
+  SDK). **Operational requirement flagged, not verified by this session** (no live database exists
+  here): the production `DATABASE_URL` must connect using a role that bypasses RLS (the Supabase
+  project's owner/direct-connection role, or any `BYPASSRLS` role) — documented in
+  `docs/ENVIRONMENT_VARIABLES.md`.
+- **No prohibited fields**: verified by test (`route.test.ts` "never persists a bank account, SSN,
+  EIN, card, or ID field even if sent") that bank account, routing number, SSN, government ID, and
+  card number are never persisted even if a client sends them — the zod schema simply has no such
+  field, so unknown keys are dropped before they ever reach the repository.
+- **No secrets in the client bundle**: confirmed by grepping `.next/static` for the actual
+  `.env.local` secret values after a production build — no match.
+- **No hardcoded `localhost`**: confirmed by search across `src/` (excluding tests) — the form calls
+  the relative path `/api/early-access`.
+- **No filesystem dependency, no private keys, no production financial credentials**: confirmed by
+  search — none exist anywhere in the codebase.
+- **Vercel build compatibility**: `npm run build` succeeds; `/` and all four new legal-placeholder
+  routes prerender as static content (○), confirming the landing page render path needs no
+  database connection; `/api/early-access` is correctly dynamic (ƒ).
+- **No false claims that real payments/agreements are live**: reviewed all new copy. The Early
+  Access section explicitly states "Joining early access does not create an account"; the existing
+  hero `preview-note` ("account creation, agreements, signatures, and payments are not yet enabled")
+  is unchanged; the four legal placeholder pages each state they are unfinished and not
+  counsel-reviewed.
+
+### Verification commands run
+
+`npm run typecheck` — pass. `npm run lint` — pass (fixed two `no-html-link-for-pages` violations
+found along the way — internal links must use `next/link`, not `<a>`). `npm run test` — pass,
+99/99. `npm run build` — pass.
+
+### Git commit
+
+**PENDING COMMIT** — changes are complete in the working tree but not committed this session
+(commits are made only when explicitly requested, per this session's operating rules).
+
+### Vercel preview URL
+
+**NOT DEPLOYED**.
+
+### ChatGPT/Product Owner review
+
+**NOT REVIEWED**.
+
+### Sprint 1 completion report (summary)
+
+All 13 required-work items and all 8 acceptance criteria in
+`docs/sprints/SPRINT_01_PublicPreview _VercelReadiness.md` are satisfied: Vercel build succeeds;
+the landing page renders with no financial services enabled; the early-access form works
+end-to-end against the repository abstraction (verified with an in-memory double — no live
+database exists in this environment, consistent with every prior phase in this project); anonymous
+users cannot query lead data (RLS + zero anon/authenticated grants); no secrets appear in the
+browser bundle; no false claim that real payments are available; no payment functionality was
+implemented; the git working tree is ready for an approved commit (not yet committed).
+
+One architecture decision made without a prior explicit instruction, flagged for review: the early
+-access table is stored via the existing Drizzle+Postgres (`DATABASE_URL`) path rather than adding
+the `supabase-js` client SDK, since this codebase has never used that SDK — "Supabase" is treated
+as the Postgres hosting platform, not a required client library. See
+`docs/ENVIRONMENT_VARIABLES.md`'s architecture note.
+
+**Sprint 1 stopped here per governance rules. Sprint 2 was not started.**

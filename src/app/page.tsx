@@ -1,3 +1,5 @@
+import { EarlyAccessForm } from "@/components/EarlyAccessForm";
+
 const VALUE_PROPS = [
   {
     eyebrow: "Clear terms",
@@ -351,13 +353,21 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="closing-cta" aria-labelledby="closing-heading">
-        <div>
+      <section className="early-access" id="early-access" aria-labelledby="early-access-heading">
+        <div className="early-access__copy">
           <span className="eyebrow"><span /> In active development</span>
-          <h2 id="closing-heading">Repayment should be clear before money ever moves.</h2>
-          <p>PAY2PAY is currently in its product-development stage. Functional accounts and payment flows will arrive in later builds.</p>
+          <h2 id="early-access-heading">Get on the early-access list.</h2>
+          <p>
+            PAY2PAY is currently in its product-development stage. Functional accounts, agreements,
+            signatures, and payments are not enabled yet. Joining early access does not create an
+            account — it lets us reach out as new capabilities become available.
+          </p>
+          <ul>
+            <li><b aria-hidden="true">✓</b>No bank account, card, SSN, or government ID requested here.</li>
+            <li><b aria-hidden="true">✓</b>You can ask us to remove your information at any time.</li>
+          </ul>
         </div>
-        <a className="button button--primary button--large" href="#how-it-works">Review the planned flow <span aria-hidden="true">→</span></a>
+        <EarlyAccessForm />
       </section>
     </>
   );
