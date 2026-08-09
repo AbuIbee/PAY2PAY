@@ -14,3 +14,11 @@ export const earlyAccessAccountTypeEnum = pgEnum("early_access_account_type", [
   "individual",
   "business",
 ]);
+
+/**
+ * Sprint 2 (docs/sprints/SPRINT_02_Authentication.md) MFA/step-up methods.
+ * "passkey" is reserved but not yet implemented — see docs/AUTHENTICATION.md
+ * for why passkey (WebAuthn) enrollment was deliberately deferred out of
+ * this sprint rather than rushed.
+ */
+export const mfaMethodEnum = pgEnum("mfa_method", ["totp", "sms", "passkey"]);

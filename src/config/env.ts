@@ -34,6 +34,12 @@ const serverEnvSchema = z.object({
   AUTH_PASSWORD_PEPPER: z
     .string()
     .min(16, "AUTH_PASSWORD_PEPPER must be at least 16 characters"),
+  // Base URL used to build links inside emails (verification, password
+  // reset) sent by src/lib/notify/*Sender.ts. Server-only: nothing renders
+  // this in a page, so it doesn't need a NEXT_PUBLIC_ prefix. Defaults to
+  // localhost for development convenience; must be set to the real deployed
+  // origin in preview/staging/production.
+  APP_URL: z.string().url().default("http://localhost:3000"),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

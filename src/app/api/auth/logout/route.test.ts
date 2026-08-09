@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { createTestAuthService, readSetCookie } from "@/lib/auth/testFakes";
+import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService, readSetCookie } from "@/lib/auth/testFakes";
 import { createLogoutHandler } from "./route";
 
 const LOGOUT_URL = "http://localhost/api/auth/logout";
@@ -22,6 +22,7 @@ describe("POST /api/auth/logout", () => {
     const result = await ctx.authService.signup({
       email: "logout-user@example.com",
       password: "a-strong-password",
+      dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });

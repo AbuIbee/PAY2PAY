@@ -1,5 +1,38 @@
 Read all PAY2PAY governance and specification documents.
 
+Begin Sprint 2.
+
+GITHUB CI GATE
+
+The current master commit must remain green.
+
+Two historical workflow failures exist on older commits. Do not treat them as
+current blockers if the current HEAD workflow passes.
+
+Sprint 2 must be developed on a dedicated branch:
+
+sprint-02-authentication
+
+Do not develop Sprint 2 directly on master.
+
+Before completing Sprint 2:
+
+1. Run the full local verification suite.
+2. Commit Sprint 2 changes on the sprint-02-authentication branch.
+3. Push that branch to GitHub.
+4. Confirm the GitHub CI workflow passes on the Sprint 2 branch/commit.
+5. Confirm the Vercel preview deployment for that branch builds successfully.
+6. Record the Sprint 2 commit hash and Vercel preview URL in docs/SPRINT_CONTROL.md.
+7. If GitHub CI fails, set Sprint 2 status to NEEDS FIX, not COMPLETE.
+8. If the Vercel preview build fails, set Sprint 2 status to NEEDS FIX.
+9. Do not merge Sprint 2 into master.
+10. Do not deploy Sprint 2 to production.
+11. Do not begin Sprint 3.
+
+At completion, stop and report:
+
+Awaiting ChatGPT/Product Owner sprint review. I will not begin the next sprint.
+
 SPRINT 2 OBJECTIVE:
 Implement secure authentication and the user-account foundation using Supabase as
 the approved backend platform.

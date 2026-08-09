@@ -234,16 +234,19 @@ found along the way — internal links must use `next/link`, not `<a>`). `npm ru
 
 ### Git commit
 
-**PENDING COMMIT** — changes are complete in the working tree but not committed this session
-(commits are made only when explicitly requested, per this session's operating rules).
+`82b2d98` — "Complete Sprint 1 public preview and early access". Committed outside this session
+(not by this assistant); verified present on `master` and its file list matches this sprint's
+files exactly.
 
-### Vercel preview URL
+### Vercel preview/production reference
 
-**NOT DEPLOYED**.
+`https://paid2you.com` — fetched and confirmed live; page content (hero heading, the
+"Product preview: account creation, agreements, signatures, and payments are not yet enabled."
+disclaimer) matches this build verbatim.
 
 ### ChatGPT/Product Owner review
 
-**NOT REVIEWED**.
+**PASS**.
 
 ### Sprint 1 completion report (summary)
 
@@ -263,3 +266,92 @@ as the Postgres hosting platform, not a required client library. See
 `docs/ENVIRONMENT_VARIABLES.md`'s architecture note.
 
 **Sprint 1 stopped here per governance rules. Sprint 2 was not started.**
+
+## Sprint 2 — Authentication
+
+Source: `docs/sprints/SPRINT_02_Authentication.md`. Full architecture review, design decisions,
+flows, and known gaps: `docs/AUTHENTICATION.md`. Developed on branch `sprint-02-authentication`
+per the sprint's GitHub CI gate section — not developed on `master`, not merged, not deployed to
+production.
+
+### Architecture review outcome (required before writing any code)
+
+Phase 0's existing custom auth (scrypt password hashing, session tokens, audit-logged
+signup/login/logout) was reviewed component-by-component and **retained and refactored**, not
+replaced with Supabase Auth. Documented blocker: `user_account` is already the FK target of five
+migrated tables, and every future sprint (3–20) is planned around that identity shape; adopting
+Supabase Auth's separate `auth.users` table now would be an unreviewed data-model redesign with
+consequences for every later sprint, not a simple library swap. Full reasoning:
+`docs/AUTHENTICATION.md` §1. **Flagged for explicit Product Owner/ChatGPT review** — the largest
+divergence from the sprint's literal default in this session.
+
+### Files created (54)
+
+Schema: `src/db/schema/auth.ts` (5 new tables: `email_verification_token`,
+`password_reset_token`, `mfa_credential`, `mfa_challenge`, `step_up_verification`).
+Auth/MFA logic: `src/lib/auth/{token,totp,totp.test,mfaService,mfaService.test,mfaTestFakes,
+requireSession,crossAccountIsolation.test,drizzlePersonalProfileRepository,
+drizzleEmailVerificationTokenRepository,drizzlePasswordResetTokenRepository,
+drizzleMfaCredentialRepository,drizzleMfaChallengeRepository,drizzleStepUpVerificationRepository,
+getMfaService}.ts`. Notification placeholders: `src/lib/notify/{emailSender,consoleEmailSender,
+smsSender,consoleSmsSender}.ts` (console-only — no real provider; Sprint 17's scope). API routes
+(+ one `route.test.ts` each): `src/app/api/auth/{verify-email,resend-verification,
+password-reset/request,password-reset/confirm,mfa/totp/enroll,mfa/totp/confirm,mfa/sms/enroll,
+mfa/sms/confirm,mfa/step-up/initiate,mfa/step-up/verify}/route.ts`,
+`src/app/api/account/dashboard/route.ts`. UI: `src/app/{signup,login,forgot-password,
+reset-password,verify-email,account}/page.tsx` + `src/components/{SignupForm,LoginForm,
+ForgotPasswordForm,ResetPasswordForm,VerifyEmailStatus,AccountDashboard}.tsx`. Migration:
+`drizzle/migrations/0001_mighty_sunfire.sql` (+ meta). Docs: `docs/AUTHENTICATION.md`.
+
+### Files modified (23)
+
+`src/lib/auth/authService.ts` (age-gate, personal-profile creation, account-disabled check,
+last-login tracking, email verification, password reset — see `docs/AUTHENTICATION.md` §3),
+`src/lib/auth/{drizzleUserAccountRepository,drizzleSessionRepository,getAuthService,testFakes}.ts`,
+`src/db/schema/{identity,enums,index}.ts` (new columns, RLS on every identity table, `mfa_method`
+enum), `src/config/env.ts` (`APP_URL` for email links), `src/lib/errors.ts`
+(`AccountDisabledError`), `src/app/api/auth/signup/{route,route.test}.ts` (date-of-birth field),
+`src/app/api/auth/{login,logout,me}/route.test.ts` (date-of-birth fixture), `src/lib/auth/
+authService.test.ts`, `src/app/layout.tsx` (minimal "Sign in" header link — not a marketing
+redesign), `tsconfig.json` + `eslint.config.mjs` (excluded `src-backup-before-redesign/`, a
+pre-existing snapshot directory that was unexpectedly being typechecked/linted — found while
+verifying this sprint, unrelated to Sprint 2's own scope but blocking a clean `npm run typecheck`),
+`docs/{SPRINT_CONTROL.md,PROGRESS.md}`.
+
+### Key decisions flagged for review
+
+1. **Supabase Auth not adopted** — see above and `docs/AUTHENTICATION.md` §1.
+2. **Passkey/WebAuthn deliberately not implemented.** TOTP (verified bit-exact against the
+   published RFC 6238 test vector) and SMS fallback are fully implemented; passkey requires
+   attestation/assertion signature verification, a materially different risk profile better done
+   as its own reviewed unit with a vetted library. `"passkey"` is reserved in the schema enum.
+   `docs/AUTHENTICATION.md` §4.
+3. **Login is allowed before email verification** (common practice, not required either way by the
+   sprint text) — `email_verified_at` is tracked and exposed for a later sprint to gate on if
+   desired.
+4. **TOTP secrets are stored in plaintext** (`mfa_credential.secret_ref`) — follows the existing,
+   already-accepted Phase 0 convention for other sensitive "ref" fields (no field-level
+   encryption/KMS infrastructure exists yet in this project); flagged as a pre-production
+   requirement, not silently accepted. `docs/AUTHENTICATION.md` §5.
+5. **No real email/SMS provider integrated** — console-logging placeholders only; standing up a
+   real provider is Sprint 17's explicit scope, not Sprint 2's. `docs/AUTHENTICATION.md` §5.
+
+### Tests
+
+165/165 passing across 32 files (up from 129 at the start of this sprint's work — 36 net new,
+after also fixing the pre-existing/unrelated `src-backup-before-redesign` typecheck-inclusion bug
+found along the way). Covers every item in the sprint's required test list, including all four
+cross-account isolation tests (`src/lib/auth/crossAccountIsolation.test.ts` — the "business
+profile" case is explicitly N/A this sprint, since no business-profile read path exists until
+Sprint 3; documented inline in that test).
+
+### Verification commands run
+
+`npm run lint` — pass. `npm run typecheck` — pass. `npm run test` — pass, 165/165. `npm run build`
+— pass, all 15 pages + 21 API routes generated correctly.
+
+### GitHub CI / Vercel preview
+
+See `docs/SPRINT_CONTROL.md`'s "Sprint 2 branch/CI/Vercel record" section for the outcome of this
+sprint's explicit CI-gate requirement (push branch, confirm CI passes, confirm Vercel preview
+builds) — completed as the final step of this sprint, after this document was first written.

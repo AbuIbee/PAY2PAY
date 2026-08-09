@@ -75,6 +75,24 @@ export class ConflictError extends AppError {
   }
 }
 
+/**
+ * A correctly-authenticated account that is suspended/closed. Deliberately
+ * distinct from AuthenticationError: this is only ever thrown *after*
+ * password verification succeeds, so revealing "this account is disabled"
+ * here cannot be used for account-enumeration (an attacker would already
+ * need the correct password to reach this branch).
+ */
+export class AccountDisabledError extends AppError {
+  constructor(message = "This account has been disabled.") {
+    super(message, {
+      statusCode: 403,
+      code: "ACCOUNT_DISABLED",
+      isOperational: true,
+    });
+    this.name = "AccountDisabledError";
+  }
+}
+
 export class RateLimitedError extends AppError {
   constructor(message = "Too many requests. Please try again later.") {
     super(message, {

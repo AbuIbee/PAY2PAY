@@ -14,6 +14,9 @@ export const dynamic = "force-dynamic";
 const signupSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(8).max(256),
+  // Age eligibility (18+) is enforced by AuthService.signup itself — this
+  // regex only validates shape, not the age business rule.
+  dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date of birth must be in YYYY-MM-DD format."),
 });
 
 // NFR-SEC-004: authentication endpoints are rate-limited per account/IP/device.
@@ -36,12 +39,15 @@ export function createSignupHandler(authService: AuthService) {
     const rawBody: unknown = await request.json().catch(() => null);
     const parsed = signupSchema.safeParse(rawBody);
     if (!parsed.success) {
-      throw new ValidationError("A valid email and a password of at least 8 characters are required.");
+      throw new ValidationError(
+        "A valid email, a password of at least 8 characters, and a date of birth are required.",
+      );
     }
 
     const { user, token, expiresAt } = await authService.signup({
       email: parsed.data.email,
       password: parsed.data.password,
+      dateOfBirth: parsed.data.dateOfBirth,
       ipAddress: ip,
       userAgent: request.headers.get("user-agent"),
     });

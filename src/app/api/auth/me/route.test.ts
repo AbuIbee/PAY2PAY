@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createMeHandler } from "./route";
 
 const ME_URL = "http://localhost/api/auth/me";
@@ -23,6 +23,7 @@ describe("GET /api/auth/me (protected route)", () => {
     const result = await ctx.authService.signup({
       email,
       password: "a-strong-password",
+      dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });

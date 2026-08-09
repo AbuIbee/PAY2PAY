@@ -118,8 +118,16 @@ execution.
 
 | Sprint | Status |
 |---|---|
-| 1 | **COMPLETE — awaiting Product Owner/ChatGPT review.** All 13 required-work items and all 8 acceptance criteria in `docs/sprints/SPRINT_01_PublicPreview _VercelReadiness.md` satisfied. Tests: 99/99 passing (18 files). Build: succeeds. Git commit: **PENDING COMMIT** (not committed this session — commits are made only when explicitly requested). Vercel preview URL: **NOT DEPLOYED**. ChatGPT/Product Owner review: **NOT REVIEWED**. Full report in `docs/PROGRESS.md`. |
-| 2–20 | Not started. Sprint plan documents for 2, 3, 4, 6, 9, 15, 18, 20 were revised in the prior repair pass; no sprint's application code has been implemented. |
+| 1 | **COMPLETE.** All 13 required-work items and all 8 acceptance criteria in `docs/sprints/SPRINT_01_PublicPreview _VercelReadiness.md` satisfied. Tests: 99/99 passing (18 files). Build: succeeds. Git commit: `82b2d98` ("Complete Sprint 1 public preview and early access") — verified present on `master`, contents match this sprint's file list. Vercel preview/production reference: `https://paid2you.com` — fetched and confirmed live, serving this build (disclaimer copy matches verbatim). ChatGPT/Product Owner review: **PASS**. Full report in `docs/PROGRESS.md`. |
+| 2 | **Local verification complete; branch/CI/Vercel status pending.** All 12 required-functionality items and the MFA/step-up primitive from `docs/sprints/SPRINT_02_Authentication.md` implemented on branch `sprint-02-authentication`. Local `lint`/`typecheck`/`test`/`build` all pass (165/165 tests). Architecture decision flagged for review: Supabase Auth **not** adopted (documented blocker, see `docs/AUTHENTICATION.md` §1); passkey/WebAuthn deliberately deferred (§4). Git commit / GitHub CI / Vercel preview: see below, pending this step's push. |
+| 3–20 | Not started. Sprint plan documents for 3, 4, 6, 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 2 branch/CI/Vercel record
+
+- **Branch:** `sprint-02-authentication` (not merged into `master`; per governance, this sprint does not merge or deploy to production).
+- **Commit:** _pending — recorded after commit below._
+- **GitHub CI:** _pending — see note below on the workflow's trigger scope._
+- **Vercel preview:** _pending — no Vercel CLI/API access in this environment; see note below._
 
 ## F. Duplication report
 

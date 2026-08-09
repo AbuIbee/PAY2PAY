@@ -29,14 +29,21 @@ export const userAccount = pgTable("user_account", {
   phone: text("phone").unique(),
   // Reference to a passkey/password credential record, never the secret itself.
   authCredentialRef: text("auth_credential_ref").notNull(),
-  dateOfBirth: text("date_of_birth"), // ISO date string; captured at Full verification (FR-IDV-003)
+  // ISO date string. Originally scoped (Phase 0) to be captured only at Full
+  // verification (FR-IDV-003); Sprint 2 (docs/sprints/SPRINT_02_Authentication.md)
+  // now requires 18+ age-gating at signup itself, so this is captured then —
+  // Full verification later reuses/confirms the same field rather than
+  // introducing a second date-of-birth column.
+  dateOfBirth: text("date_of_birth"),
   status: text("status").notNull().default("active"), // active | suspended | closed
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   country: text("country").notNull().default("US"), // reserved per master spec Section 1
   locale: text("locale").notNull().default("en-US"),
   timezone: text("timezone").notNull().default("America/New_York"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}).enableRLS();
 
 export const personalProfile = pgTable("personal_profile", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -50,7 +57,7 @@ export const personalProfile = pgTable("personal_profile", {
   verificationTier: text("verification_tier").notNull().default("none"), // none | basic | full
   currency: text("currency").notNull().default("USD"), // reserved per master spec Section 1
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}).enableRLS();
 
 export const businessProfile = pgTable(
   "business_profile",
@@ -75,7 +82,7 @@ export const businessProfile = pgTable(
       table.legalBusinessName,
     ),
   ],
-);
+).enableRLS();
 
 export const customRole = pgTable("custom_role", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -86,7 +93,7 @@ export const customRole = pgTable("custom_role", {
   // Granular permission flags/caps per FR-STAFF-002; open decision #8 covers
   // ceiling-enforcement semantics not yet finalized (docs/OPEN_DECISIONS.md).
   permissions: jsonb("permissions").notNull(),
-});
+}).enableRLS();
 
 export const businessStaffMember = pgTable(
   "business_staff_member",
@@ -116,7 +123,7 @@ export const businessStaffMember = pgTable(
       table.userId,
     ),
   ],
-);
+).enableRLS();
 
 /**
  * Backs basic auth (docs/IMPLEMENTATION_PLAN.md Phase 0 "basic auth
@@ -141,7 +148,7 @@ export const deviceSession = pgTable("device_session", {
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
-});
+}).enableRLS();
 
 export const beneficialOwner = pgTable("beneficial_owner", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -153,4 +160,4 @@ export const beneficialOwner = pgTable("beneficial_owner", {
   // identity_verification_record_id intentionally omitted here: that table
   // is a Phase 2 concern (docs/IMPLEMENTATION_PLAN.md) and adding the FK now
   // would require building a later phase's table ahead of schedule.
-});
+}).enableRLS();
