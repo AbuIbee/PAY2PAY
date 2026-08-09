@@ -3,3 +3,5 @@ export * from "./identity";
 export * from "./audit";
 export * from "./marketing";
 export * from "./auth";
+export * from "./verification";
+export * from "./pricing";

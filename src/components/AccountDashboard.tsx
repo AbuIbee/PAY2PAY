@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -165,6 +166,9 @@ export function AccountDashboard() {
           <strong>Multifactor authentication:</strong> {data.mfaEnrolled ? "Enrolled" : "Not enrolled"}
         </p>
         <div className="hero__actions" style={{ marginTop: "0.5rem" }}>
+          <Link className="button button--ghost" href="/dashboard">
+            Go to dashboard
+          </Link>
           <button type="button" className="button button--ghost" onClick={() => void handleResendVerification()}>
             Resend verification email
           </button>

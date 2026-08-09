@@ -371,4 +371,112 @@ status report to GitHub, not visual inspection.
 
 ### ChatGPT/Product Owner review
 
+**PASS** (upgraded from initial CONDITIONAL PASS once `docs/AUTH_ARCHITECTURE_DECISION.md`
+satisfied the review's architecture condition). Recorded retroactively here — the review outcome
+itself is `docs/SPRINT_CONTROL.md`'s canonical record; this line was not updated in step at the
+time to keep that turn's diff scoped to `docs/SPRINT_CONTROL.md` and the new architecture-decision
+document, per instruction.
+
+## Sprint 3 — Personal & Business Profiles
+
+Source: `docs/sprints/SPRINT_03_Personal_Business_Profiles.md`. Developed on branch
+`sprint-03-profiles`, branched from `sprint-02-authentication`'s merged tip (confirmed via
+`git merge-base` before starting — Sprint 3 depends on Sprint 2's `user_account`/
+`personal_profile`/session/MFA foundation, which is why this branch is based on that merged state,
+not directly on an earlier point).
+
+### Scope delivered
+
+- **Personal profile**: unchanged shape from Phase 0/Sprint 2 (one per user, created at signup);
+  its Phase 0 `verification_tier` column is removed in favor of the new verification architecture
+  below.
+- **Business profile**: extended with the required field set — `display_name`, `country`, `state`,
+  and a `status` lifecycle (`active`/`disabled`/`deleted`) — and business creation is now a real,
+  authenticated, validated flow (`POST /api/profiles/business`), not just a schema with no write
+  path.
+- **Identity verification architecture** (`docs/DATA_MODEL.md` §4's illustrative
+  `identity_verification_record` shape): a per-attempt, insert-and-decide table — not a mutable
+  column on the profile tables — so "verification status cannot self-report as FULL_VERIFIED" is
+  structural (there is no column to flip). `isFullyVerified(profileKind, profileId)` is the gating
+  interface Sprint 6/9–12 depend on. BASIC tier is derived from Sprint 2's
+  `user_account.email_verified_at` — flagged limitation: the master spec's BASIC tier also names
+  "verified phone number," which this codebase has no flow for yet, so BASIC is currently
+  email-only. FULL tier only ever reaches `verified`/`rejected` through
+  `VerificationService.recordManualVerificationDecision`, which also refuses to let a profile's own
+  owner record their own decision. No HTTP route exposes that decision method yet — deliberately:
+  exposing it without an admin-authorization system (Sprint 18) would create a real self-verification
+  hole, which not exposing it avoids entirely.
+- **Pricing/account-plan architecture** (master spec §19): a `pricing_plan` catalog (kept empty by
+  this migration — no seed data, since "do not hard-code speculative prices" applies to seed rows
+  too, not just application code) plus a `subscription` linkage table. Free-tier allowance fields
+  are counts (`free_agreement_allowance`, `free_included_payments_allowance`), never a currency
+  amount. `PricingService` has no method that reads or mutates an agreement — structurally, not
+  just by convention (tested).
+- **Profile switcher**: `ProfileAccessService.resolveActiveProfile` is the single seam every
+  profile-scoped action goes through — never trusts a browser-supplied `businessProfileId` without
+  re-checking ownership and `status = 'active'`. The active-profile cookie
+  (`p2p_active_profile`) is a convenience hint only; `GET /api/profiles/active` re-resolves it
+  through the same ownership check on every read, so a business disabled after the cookie was set
+  falls back to the personal profile rather than staying selected.
+- **Dashboards**: `GET /api/dashboard/personal` and `GET /api/dashboard/business` return real
+  empty states (all zeros/empty arrays) — no agreement/payment/customer tables exist yet
+  (Sprint 5+/9+), so nothing is fabricated.
+- **UI**: business-profile creation form, profile switcher, and a combined `/dashboard` page
+  (restrained styling, matching Sprint 2's established pattern — no marketing-page changes).
+
+### Files created (≈35) / modified (≈4)
+
+Schema: `src/db/schema/{verification,pricing}.ts` (new), `src/db/schema/{identity,enums,index}.ts`
+(modified — new columns/enums, `verification_tier` removed). Services + Drizzle repos + test
+fakes: `src/lib/profiles/*` (verification, business-profile, profile-access), `src/lib/pricing/*`.
+API routes (+ one `route.test.ts` each): `src/app/api/profiles/{business,active}/route.ts`,
+`src/app/api/profiles/route.ts`, `src/app/api/dashboard/{personal,business}/route.ts`. UI:
+`src/app/dashboard/page.tsx`, `src/components/{ProfileSwitcher,BusinessProfileForm,Dashboard}.tsx`;
+`src/components/AccountDashboard.tsx` gained a "Go to dashboard" link. `src/lib/errors.ts` gained
+`ForbiddenError` (403 — authenticated but not authorized, distinct from `AuthenticationError`).
+Migrations: `drizzle/migrations/0002_natural_thor_girl.sql` (new tables/columns),
+`drizzle/migrations/0003_awesome_obadiah_stane.sql` (drops the now-superseded `verification_tier`
+columns) — generated as two passes specifically to avoid `drizzle-kit`'s interactive
+rename-vs-drop/add disambiguation prompt, which can't be answered non-interactively in this
+environment; the two-migration split has no effect on the resulting schema versus a single
+migration would have.
+
+### Known gap flagged deliberately
+
+`business_profile.display_name` and `.state` are added as `NOT NULL` with no default
+(`0002_natural_thor_girl.sql`). This is safe to apply in every environment this project has run in
+so far (no live database exists yet, consistent with every prior phase — the table has always been
+empty), but would fail if ever applied against a database that already has `business_profile` rows
+without a default/backfill strategy. Flagged rather than silently assumed safe forever.
+
+### Tests
+
+221/221 passing across 42 files (up from 165/32 at the end of Sprint 2 — 56 net new). Covers all
+11 items in the sprint's required test list, including the two not already covered as a side
+effect of another test ("one personal profile maximum," added as a `ConflictError` guard in
+`InMemoryPersonalProfileRepository` mirroring the real schema's `UNIQUE` constraint; "cross-business
+isolation," `src/lib/profiles/profileInvariants.test.ts`).
+
+### Verification commands run
+
+`npm run lint` — pass. `npm run typecheck` — pass. `npm run test` — pass, 221/221. `npm run build`
+— pass, all 16 pages + 24 API routes generated correctly.
+
+### Git commit
+
+`1ab3c46` — "Implement Sprint 3: personal & business profiles", on branch `sprint-03-profiles`
+(branched from `sprint-02-authentication`'s merged tip). Not merged into `master`.
+
+### GitHub CI / Vercel preview
+
+Full detail in `docs/SPRINT_CONTROL.md`'s Sprint 3 record. Summary: the user opened
+[PR #2](https://github.com/AbuIbee/PAY2PAY/pull/2) (`sprint-03-profiles` → `master`, left open, not
+merged) to trigger CI, same pattern as Sprint 2. Both gates passed: GitHub CI run
+[31326343117](https://github.com/AbuIbee/PAY2PAY/actions/runs/31326343117) —
+`conclusion: success`; Vercel's status report on commit `1ab3c46` — `state: success`. No production
+deployment occurred: `master` unchanged at `026b371`, PR #2 unmerged, and `https://paid2you.com`
+re-fetched directly shows only Sprint 2's state (no "Dashboard" mention).
+
+### ChatGPT/Product Owner review
+
 **NOT REVIEWED.**

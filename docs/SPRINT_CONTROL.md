@@ -120,8 +120,33 @@ execution.
 |---|---|
 | 1 | **COMPLETE.** All 13 required-work items and all 8 acceptance criteria in `docs/sprints/SPRINT_01_PublicPreview _VercelReadiness.md` satisfied. Tests: 99/99 passing (18 files). Build: succeeds. Git commit: `82b2d98` ("Complete Sprint 1 public preview and early access") — verified present on `master`, contents match this sprint's file list. Vercel preview/production reference: `https://paid2you.com` — fetched and confirmed live, serving this build (disclaimer copy matches verbatim). ChatGPT/Product Owner review: **PASS**. Full report in `docs/PROGRESS.md`. |
 | 2 | **COMPLETE.** All 12 required-functionality items and the MFA/step-up primitive from `docs/sprints/SPRINT_02_Authentication.md` implemented on branch `sprint-02-authentication`. Local `lint`/`typecheck`/`test`/`build` all pass (165/165 tests). GitHub CI: **success** (run [31323009535](https://github.com/AbuIbee/PAY2PAY/actions/runs/31323009535)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO). ChatGPT/Product Owner review: **PASS** — architecture condition satisfied by `docs/AUTH_ARCHITECTURE_DECISION.md` (Supabase Auth adoptability, migration path, and risk analysis for the retained-custom-auth decision). **Not merged into `master`. Not deployed to production**, per governance — this sprint's branch is not auto-merged even on a PASS review. |
-| 3 | **READY.** Dependency (Sprint 2 auth/account foundation) satisfied — `user_account`/`personal_profile` exist, session validation and the `requireStepUp` MFA primitive are available for Sprint 3 to build on. Not yet implemented. |
-| 4–20 | Not started. Sprint plan documents for 4, 6, 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+| 3 | **COMPLETE.** All required items from `docs/sprints/SPRINT_03_Personal_Business_Profiles.md` implemented on branch `sprint-03-profiles` (branched from `sprint-02-authentication`'s merged tip). Local `lint`/`typecheck`/`test`/`build` all pass (221/221 tests). GitHub CI: **success** (run [31326343117](https://github.com/AbuIbee/PAY2PAY/actions/runs/31326343117)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO, same as Sprint 2). **Not merged into `master`. Not deployed to production** (confirmed: `master` HEAD unchanged at `026b371`, PR #2 open/unmerged, and `https://paid2you.com` re-fetched — shows Sprint 2's "Sign in" link but no "Dashboard" mention, i.e. still exactly the Sprint 2 merged state). ChatGPT/Product Owner review: **PASS**. |
+| 4 | **READY.** Dependency (Sprint 3 full profiles: `personal_profile`/`business_profile`/`isFullyVerified`/`ProfileAccessService`) satisfied — see Section D's dependency graph (`2 → 3 → 4`). Not yet implemented. |
+| 5–20 | Not started. Sprint plan documents for 4, 6, 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 3 branch/CI/Vercel record
+
+- **Branch:** `sprint-03-profiles`, branched from `sprint-02-authentication`'s merged tip (not from
+  an earlier point on `master`) — confirmed via `git merge-base` before starting, since Sprint 3
+  depends on Sprint 2's `user_account`/`personal_profile`/session/MFA foundation.
+- **Commit:** `1ab3c46` ("Implement Sprint 3: personal & business profiles").
+- **Pull request:** [#2](https://github.com/AbuIbee/PAY2PAY/pull/2) — opened (by the user, in
+  GitHub's UI, same pattern as PR #1) from `sprint-03-profiles` into `master`, specifically to
+  trigger the `pull_request`-scoped CI workflow. **Left open, not merged.**
+- **GitHub CI:** **success.** Workflow run
+  [31326343117](https://github.com/AbuIbee/PAY2PAY/actions/runs/31326343117) on commit `1ab3c46`,
+  triggered by PR #2's `pull_request` event — `status: completed`, `conclusion: success`. Verified
+  via GitHub's public Actions API, not just assumed.
+- **Vercel preview:** **success.** GitHub's combined-status API for commit `1ab3c46` reports
+  context `Vercel`, state `success`, "Deployment has completed"
+  (`target_url`: `https://vercel.com/pay2-pay/pay-2-pay/Hcz8PCf6VkQcAvWix7iqVoL7TrEf`). Preview URL
+  follows the same pattern as Sprint 2's
+  (`https://pay-2-pay-git-sprint-03-profiles-pay2-pay.vercel.app`) and is equally SSO-protected —
+  build success confirmed via Vercel's status report to GitHub, not visual inspection.
+- **No production deployment occurred:** `master` HEAD unchanged at `026b371` (the Sprint 2 merge
+  commit), PR #2 `state: open`, `merged: false`, and `https://paid2you.com` re-fetched directly —
+  shows Sprint 2's "Sign in" header link but no "Dashboard" mention anywhere, confirming production
+  is still exactly at the Sprint 2 merged state.
 
 ### Sprint 2 branch/CI/Vercel record
 

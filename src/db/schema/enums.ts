@@ -22,3 +22,28 @@ export const earlyAccessAccountTypeEnum = pgEnum("early_access_account_type", [
  * this sprint rather than rushed.
  */
 export const mfaMethodEnum = pgEnum("mfa_method", ["totp", "sms", "passkey"]);
+
+/**
+ * Sprint 3 (docs/sprints/SPRINT_03_Personal_Business_Profiles.md) identity
+ * verification architecture — matches docs/DATA_MODEL.md §4's illustrative
+ * `identity_verification_record.tier`/`.status`. "basic" tier itself has no
+ * record (it's derived from Sprint 2's `user_account.email_verified_at` —
+ * see verificationService.ts); records only exist for "full" tier attempts.
+ */
+export const verificationTierEnum = pgEnum("verification_tier", ["basic", "full"]);
+export const verificationStatusEnum = pgEnum("verification_status", [
+  "pending",
+  "verified",
+  "rejected",
+]);
+
+/** Sprint 3: business_profile lifecycle — a disabled/deleted business cannot be selected. */
+export const businessProfileStatusEnum = pgEnum("business_profile_status", [
+  "active",
+  "disabled",
+  "deleted",
+]);
+
+/** Sprint 3 (master spec §19): personal vs. business pricing catalogs are distinct. */
+export const pricingPlanKindEnum = pgEnum("pricing_plan_kind", ["personal", "business"]);
+export const subscriptionStatusEnum = pgEnum("subscription_status", ["active", "canceled"]);

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
+import { ConflictError } from "@/lib/errors";
 import type { EmailSender } from "@/lib/notify/emailSender";
 import { AuthService } from "./authService";
 import type {
@@ -123,6 +124,13 @@ export class InMemoryPersonalProfileRepository implements PersonalProfileReposit
   byUserId = new Map<string, PersonalProfileRecord>();
 
   async insert(userId: string): Promise<PersonalProfileRecord> {
+    // Mirrors the real schema's UNIQUE constraint on personal_profile.user_id
+    // (src/db/schema/identity.ts) — Sprint 3's "one personal profile maximum"
+    // is enforced at the database level; this fake reproduces that so tests
+    // against it are meaningful.
+    if (this.byUserId.has(userId)) {
+      throw new ConflictError("This user already has a personal profile.");
+    }
     const record: PersonalProfileRecord = { id: randomUUID(), userId };
     this.byUserId.set(userId, record);
     return record;

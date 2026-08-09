@@ -9,6 +9,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { businessProfileStatusEnum } from "./enums";
 
 /**
  * Phase 0 identity/profile tables only — the exact set
@@ -54,7 +55,14 @@ export const personalProfile = pgTable("personal_profile", {
     .references(() => userAccount.id),
   legalName: text("legal_name"),
   residentialAddress: jsonb("residential_address"),
-  verificationTier: text("verification_tier").notNull().default("none"), // none | basic | full
+  // Sprint 3 (docs/sprints/SPRINT_03_Personal_Business_Profiles.md): the
+  // Phase 0 `verification_tier` text column is removed in favor of the
+  // identity_verification_record architecture (src/db/schema/verification.ts)
+  // — "basic" is derived from user_account.email_verified_at, "full" is
+  // derived from the latest verified identity_verification_record. See
+  // src/lib/profiles/verificationService.ts. No verification column lives
+  // here, so there is no stored field a caller could self-report into
+  // "verified" — see that service's doc comment for why that matters.
   currency: text("currency").notNull().default("USD"), // reserved per master spec Section 1
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }).enableRLS();
@@ -68,10 +76,20 @@ export const businessProfile = pgTable(
       .notNull()
       .references(() => userAccount.id),
     legalBusinessName: text("legal_business_name").notNull(),
+    // Sprint 3: display name is distinct from the legal name (shown to
+    // counterparties/UI) — required field per this sprint's field list.
+    displayName: text("display_name").notNull(),
     entityType: text("entity_type").notNull(),
     einOrSsnRef: text("ein_or_ssn_ref"), // tokenized/encrypted reference, never raw
     businessAddress: jsonb("business_address"),
-    verificationTier: text("verification_tier").notNull().default("none"),
+    country: text("country").notNull().default("US"), // reserved per master spec Section 1
+    state: text("state").notNull(),
+    // Sprint 3: lifecycle status — a disabled/deleted business must never be
+    // selectable via the profile switcher (see profileAccessService.ts).
+    status: businessProfileStatusEnum("status").notNull().default("active"),
+    // See personal_profile's comment above — verification status is not a
+    // stored column here either; it's derived via
+    // src/lib/profiles/verificationService.ts.
     currency: text("currency").notNull().default("USD"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
