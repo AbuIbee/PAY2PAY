@@ -462,7 +462,21 @@ isolation," `src/lib/profiles/profileInvariants.test.ts`).
 `npm run lint` — pass. `npm run typecheck` — pass. `npm run test` — pass, 221/221. `npm run build`
 — pass, all 16 pages + 24 API routes generated correctly.
 
-### GitHub CI / Vercel preview / Git commit / ChatGPT review
+### Git commit
 
-See `docs/SPRINT_CONTROL.md`'s Sprint 3 record for commit hash, CI run, and Vercel preview URL —
-completed as the final step of this sprint, after this document was first written.
+`1ab3c46` — "Implement Sprint 3: personal & business profiles", on branch `sprint-03-profiles`
+(branched from `sprint-02-authentication`'s merged tip). Not merged into `master`.
+
+### GitHub CI / Vercel preview
+
+Full detail in `docs/SPRINT_CONTROL.md`'s Sprint 3 record. Summary: the user opened
+[PR #2](https://github.com/AbuIbee/PAY2PAY/pull/2) (`sprint-03-profiles` → `master`, left open, not
+merged) to trigger CI, same pattern as Sprint 2. Both gates passed: GitHub CI run
+[31326343117](https://github.com/AbuIbee/PAY2PAY/actions/runs/31326343117) —
+`conclusion: success`; Vercel's status report on commit `1ab3c46` — `state: success`. No production
+deployment occurred: `master` unchanged at `026b371`, PR #2 unmerged, and `https://paid2you.com`
+re-fetched directly shows only Sprint 2's state (no "Dashboard" mention).
+
+### ChatGPT/Product Owner review
+
+**NOT REVIEWED.**
