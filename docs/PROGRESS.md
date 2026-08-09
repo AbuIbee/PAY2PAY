@@ -572,11 +572,20 @@ step-up gating. All 10 of the sprint's named required-test scenarios are covered
 243/243. `npm run build` — pass; all 11 new `/api/staff/*` routes generated correctly as dynamic
 (ƒ) routes, no change to any existing static/dynamic route classification.
 
-### Git commit / GitHub CI / Vercel preview
+### Git commit
 
-Pending — recorded in `docs/SPRINT_CONTROL.md` once the branch is pushed and the PR is opened, per
-this project's established governance pattern (PR opened by the user, not by this assistant; CI/
-Vercel status verified read-only afterward).
+`89c48c8` — "Implement Sprint 4: business staff permissions, RBAC, and approval limits", on branch
+`sprint-04-business-permissions` (branched from `sprint-03-profiles`'s merged tip). Not merged into
+`master`.
+
+### GitHub CI / Vercel preview
+
+Full detail in `docs/SPRINT_CONTROL.md`'s Sprint 4 record. Summary: the user opened
+[PR #3](https://github.com/AbuIbee/PAY2PAY/pull/3) (`sprint-04-business-permissions` → `master`,
+left open, not merged) to trigger CI, same pattern as Sprints 2–3. Both gates passed: GitHub CI run
+[31328386726](https://github.com/AbuIbee/PAY2PAY/actions/runs/31328386726) — `conclusion: success`;
+Vercel's status report on commit `89c48c8` — `state: success`. No production deployment occurred:
+`master` unchanged at `4a62d6d` (the Sprint 3 merge commit), PR #3 unmerged.
 
 ### ChatGPT/Product Owner review
 
