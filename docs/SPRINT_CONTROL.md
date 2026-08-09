@@ -122,7 +122,46 @@ execution.
 | 2 | **COMPLETE.** All 12 required-functionality items and the MFA/step-up primitive from `docs/sprints/SPRINT_02_Authentication.md` implemented on branch `sprint-02-authentication`. Local `lint`/`typecheck`/`test`/`build` all pass (165/165 tests). GitHub CI: **success** (run [31323009535](https://github.com/AbuIbee/PAY2PAY/actions/runs/31323009535)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO). ChatGPT/Product Owner review: **PASS** — architecture condition satisfied by `docs/AUTH_ARCHITECTURE_DECISION.md` (Supabase Auth adoptability, migration path, and risk analysis for the retained-custom-auth decision). **Not merged into `master`. Not deployed to production**, per governance — this sprint's branch is not auto-merged even on a PASS review. |
 | 3 | **COMPLETE.** All required items from `docs/sprints/SPRINT_03_Personal_Business_Profiles.md` implemented on branch `sprint-03-profiles` (branched from `sprint-02-authentication`'s merged tip). Local `lint`/`typecheck`/`test`/`build` all pass (221/221 tests). GitHub CI: **success** (run [31326343117](https://github.com/AbuIbee/PAY2PAY/actions/runs/31326343117)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO, same as Sprint 2). **Not merged into `master`. Not deployed to production** (confirmed: `master` HEAD unchanged at `026b371`, PR #2 open/unmerged, and `https://paid2you.com` re-fetched — shows Sprint 2's "Sign in" link but no "Dashboard" mention, i.e. still exactly the Sprint 2 merged state). ChatGPT/Product Owner review: **PASS**. |
 | 4 | **COMPLETE — awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_04_BusinessStaff_Permissions.md` (capability model, staff invitation/acceptance/removal, custom roles, settlement/balance-adjustment approval limits, two-person/owner-required approval configuration, step-up hooks on every high-risk change, RLS on all three new tables) implemented on branch `sprint-04-business-permissions` (branched from `sprint-03-profiles`'s merged tip). Local `lint`/`typecheck`/`test`/`build` all pass (243/243 tests). GitHub CI: **success** (run [31328386726](https://github.com/AbuIbee/PAY2PAY/actions/runs/31328386726)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO, same as Sprints 2–3). **Not merged into `master`. Not deployed to production** (confirmed: `master` HEAD unchanged at `4a62d6d`, the Sprint 3 merge commit; PR #3 open/unmerged). ChatGPT/Product Owner review: **pending**. |
-| 5–20 | Not started. Sprint plan documents for 4, 6, 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them except Sprint 4 above. |
+| 5 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_05_Agreement_Engine.md` (P2P/B2C/C2B/B2B agreements, either-party draft initiation, debtor acknowledgment, all 20 required terms fields, integer-minor-unit schedule calculation with deterministic rounding, the full 14-state lifecycle with invalid-transition guards, signed-version immutability, audit events on every transition, creditor accept/reject/counter, and a functional UI) implemented on branch `sprint-05-agreement-engine`. A first pass was audited and found incomplete (missing the creditor-decide and sign API routes, no UI, a dead-code duplication in `validation.ts`); a second pass closed all three gaps — see "Sprint 5 gap-closure record" below. Local `lint`/`typecheck`/`test`/`build` all pass (269/269 tests, up from 243 at the end of Sprint 4). `drizzle-kit check` confirms the new migration (`0005_slim_shadow_king.sql`) is internally consistent. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — per this session's explicit instruction, commit/push is deferred until Product Owner review of this status entry. No payment integration (explicitly out of scope for this sprint) and no prior sprint's behavior was altered. |
+| 6–20 | Not started. Sprint plan documents for 6, 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 5 gap-closure record
+
+An initial implementation pass left the domain layer (schema, `AgreementService`, schedule math,
+authorization, audit, and all 12 required test categories — 26 agreement-specific tests) complete,
+but a subsequent audit against `docs/sprints/SPRINT_05_Agreement_Engine.md` found three gaps before
+this sprint could be considered done:
+
+1. **Missing API routes.** `AgreementService.creditorDecide` (accept/reject/counter) and
+   `signAgreement` were implemented and tested at the service layer but had no HTTP endpoint.
+   Closed by adding `POST /api/agreements/decide` and `POST /api/agreements/sign`
+   (`src/app/api/agreements/decide/route.ts`, `src/app/api/agreements/sign/route.ts`).
+2. **No functional UI.** The sprint requires "Build backend/API/server actions plus functional
+   UI"; none existed. Closed by adding `/agreements` (list + draft-creation form) and
+   `/agreements/detail?id=` (terms, schedule, and status-appropriate actions: submit, acknowledge,
+   accept/reject/counter, sign) — `src/app/agreements/page.tsx`,
+   `src/app/agreements/detail/page.tsx`, `src/components/AgreementsList.tsx`,
+   `src/components/AgreementDetail.tsx`, `src/components/AgreementTermsFields.tsx`. Follows this
+   project's existing component conventions (client components, `early-access-form`/`field`/
+   `form-status` CSS classes, `useSearchParams` for the detail route rather than a dynamic path
+   segment, matching `VerifyEmailStatus.tsx`'s pattern). The debtor-acknowledgment action button's
+   label ("I acknowledge this obligation is owed") is the first point at which literal
+   acknowledgment language is presented to the user — previously only the backend event existed.
+3. **Dead-code duplication.** `src/lib/agreements/validation.ts` defined `draftTermsSchema`/
+   `profileRefSchema` that nothing imported; `src/app/api/agreements/route.ts` had its own
+   duplicate inline copy. Closed by having the create route import a new `createAgreementSchema`
+   (built from `draftTermsSchema.extend(...)`) from `validation.ts`, and having the new decide
+   route import `draftTermsSchema` directly for `counterTerms` — one definition, two consumers.
+
+No route-level HTTP tests were added for the two new routes: this project's existing convention
+for domain-service routes (`agreements/*`, `staff/*`) relies on service-layer tests rather than
+HTTP-layer route tests — confirmed by checking that none of the pre-existing agreement or staff
+routes have route-level tests either. No new UI component tests were added for the same reason:
+`Dashboard.tsx` and `AccountDashboard.tsx`, the closest existing analogs, have none.
+
+Counterparty selection in the create-draft form is a raw profile-ID text input, not a directory/
+search feature — this project has no counterparty lookup yet (out of scope for this sprint), and
+the form says so explicitly rather than faking one.
 
 ### Sprint 4 branch/CI/Vercel record
 

@@ -65,3 +65,48 @@ export const staffInvitationStatusEnum = pgEnum("staff_invitation_status", [
   "expired",
   "revoked",
 ]);
+
+/**
+ * Sprint 5 (docs/sprints/SPRINT_05_Agreement_Engine.md): the agreement lifecycle, using the
+ * sprint's own DEBTOR/CREDITOR terminology (lowercased to match this project's enum-value
+ * convention) rather than docs/STATE_MACHINES.md §1's payer/recipient naming — same states, same
+ * transition graph, just the sprint's literal vocabulary since "creditor"/"debtor" are also this
+ * sprint's required field names.
+ */
+export const agreementStatusEnum = pgEnum("agreement_status", [
+  "draft",
+  "awaiting_debtor_acknowledgment",
+  "awaiting_creditor_acceptance",
+  "awaiting_signatures",
+  "signed",
+  "first_payment_pending",
+  "active",
+  "past_due",
+  "disputed",
+  "paused_by_amendment",
+  "paid_in_full",
+  "settled_in_full",
+  "mutually_canceled",
+  "closed",
+]);
+
+/** Sprint 5: docs/DATA_MODEL.md §4's `agreement_party.role` — "witness" is deferred to Sprint 7. */
+export const agreementPartyRoleEnum = pgEnum("agreement_party_role", ["creditor", "debtor"]);
+
+/** Sprint 5: master spec §5's recurring-installment cadence. */
+export const paymentFrequencyEnum = pgEnum("payment_frequency", ["weekly", "biweekly", "monthly"]);
+
+/** Sprint 5: master spec §4/FR-PAYMETHOD-003 — who pays processing fees. */
+export const feeAllocationEnum = pgEnum("fee_allocation", [
+  "creditor_pays",
+  "debtor_pays",
+  "split_evenly",
+]);
+
+/** Sprint 5: docs/DATA_MODEL.md §4's `installment_schedule_item.status`. */
+export const installmentItemStatusEnum = pgEnum("installment_item_status", [
+  "scheduled",
+  "paid",
+  "past_due",
+  "waived",
+]);
