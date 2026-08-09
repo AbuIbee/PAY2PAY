@@ -119,15 +119,22 @@ execution.
 | Sprint | Status |
 |---|---|
 | 1 | **COMPLETE.** All 13 required-work items and all 8 acceptance criteria in `docs/sprints/SPRINT_01_PublicPreview _VercelReadiness.md` satisfied. Tests: 99/99 passing (18 files). Build: succeeds. Git commit: `82b2d98` ("Complete Sprint 1 public preview and early access") — verified present on `master`, contents match this sprint's file list. Vercel preview/production reference: `https://paid2you.com` — fetched and confirmed live, serving this build (disclaimer copy matches verbatim). ChatGPT/Product Owner review: **PASS**. Full report in `docs/PROGRESS.md`. |
-| 2 | **Local verification complete; branch/CI/Vercel status pending.** All 12 required-functionality items and the MFA/step-up primitive from `docs/sprints/SPRINT_02_Authentication.md` implemented on branch `sprint-02-authentication`. Local `lint`/`typecheck`/`test`/`build` all pass (165/165 tests). Architecture decision flagged for review: Supabase Auth **not** adopted (documented blocker, see `docs/AUTHENTICATION.md` §1); passkey/WebAuthn deliberately deferred (§4). Git commit / GitHub CI / Vercel preview: see below, pending this step's push. |
+| 2 | **COMPLETE.** All 12 required-functionality items and the MFA/step-up primitive from `docs/sprints/SPRINT_02_Authentication.md` implemented on branch `sprint-02-authentication`. Local `lint`/`typecheck`/`test`/`build` all pass (165/165 tests). GitHub CI: **success** (run [31323009535](https://github.com/AbuIbee/PAY2PAY/actions/runs/31323009535)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO). Architecture decisions flagged for review: Supabase Auth **not** adopted (documented blocker, `docs/AUTHENTICATION.md` §1); passkey/WebAuthn deliberately deferred (§4). Not merged into `master`, not deployed to production, per governance. ChatGPT/Product Owner review: **NOT REVIEWED**. |
 | 3–20 | Not started. Sprint plan documents for 3, 4, 6, 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
 
 ### Sprint 2 branch/CI/Vercel record
 
 - **Branch:** `sprint-02-authentication` (not merged into `master`; per governance, this sprint does not merge or deploy to production).
-- **Commit:** _pending — recorded after commit below._
-- **GitHub CI:** _pending — see note below on the workflow's trigger scope._
-- **Vercel preview:** _pending — no Vercel CLI/API access in this environment; see note below._
+- **Commit:** `827a851` ("Implement Sprint 2: authentication, MFA/step-up, account foundation").
+- **Pull request:** [#1](https://github.com/AbuIbee/PAY2PAY/pull/1) — opened (by the user, in GitHub's UI) from `sprint-02-authentication` into `master`, specifically to trigger the `pull_request`-scoped CI workflow (pushing the branch alone does not — `.github/workflows/ci.yml` only triggers on push/PR to `main`/`master`, a pre-existing scope limitation unrelated to this sprint's code). **Left open, not merged.**
+- **GitHub CI:** **success.** Workflow run [31323009535](https://github.com/AbuIbee/PAY2PAY/actions/runs/31323009535) on commit `827a851`, triggered by PR #1's `pull_request` event — `status: completed`, `conclusion: success`. Verified via GitHub's public Actions API (`GET /repos/AbuIbee/PAY2PAY/actions/runs?branch=sprint-02-authentication`), not just assumed from the local runs.
+- **Vercel preview:** **success.** GitHub's combined-status API for commit `827a851` reports context `Vercel`, state `success`, description "Deployment has completed" (`target_url`:
+  `https://vercel.com/pay2-pay/pay-2-pay/4WJxzunokWMCYk3CSCVVwMkVonXz`). Preview URL:
+  `https://pay-2-pay-git-sprint-02-authentication-pay2-pay.vercel.app` — attempted to browse it
+  directly to visually confirm the signup/login pages render, but it redirects to Vercel's SSO
+  gate (`vercel.com/sso-api`), i.e. the preview is protected and requires a logged-in team member
+  to view. Build success itself is confirmed by Vercel's own status report to GitHub, not by
+  visual inspection.
 
 ## F. Duplication report
 

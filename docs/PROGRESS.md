@@ -352,6 +352,23 @@ Sprint 3; documented inline in that test).
 
 ### GitHub CI / Vercel preview
 
-See `docs/SPRINT_CONTROL.md`'s "Sprint 2 branch/CI/Vercel record" section for the outcome of this
-sprint's explicit CI-gate requirement (push branch, confirm CI passes, confirm Vercel preview
-builds) — completed as the final step of this sprint, after this document was first written.
+Full detail in `docs/SPRINT_CONTROL.md`'s "Sprint 2 branch/CI/Vercel record". Summary: pushing the
+branch alone did not trigger CI (`.github/workflows/ci.yml` only triggers on push/PR to
+`main`/`master` — a pre-existing scope limitation, not a Sprint 2 defect). The user opened
+[PR #1](https://github.com/AbuIbee/PAY2PAY/pull/1) (`sprint-02-authentication` → `master`, left
+open, not merged) specifically to trigger it. Both gates passed: GitHub CI run
+[31323009535](https://github.com/AbuIbee/PAY2PAY/actions/runs/31323009535) —
+`conclusion: success`; Vercel's own status report on commit `827a851` — `state: success`,
+"Deployment has completed". The preview URL itself
+(`https://pay-2-pay-git-sprint-02-authentication-pay2-pay.vercel.app`) redirects to Vercel's SSO
+gate, so its content was not independently browsed — build success is confirmed via Vercel's
+status report to GitHub, not visual inspection.
+
+### Git commit
+
+`827a851` — "Implement Sprint 2: authentication, MFA/step-up, account foundation", on branch
+`sprint-02-authentication`. Not merged into `master`.
+
+### ChatGPT/Product Owner review
+
+**NOT REVIEWED.**
