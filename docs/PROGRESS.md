@@ -590,3 +590,120 @@ Vercel's status report on commit `89c48c8` — `state: success`. No production d
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 5 — Agreement Engine
+
+Source: `docs/sprints/SPRINT_05_Agreement_Engine.md`. Developed on branch
+`sprint-05-agreement-engine`, branched from `sprint-04-business-permissions`'s tip (`2a94c6e`, the
+Sprint 4 merge commit — Sprint 5 does not depend on Sprint 4's staff/RBAC tables directly, but
+`AgreementService`'s business-side authorization does call `StaffService.requireCapability`/
+`requireActiveStaff`, per `docs/SPRINT_CONTROL.md`'s dependency graph).
+
+### Scope delivered
+
+- **Agreement engine domain model** (`src/db/schema/agreement.ts`): `agreement`,
+  `agreement_version`, `agreement_party`, `installment_schedule_item` — matches
+  `docs/DATA_MODEL.md` §4's illustrative shapes, narrowed to this sprint's scope (no
+  `signature_event`/`witness_attestation`/retention fields — those are Sprint 6/7/18/20's scope).
+  All four tables have `.enableRLS()` plus `REVOKE ALL ... FROM anon, authenticated`, matching
+  every prior sprint's defense-in-depth pattern.
+- **All 20 required agreement fields** (category, description, original amount, previous
+  payments, current principal, currency, creditor, debtor, first payment, installment amount,
+  frequency, schedule, final payment, fee allocation, early payoff terms, hardship rules, partial
+  payment rules, settlement rules, dispute procedure, supporting evidence references) — present
+  across the schema and `AgreementTerms`.
+- **Schedule calculation** (`src/lib/agreements/schedule.ts`): integer-minor-units throughout
+  (FR-MONEY-001), deterministic date math with no floating-point/timezone ambiguity, and the
+  rounding remainder absorbed entirely into the final installment rather than spread or dropped.
+- **Full 14-state lifecycle** (`agreementStatusEnum`/`AgreementStatus`), exact spec vocabulary,
+  with invalid transitions blocked by `requireStatus()`.
+- **Agreement versioning + immutability**: signed versions can never be updated in place
+  (`updateTerms` is only ever called pre-signature); Sprint 5 itself only ever creates version 1
+  (amendments are Sprint 14/15's scope) — the versioning infrastructure exists and is exercised,
+  but a second version is never created in this sprint, by design.
+- **Full lifecycle service** (`src/lib/agreements/agreementService.ts`): draft creation (either
+  party may initiate), debtor acknowledgment, creditor accept/reject/counter, minimal
+  version-scoped signing (auto-advances to `first_payment_pending` once both parties have signed —
+  no payment is initiated), audit events on every transition, and authorization that reuses
+  Sprint 3's `ProfileOwnerReader` and Sprint 4's `StaffService` rather than re-implementing either.
+- **API routes** (`src/app/api/agreements/`): `route.ts` (create/list), `detail/route.ts`,
+  `submit/route.ts`, `acknowledge/route.ts`, `decide/route.ts`, `sign/route.ts` — all six actions
+  the service supports are now reachable over HTTP.
+- **Functional UI** (`src/app/agreements/`, `src/components/Agreement*.tsx`): `/agreements` (list
+  the active profile's agreements; draft-creation form), `/agreements/detail?id=` (terms,
+  computed schedule, and status-appropriate actions — submit, acknowledge, accept/reject/counter,
+  sign). Follows this project's existing conventions (client components, `early-access-form`/
+  `field`/`form-status` CSS classes, `useSearchParams` rather than a dynamic path segment,
+  matching `VerifyEmailStatus.tsx`). Money is entered in dollars and converted to integer minor
+  units in the browser before ever reaching the API. Counterparty selection is a raw profile-ID
+  input, not a directory/search feature — none exists yet in this project (out of scope for this
+  sprint), and the form states that plainly.
+- **Payments**: deliberately not implemented — the lifecycle stops advancing itself at
+  `first_payment_pending`; no payment-processing code was added, per the sprint's explicit
+  "Do not integrate live payments."
+
+### Two-pass process note
+
+A first implementation pass left the domain layer (schema, service, schedule math, authorization,
+audit, all 12 required test categories) complete but was found incomplete on audit: the
+creditor-decide and sign actions had no API route, no UI existed at all, and
+`src/lib/agreements/validation.ts` was dead code duplicated inline in `route.ts`. A second pass
+closed all three gaps (see `docs/SPRINT_CONTROL.md`'s "Sprint 5 gap-closure record" for detail).
+This section describes the state after both passes.
+
+### Files created (17)
+
+Schema: `src/db/schema/agreement.ts`. Domain logic:
+`src/lib/agreements/{schedule,agreementService,validation,getAgreementService,testFakes}.ts`.
+Drizzle repositories: `src/lib/agreements/drizzle{Agreement,AgreementVersion,AgreementParty,
+InstallmentScheduleItem}Repository.ts`. Tests: `src/lib/agreements/{schedule,agreementService}
+.test.ts`. API routes: `src/app/api/agreements/{route,detail/route,submit/route,
+acknowledge/route,decide/route,sign/route}.ts`. UI:
+`src/app/agreements/{page,detail/page}.tsx`, `src/components/Agreement{sList,Detail,
+TermsFields}.tsx`. Migration: `drizzle/migrations/0005_slim_shadow_king.sql` (+
+`meta/0005_snapshot.json`).
+
+### Files modified (3)
+
+`src/db/schema/enums.ts` (added `agreementStatusEnum`, `agreementPartyRoleEnum`,
+`paymentFrequencyEnum`, `feeAllocationEnum`, `installmentItemStatusEnum`), `src/db/schema/index.ts`
+(export the new `agreement` schema module), `drizzle/migrations/meta/_journal.json` (drizzle-kit's
+own migration index).
+
+### Tests
+
+269/269 passing across 46 files (up from 243/44 at the end of Sprint 4 — 26 net new, all in
+`src/lib/agreements/`: 18 in `agreementService.test.ts`, 8 in `schedule.test.ts`). Covers all 12
+of the sprint's named required-test scenarios: P2P, B2C, B2B, debtor acknowledgment, creditor
+acceptance, counter, rejection, unauthorized access, schedule arithmetic, rounding, immutable
+signed record, invalid state transitions. No route-level HTTP tests or UI component tests were
+added — matches this project's existing convention for domain-service routes and data-fetching
+components (confirmed: none of the pre-existing `agreements/*` or `staff/*` routes have route
+tests, and `Dashboard.tsx`/`AccountDashboard.tsx` have no component tests either).
+
+### Verification commands run
+
+`npm run typecheck` — pass, no errors. `npm run lint` — pass, no errors. `npm run test` — pass,
+269/269. `npm run build` — pass; `/agreements`, `/agreements/detail`, and all six new
+`/api/agreements/*` routes generated correctly, no change to any existing route's
+static/dynamic classification. `npx drizzle-kit check` — pass, migration history internally
+consistent, no drift.
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction, commit/push/PR is deferred until
+after Product Owner review of this status entry. `git status` at the time of this report: modified
+`drizzle/migrations/meta/_journal.json`, `src/db/schema/{enums,index}.ts`; untracked
+`drizzle/migrations/0005_slim_shadow_king.sql`, `drizzle/migrations/meta/0005_snapshot.json`,
+`src/app/agreements/`, `src/app/api/agreements/`, `src/components/Agreement{sList,Detail,
+TermsFields}.tsx`, `src/db/schema/agreement.ts`, `src/lib/agreements/`. No prior sprint's files
+were altered.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push of this work beyond what was already on
+`origin/sprint-05-agreement-engine` before this session, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

@@ -6,3 +6,4 @@ export * from "./auth";
 export * from "./verification";
 export * from "./pricing";
 export * from "./staff";
+export * from "./agreement";
