@@ -6,11 +6,18 @@ import { UNUSABLE_PASSWORD_HASH, hashPassword, verifyPassword } from "./password
 import { generateSessionToken, hashSessionToken } from "./session";
 import { generateOpaqueToken, hashOpaqueToken } from "./token";
 
+/** Sprint 6A (docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md) platform authorization. */
+export type PlatformRole = "member" | "platform_admin" | "platform_owner";
+/** Sprint 6A: durable test/internal-account classification, independent of `status`. */
+export type AccountClassification = "production" | "internal" | "qa" | "demo" | "automated_test";
+
 export interface UserAccountRecord {
   id: string;
   email: string;
   authCredentialRef: string;
   status: string;
+  platformRole: PlatformRole;
+  accountClassification: AccountClassification;
   dateOfBirth: string | null;
   emailVerifiedAt: Date | null;
 }
@@ -33,6 +40,12 @@ export interface UserAccountRepository {
   markEmailVerified(userId: string): Promise<void>;
   updateLastLogin(userId: string): Promise<void>;
   updatePasswordHash(userId: string, authCredentialRef: string): Promise<void>;
+  /** Sprint 6A: admin suspend/reactivate. */
+  updateStatus(userId: string, status: string): Promise<void>;
+  /** Sprint 6A: owner-only role administration. */
+  updatePlatformRole(userId: string, platformRole: PlatformRole): Promise<void>;
+  /** Sprint 6A: admin test-account classification. */
+  updateAccountClassification(userId: string, accountClassification: AccountClassification): Promise<void>;
 }
 
 export interface PersonalProfileRecord {
@@ -456,7 +469,7 @@ export class AuthService {
    */
   async validateSession(
     token: string,
-  ): Promise<{ user: Pick<UserAccountRecord, "id" | "email">; sessionId: string } | null> {
+  ): Promise<{ user: Pick<UserAccountRecord, "id" | "email" | "platformRole">; sessionId: string } | null> {
     const session = await this.sessions.findByTokenHash(hashSessionToken(token));
     if (!session) return null;
     if (session.revokedAt) return null;
@@ -464,9 +477,14 @@ export class AuthService {
 
     const user = await this.users.findById(session.userId);
     if (!user) return null;
+    // Sprint 6A defense in depth: a suspension must take effect immediately, not only at the next
+    // login — a session created before suspension must stop working on its very next use, without
+    // relying solely on the admin action also revoking sessions (which it does, but this closes the
+    // gap if that step is ever skipped or races).
+    if (user.status !== "active") return null;
 
     await this.sessions.touchLastSeen(session.id);
-    return { user: { id: user.id, email: user.email }, sessionId: session.id };
+    return { user: { id: user.id, email: user.email, platformRole: user.platformRole }, sessionId: session.id };
   }
 
   private async createSession(

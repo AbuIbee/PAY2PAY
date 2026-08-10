@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { userAccount } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
-import type { UserAccountRecord, UserAccountRepository } from "./authService";
+import type { AccountClassification, PlatformRole, UserAccountRecord, UserAccountRepository } from "./authService";
 
 type UserAccountRow = typeof userAccount.$inferSelect;
 
@@ -13,6 +13,8 @@ function toRecord(row: UserAccountRow): UserAccountRecord {
     email: row.email,
     authCredentialRef: row.authCredentialRef,
     status: row.status,
+    platformRole: row.platformRole,
+    accountClassification: row.accountClassification,
     dateOfBirth: row.dateOfBirth,
     emailVerifiedAt: row.emailVerifiedAt,
   };
@@ -73,5 +75,20 @@ export class DrizzleUserAccountRepository implements UserAccountRepository {
   async updatePasswordHash(userId: string, authCredentialRef: string): Promise<void> {
     const db = getDb();
     await db.update(userAccount).set({ authCredentialRef }).where(eq(userAccount.id, userId));
+  }
+
+  async updateStatus(userId: string, status: string): Promise<void> {
+    const db = getDb();
+    await db.update(userAccount).set({ status }).where(eq(userAccount.id, userId));
+  }
+
+  async updatePlatformRole(userId: string, platformRole: PlatformRole): Promise<void> {
+    const db = getDb();
+    await db.update(userAccount).set({ platformRole }).where(eq(userAccount.id, userId));
+  }
+
+  async updateAccountClassification(userId: string, accountClassification: AccountClassification): Promise<void> {
+    const db = getDb();
+    await db.update(userAccount).set({ accountClassification }).where(eq(userAccount.id, userId));
   }
 }

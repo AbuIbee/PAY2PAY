@@ -9,7 +9,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { businessProfileStatusEnum } from "./enums";
+import { accountClassificationEnum, businessProfileStatusEnum, platformRoleEnum } from "./enums";
 
 /**
  * Phase 0 identity/profile tables only — the exact set
@@ -37,6 +37,12 @@ export const userAccount = pgTable("user_account", {
   // introducing a second date-of-birth column.
   dateOfBirth: text("date_of_birth"),
   status: text("status").notNull().default("active"), // active | suspended | closed
+  // Sprint 6A (docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md): trusted,
+  // server/DB-sourced platform authorization — never derived from client state. Defaults "member"
+  // so every existing and future ordinary signup is unaffected.
+  platformRole: platformRoleEnum("platform_role").notNull().default("member"),
+  // Sprint 6A: durable classification, independent of `status` and of any naming convention.
+  accountClassification: accountClassificationEnum("account_classification").notNull().default("production"),
   emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   country: text("country").notNull().default("US"), // reserved per master spec Section 1

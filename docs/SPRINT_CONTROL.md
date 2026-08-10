@@ -124,7 +124,93 @@ execution.
 | 4 | **COMPLETE — awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_04_BusinessStaff_Permissions.md` (capability model, staff invitation/acceptance/removal, custom roles, settlement/balance-adjustment approval limits, two-person/owner-required approval configuration, step-up hooks on every high-risk change, RLS on all three new tables) implemented on branch `sprint-04-business-permissions` (branched from `sprint-03-profiles`'s merged tip). Local `lint`/`typecheck`/`test`/`build` all pass (243/243 tests). GitHub CI: **success** (run [31328386726](https://github.com/AbuIbee/PAY2PAY/actions/runs/31328386726)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO, same as Sprints 2–3). **Not merged into `master`. Not deployed to production** (confirmed: `master` HEAD unchanged at `4a62d6d`, the Sprint 3 merge commit; PR #3 open/unmerged). ChatGPT/Product Owner review: **pending**. |
 | 5 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_05_Agreement_Engine.md` (P2P/B2C/C2B/B2B agreements, either-party draft initiation, debtor acknowledgment, all 20 required terms fields, integer-minor-unit schedule calculation with deterministic rounding, the full 14-state lifecycle with invalid-transition guards, signed-version immutability, audit events on every transition, creditor accept/reject/counter, and a functional UI) implemented on branch `sprint-05-agreement-engine`. A first pass was audited and found incomplete (missing the creditor-decide and sign API routes, no UI, a dead-code duplication in `validation.ts`); a second pass closed all three gaps — see "Sprint 5 gap-closure record" below. Local `lint`/`typecheck`/`test`/`build` all pass (269/269 tests, up from 243 at the end of Sprint 4). `drizzle-kit check` confirms the new migration (`0005_slim_shadow_king.sql`) is internally consistent. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — per this session's explicit instruction, commit/push is deferred until Product Owner review of this status entry. No payment integration (explicitly out of scope for this sprint) and no prior sprint's behavior was altered. |
 | 6 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md` (full electronic-signature evidence capture, step-up + full-verification + business-signing-authority gates before any signature, immutable per-version PDF generation, Supabase Storage private-bucket abstraction with signed-URL access, tamper-evident hashing, and all 11 required test categories) implemented on branch `sprint-06-ElectronicSignatures_PDFRecords`, branched from `master`'s tip (`55ae530`, the Sprint 5 merge commit — confirmed via `git merge-base --is-ancestor`). Local `lint`/`typecheck`/`test`/`build` all pass (282/282 tests, up from 269 at the end of Sprint 5). `drizzle-kit check` confirms the new migration (`0006_last_otto_octavius.sql`) is internally consistent. Sprint 5's own 26 tests all still pass unchanged, confirming no Sprint 5 behavior was altered beyond the two explicitly-required, purely-additive touches (a shared `computeVersionHash` extraction with identical output, and a new public `resolvePartyRole` wrapper). **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. No payment integration (explicitly out of scope) was added. See "Sprint 6 implementation notes" below for what was and wasn't built, and why. |
+| 6A | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md` (three-tier platform-role model, protected `/admin` control plane with server-side-only authorization, functional dashboard/user-search/user-detail UI backed entirely by real data, suspend/reactivate/revoke-sessions/role-change/classification admin operations, durable test-account classification, full audit logging of every admin action, read-only "View As User" support view, documented break-glass recovery with no in-app bypass, and all 10 required test categories) implemented on branch `sprint-06A-platform-administration`, branched from `master`'s tip (`72ae5b4`, the Sprint 6 merge commit). Local `lint`/`typecheck`/`test`/`build` all pass (303/303 tests, up from 282 at the end of Sprint 6). `drizzle-kit check` confirms the new migration (`0007_short_gauntlet.sql`) is internally consistent. Sprints 1–6's own tests all still pass unchanged, confirming no regression despite three necessary, narrowly-scoped touches to Sprint 2's auth layer (see "Sprint 6A implementation notes" below). **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. No agreement/signature/PDF table was ever imported by any Sprint 6A code — see the implementation notes for how that guarantee is structural, not just tested. |
 | 7–20 | Not started. Sprint plan documents for 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 6A implementation notes
+
+**Three necessary touches to Sprint 2's `authService.ts`, all additive:**
+1. `UserAccountRecord` gained `platformRole`/`accountClassification` fields (new DB columns,
+   default `member`/`production` — every existing and future ordinary signup is unaffected).
+   `UserAccountRepository` gained `updateStatus`/`updatePlatformRole`/`updateAccountClassification`
+   — new interface methods, implemented in both the Drizzle repo and the in-memory test fake.
+2. `validateSession` now rejects a session whose user's `status` is not `"active"` — a suspension
+   now takes effect immediately, even for a session created before the suspension, rather than only
+   at the account's next login (which was already enforced). This is a genuine behavior change for
+   suspended/closed accounts, and a no-op for every active account — confirmed by Sprint 2's full
+   existing test suite still passing unchanged.
+3. `requireSession` (and therefore every route that calls it) now also returns the caller's trusted
+   `platformRole`, sourced from the same DB-backed `validateSession` call every route already made —
+   no new database round trip, no new trust boundary.
+
+**`audit_event` gained two optional columns** (`targetResourceType`/`targetResourceId`) via
+`AuditEventPayload`'s two new *optional* fields — every pre-Sprint-6A call site across every prior
+sprint's service is unaffected (`canonicalize()`'s `JSON.stringify` drops an `undefined`-valued key
+entirely, so the hash input, and therefore the hash itself, for every existing call site is
+byte-identical to before this field existed). Confirmed by `audit/hash.test.ts` and every service's
+own test suite passing unchanged.
+
+**Signed-agreement protection is structural, not just tested.** `AdminService`
+(`src/lib/admin/adminService.ts`) does not import `AgreementService`, `SignatureService`, or any
+repository touching `agreement`/`agreement_version`/`agreement_party`/`installment_schedule_item`/
+`signature_event`/`agreement_pdf` — there is no method on the class capable of reading or writing
+any of those tables, by construction. `adminService.test.ts` includes both a behavioral proof (a
+user flagged `platform_owner` still gets `ForbiddenError` from `AgreementService` when not an actual
+party) and a structural proof (reflecting `AdminService`'s own prototype methods and asserting none
+match `/agreement|signature|pdf/i`).
+
+**Role administration is deliberately narrower than the full sprint-planning document's "Role
+Administration" section might suggest at first read.** `AdminService.changeUserRole` supports only
+`member` ↔ `platform_admin` — it can never assign, remove, or touch `platform_owner` at all (any
+target whose *current* role is `platform_owner` is unconditionally rejected). This eliminates the
+"last owner" edge case entirely rather than needing to guard against it, and matches the sprint
+text's own two named operations ("Promote eligible Member → Platform Admin. Demote Platform Admin
+→ Member.") literally. Ownership changes have exactly one path: the documented, code-free
+break-glass procedure in `docs/ADMIN_BREAK_GLASS_RECOVERY.md`.
+
+**A plain Platform Admin may act on Member accounts only** — suspend, reactivate, revoke sessions,
+and classification changes all reject a target whose role is `platform_admin` or `platform_owner`,
+even for an admin actor. A Platform Owner may suspend/reactivate/revoke-sessions a Platform Admin,
+but never another Platform Owner (extra safety rail beyond what the sprint strictly requires, since
+no owner-target action is required at all).
+
+**"View As User" is read-only by construction, not by convention.** `startImpersonation` never
+issues a session token, never sets an auth cookie, and returns only an aggregated snapshot
+(`AdminUserDetail`) plus a bookkeeping `impersonationSessionId` — there is no code path from an
+impersonation session to acting as the target user. Bounded by an explicit start/end pair, both
+audited, both requiring the admin's own fresh step-up challenge (`admin_impersonation_start`
+step-up action) for start.
+
+**Step-up (Sprint 2's `requireStepUp`) is required for:** changing a platform role
+(`admin_role_change`) and starting a support view (`admin_impersonation_start`) — the two Sprint 6A
+actions with genuine account-takeover-adjacent risk. Suspend/reactivate/revoke-sessions/
+classification-change do not require step-up, matching Sprint 4's own precedent that step-up gates
+specifically *high-risk* capabilities, not every admin action.
+
+**Break-glass recovery is documentation only** (`docs/ADMIN_BREAK_GLASS_RECOVERY.md`) — no
+in-app override route, master password, or bypass account exists anywhere in the codebase, per the
+sprint's explicit prohibition. Platform-owner recovery/transfer has exactly one path: direct
+database access outside the running application.
+
+**Admin action names use this project's existing lowercase-snake-case `action`-string convention**
+(`admin_user_suspended`, `admin_role_changed`, `admin_impersonation_started`, etc.) rather than the
+sprint-planning document's illustrative `ALL_CAPS` names (`USER_SUSPENDED`, `ROLE_CHANGED`) — chosen
+for consistency with every other action string already in `audit_event` across Sprints 1–6, not a
+deviation from the requirement itself (the event *categories* required are all present).
+
+**No "Administrative Notes" feature was built.** The full Sprint 6A planning document's
+"Administrative Notes" section (a persisted troubleshooting-note feature) was not among this
+session's condensed 16-item instruction list and was treated as out of scope for this pass — user
+administration's "relevant audit/support information" requirement is satisfied by exposing each
+user's own audit history via the dashboard's/detail view's existing audit-event data instead. Can
+be added as its own scoped follow-up if the Product Owner wants it.
+
+**No dedicated RLS policy SQL was added beyond `ENABLE ROW LEVEL SECURITY` + `REVOKE ALL FROM anon,
+authenticated`** on the one new table (`admin_impersonation_session`) — identical to every other
+table in this project (zero permissive policies for those roles; the application's own database
+role is the only one ever granted access, provisioned outside application code). `user_account` and
+`audit_event`'s existing protection (RLS on the former, role-grant-based on the latter, per
+`audit.ts`'s own doc comment) were not modified.
 
 ### Sprint 6 implementation notes
 

@@ -12,6 +12,8 @@ import type {
   PersonalProfileRepository,
   SessionRecord,
   SessionRepository,
+  AccountClassification,
+  PlatformRole,
   UserAccountRecord,
   UserAccountRepository,
 } from "./authService";
@@ -25,7 +27,8 @@ import type {
  */
 
 export class InMemoryUserAccountRepository implements UserAccountRepository {
-  private byId = new Map<string, UserAccountRecord>();
+  /** Public (unlike most fields here) so Sprint 6A's admin test fakes can list/aggregate users without a bulk-list method on the real interface — mirrors InMemoryAgreementRepository.byId's pattern. */
+  byId = new Map<string, UserAccountRecord>();
 
   async findByEmail(email: string): Promise<UserAccountRecord | null> {
     for (const user of this.byId.values()) {
@@ -48,6 +51,8 @@ export class InMemoryUserAccountRepository implements UserAccountRepository {
       email: input.email,
       authCredentialRef: input.authCredentialRef,
       status: "active",
+      platformRole: "member",
+      accountClassification: "production",
       dateOfBirth: input.dateOfBirth,
       emailVerifiedAt: null,
     };
@@ -69,10 +74,30 @@ export class InMemoryUserAccountRepository implements UserAccountRepository {
     if (user) user.authCredentialRef = authCredentialRef;
   }
 
+  async updateStatus(userId: string, status: string): Promise<void> {
+    this.setStatus(userId, status);
+  }
+
+  async updatePlatformRole(userId: string, platformRole: PlatformRole): Promise<void> {
+    const user = this.byId.get(userId);
+    if (user) user.platformRole = platformRole;
+  }
+
+  async updateAccountClassification(userId: string, accountClassification: AccountClassification): Promise<void> {
+    const user = this.byId.get(userId);
+    if (user) user.accountClassification = accountClassification;
+  }
+
   /** Test-only helper, not part of the UserAccountRepository interface. */
   setStatus(userId: string, status: string): void {
     const user = this.byId.get(userId);
     if (user) user.status = status;
+  }
+
+  /** Test-only helper, not part of the UserAccountRepository interface. */
+  setPlatformRole(userId: string, platformRole: PlatformRole): void {
+    const user = this.byId.get(userId);
+    if (user) user.platformRole = platformRole;
   }
 }
 

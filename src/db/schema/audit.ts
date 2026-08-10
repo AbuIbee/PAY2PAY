@@ -37,6 +37,12 @@ export const auditEvent = pgTable(
     authStrength: text("auth_strength"),
     relatedDocumentId: uuid("related_document_id"),
     relatedCaseId: uuid("related_case_id"),
+    // Sprint 6A (docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md): generic
+    // target-resource identification for administrative actions (e.g. "user_account" / a specific
+    // user's id) — nullable/optional so every pre-Sprint-6A call site is unaffected; text rather
+    // than uuid since the target resource type varies (matches `action`'s own text column).
+    targetResourceType: text("target_resource_type"),
+    targetResourceId: text("target_resource_id"),
     eventHash: text("event_hash").notNull(),
     previousEventHash: text("previous_event_hash"),
   },

@@ -25,6 +25,8 @@ function toRecord(row: AuditEventRow): AuditEventRecord {
     authStrength: row.authStrength,
     relatedDocumentId: row.relatedDocumentId,
     relatedCaseId: row.relatedCaseId,
+    targetResourceType: row.targetResourceType,
+    targetResourceId: row.targetResourceId,
     eventHash: row.eventHash,
     previousEventHash: row.previousEventHash,
   };
@@ -67,6 +69,8 @@ export class DrizzleAuditEventRepository implements AuditEventRepository {
         authStrength: record.authStrength,
         relatedDocumentId: record.relatedDocumentId,
         relatedCaseId: record.relatedCaseId,
+        targetResourceType: record.targetResourceType ?? undefined,
+        targetResourceId: record.targetResourceId ?? undefined,
         eventHash: record.eventHash,
         previousEventHash: record.previousEventHash,
       })
