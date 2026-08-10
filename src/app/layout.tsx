@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import Link from "next/link";
+import { AdminNavLink } from "@/components/AdminNavLink";
 import { MobileNavToggle } from "@/components/MobileNavToggle";
 import "./globals.css";
 
@@ -30,10 +31,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                 <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
                 <span>PAY2PAY</span>
               </Link>
-              <Link href="/login" className="button button--ghost" style={{ marginInlineStart: "auto", marginInlineEnd: "0.75rem" }}>
-                Sign in
-              </Link>
-              <MobileNavToggle />
+              <div style={{ marginInlineStart: "auto", display: "flex", alignItems: "center" }}>
+                <AdminNavLink />
+                <Link href="/login" className="button button--ghost" style={{ marginInlineEnd: "0.75rem" }}>
+                  Sign in
+                </Link>
+                <MobileNavToggle />
+              </div>
             </div>
           </header>
           <main id="main-content" className="app-main">

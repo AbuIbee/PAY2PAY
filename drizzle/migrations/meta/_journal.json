@@ -50,6 +50,13 @@
       "when": 1786387758304,
       "tag": "0006_last_otto_octavius",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786393411407,
+      "tag": "0007_short_gauntlet",
+      "breakpoints": true
     }
   ]
 }

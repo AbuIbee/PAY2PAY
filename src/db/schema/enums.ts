@@ -124,3 +124,25 @@ export const signingAuthorityEnum = pgEnum("signing_authority", [
   "account_owner",
   "authorized_representative",
 ]);
+
+/**
+ * Sprint 6A (docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md): platform-wide
+ * administrative authority, entirely separate from `agreement_party_role`/business-staff
+ * `capabilities` (Sprint 4) — this governs the internal admin console, never a party's rights
+ * within any specific agreement. Trusted only from this DB column, never from client-supplied
+ * state (the sprint's explicit "No client application may determine its own trusted role").
+ */
+export const platformRoleEnum = pgEnum("platform_role", ["member", "platform_admin", "platform_owner"]);
+
+/**
+ * Sprint 6A: durable test/internal-account classification, independent of `user_account.status`
+ * (active/suspended/closed — an operational lifecycle) and of any naming convention. "production" is
+ * the default and the only classification real customers should ever have.
+ */
+export const accountClassificationEnum = pgEnum("account_classification", [
+  "production",
+  "internal",
+  "qa",
+  "demo",
+  "automated_test",
+]);

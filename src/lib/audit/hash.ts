@@ -17,6 +17,14 @@ export interface AuditEventPayload {
   authStrength: string | null;
   relatedDocumentId: string | null;
   relatedCaseId: string | null;
+  /**
+   * Sprint 6A (docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md): optional so
+   * every pre-Sprint-6A call site (which never sets these) is unaffected — `canonicalize` assigns
+   * `undefined` for an omitted key, which `JSON.stringify` drops entirely, so the hash input for
+   * every existing call site is byte-identical to before this field was added.
+   */
+  targetResourceType?: string | null;
+  targetResourceId?: string | null;
 }
 
 const PAYLOAD_KEYS: (keyof AuditEventPayload)[] = [
@@ -35,6 +43,8 @@ const PAYLOAD_KEYS: (keyof AuditEventPayload)[] = [
   "authStrength",
   "relatedDocumentId",
   "relatedCaseId",
+  "targetResourceType",
+  "targetResourceId",
 ];
 
 /**

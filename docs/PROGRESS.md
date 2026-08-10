@@ -825,3 +825,115 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 6A — Platform Administration & Audit Control
+
+Source: `docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md`. Developed on branch
+`sprint-06A-platform-administration`, branched from `master`'s tip (`72ae5b4`, the Sprint 6 merge
+commit).
+
+### Scope delivered
+
+- **Three-tier platform-role model** (`member`/`platform_admin`/`platform_owner`,
+  `src/lib/admin/capabilities.ts`): trusted only from the `user_account.platform_role` DB column,
+  threaded through the existing `requireSession` seam — never derived from client-supplied state.
+- **Protected `/admin` control plane**: every `/api/admin/*` route independently re-checks the
+  trusted `platformRole` from `requireSession`; the admin nav link is hidden from non-admins for UX
+  only (`AdminNavLink.tsx`, via `/api/admin/whoami`) — not the security boundary. A Member hitting
+  any admin route or URL directly gets 401/403, proven by a dedicated route-level test.
+- **Functional admin UI** (`/admin`, `/admin/users`, `/admin/users/detail`): dashboard with
+  real-data-only counts (users by status/classification, personal/business profile counts,
+  agreement counts by status, signature-event/PDF counts, recent audit + admin-action events), user
+  search by email/ID, and a user-detail view with businesses/agreements/status plus every admin
+  action.
+- **User administration**: suspend, reactivate, revoke sessions, role change (owner-only,
+  step-up-gated, member↔platform_admin only), and test-account classification change — all via
+  `AdminService` (`src/lib/admin/adminService.ts`), all server-side-authorized, all audited.
+- **Durable test-account classification** (`account_classification`:
+  production/internal/qa/demo/automated_test) — independent of `user_account.status` and of any
+  naming convention.
+- **Full admin audit logging**: every mutation reuses the existing `AuditService`/`audit_event`
+  hash-chained trail (not a parallel system), extended with two new optional
+  `targetResourceType`/`targetResourceId` columns.
+- **Read-only "View As User"**: `AdminService.startImpersonation`/`endImpersonation` — never issues
+  a session token for the target, bounded by an explicit audited start/end pair, step-up required
+  to start.
+- **Documented break-glass recovery** (`docs/ADMIN_BREAK_GLASS_RECOVERY.md`): no in-app override,
+  master password, or bypass account — platform-owner recovery has exactly one path, direct
+  database access outside the running application, per the sprint's explicit prohibition list.
+- **Signed-agreement protection is structural**: `AdminService` never imports `AgreementService`,
+  `SignatureService`, or any repository touching agreement/signature/PDF tables — there is no code
+  path here that could weaken Sprint 5/6's immutability guarantees, proven both behaviorally and by
+  reflecting the class's own method list in a test.
+
+### Necessary Sprint 2 touches (all additive, zero regression)
+
+`UserAccountRecord`/`UserAccountRepository` gained `platformRole`/`accountClassification` fields and
+`updateStatus`/`updatePlatformRole`/`updateAccountClassification` methods; `validateSession` now
+also rejects a non-`"active"` status (closing the gap where a session created before a suspension
+would otherwise keep working until its own expiry — suspension enforcement is now immediate);
+`requireSession` now also returns the trusted `platformRole`. `AuditEventPayload` gained two
+*optional* fields, which is why every pre-Sprint-6A audit call site is provably unaffected (an
+omitted optional key is dropped by `JSON.stringify` before hashing). Full detail in
+`docs/SPRINT_CONTROL.md`'s "Sprint 6A implementation notes."
+
+### Files created (17)
+
+Schema: `src/db/schema/admin.ts`. Domain logic: `src/lib/admin/{capabilities,adminService,
+getAdminService,drizzleAdminOverviewReader,drizzleAdminUserDirectoryReader,
+drizzleAdminImpersonationSessionRepository,testFakes}.ts`. Tests:
+`src/lib/admin/adminService.test.ts` (17 tests), `src/app/api/admin/overview/route.test.ts` (4
+tests). API routes: `src/app/api/admin/{whoami,overview,users/route,users/detail,users/suspend,
+users/reactivate,users/revoke-sessions,users/role,users/classification,impersonation/start,
+impersonation/end}.ts`. UI: `src/app/admin/{page,users/page,users/detail/page}.tsx`,
+`src/components/Admin{Dashboard,Users,UserDetail,NavLink}.tsx`. Doc:
+`docs/ADMIN_BREAK_GLASS_RECOVERY.md`. Migration: `drizzle/migrations/0007_short_gauntlet.sql` (+
+`meta/0007_snapshot.json`).
+
+### Files modified (11)
+
+`src/db/schema/{enums,identity,audit,index}.ts` (new enums/columns), `src/lib/audit/hash.ts` +
+`drizzleAuditEventRepository.ts` (optional target-resource fields), `src/lib/auth/{authService,
+drizzleUserAccountRepository,requireSession,testFakes}.ts` (see "Necessary Sprint 2 touches"),
+`src/app/layout.tsx` (admin nav link), `drizzle/migrations/meta/_journal.json`.
+
+### Tests
+
+303/303 passing across 49 files (up from 282/47 at the end of Sprint 6 — 21 net new: 17 in
+`adminService.test.ts`, 4 in the new `overview/route.test.ts`). Covers all 10 of the sprint's named
+required-test scenarios: Member blocked from every admin operation, Platform Admin's authorized
+functions work, Platform Admin blocked from owner-only actions, Platform Admin blocked from
+touching Owner/other-Admin accounts, Platform Owner's authorized operations work (with step-up),
+admin actions create audit records, unauthorized direct API access is rejected (dedicated
+route-level test — the one deliberate exception to this project's usual service-layer-only test
+convention, since this requirement is inherently about the HTTP layer), test-account classification
+behaves correctly, immutable signed records remain protected from both admin roles (behavioral +
+structural proof), and the full Sprint 1–6 suite passes unchanged.
+
+### Verification commands run
+
+`npm run typecheck` — pass, no errors. `npm run lint` — pass, no errors. `npm run test` — pass,
+303/303. `npm run build` — pass; `/admin`, `/admin/users`, `/admin/users/detail`, and all 10 new
+`/api/admin/*` routes generated correctly, no change to any existing route's classification. `npx
+drizzle-kit check` — pass, migration history internally consistent, no drift.
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction, commit/push/PR is deferred until
+after Product Owner review of this status entry. `git status` at the time of this report: modified
+`drizzle/migrations/meta/_journal.json`, `src/app/layout.tsx`, `src/db/schema/{audit,enums,
+identity,index}.ts`, `src/lib/audit/{drizzleAuditEventRepository,hash}.ts`,
+`src/lib/auth/{authService,drizzleUserAccountRepository,requireSession,testFakes}.ts`; untracked
+`docs/ADMIN_BREAK_GLASS_RECOVERY.md`, `drizzle/migrations/0007_short_gauntlet.sql`,
+`drizzle/migrations/meta/0007_snapshot.json`, `src/app/admin/`, `src/app/api/admin/`,
+`src/components/Admin{Dashboard,NavLink,UserDetail,Users}.tsx`, `src/db/schema/admin.ts`,
+`src/lib/admin/`. No file outside this list was touched; no prior sprint's behavior changed beyond
+the necessary, additive Sprint 2/audit touches documented above.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

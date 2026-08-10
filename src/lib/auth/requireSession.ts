@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { AuthenticationError } from "@/lib/errors";
-import type { AuthService } from "./authService";
+import type { AuthService, PlatformRole } from "./authService";
 import { getSessionToken } from "./cookies";
 
 /**
@@ -14,11 +14,16 @@ import { getSessionToken } from "./cookies";
 export async function requireSession(
   request: NextRequest,
   authService: AuthService,
-): Promise<{ userId: string; email: string; sessionId: string }> {
+): Promise<{ userId: string; email: string; sessionId: string; platformRole: PlatformRole }> {
   const token = getSessionToken(request);
   const validated = token ? await authService.validateSession(token) : null;
   if (!validated) {
     throw new AuthenticationError("A valid session is required.");
   }
-  return { userId: validated.user.id, email: validated.user.email, sessionId: validated.sessionId };
+  return {
+    userId: validated.user.id,
+    email: validated.user.email,
+    sessionId: validated.sessionId,
+    platformRole: validated.user.platformRole,
+  };
 }
