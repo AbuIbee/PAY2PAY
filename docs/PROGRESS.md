@@ -707,3 +707,121 @@ Not applicable yet — no commit, no branch push of this work beyond what was al
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 6 — Electronic Signatures & PDF Records
+
+Source: `docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md`. Developed on branch
+`sprint-06-ElectronicSignatures_PDFRecords`, branched from `master`'s tip (`55ae530`, the Sprint 5
+merge commit — confirmed via `git merge-base --is-ancestor master sprint-06-...` before starting,
+since Sprint 6 depends on Sprint 5's agreement/agreement_version tables and on Sprint 2's
+`requireStepUp`/Sprint 3's `isFullyVerified` primitives, per `docs/SPRINT_CONTROL.md`'s dependency
+graph).
+
+### Scope delivered
+
+- **Electronic-signature evidence bundle** (`src/db/schema/signature.ts`'s `signature_event`
+  table): signer identity, profile/legal entity, role, business signing authority, timestamp,
+  timezone, IP, device metadata, authentication method, consent version, agreement version,
+  per-signature agreement hash, and the signature event's own ID — every field this sprint's text
+  names. RLS + `REVOKE ALL ... FROM anon, authenticated`, matching every prior migration.
+- **Elevated-authentication gates** (`src/lib/signatures/signatureService.ts`): a fresh
+  `requireStepUp(user, "sign_agreement")` challenge is required immediately before any signature is
+  captured; `isFullyVerified` is checked for the signer's own personal profile always, and
+  additionally for the business profile when the signer is acting on a business's behalf. Either
+  gate failing blocks the signature entirely — `AgreementService.signAgreement` (Sprint 5's
+  unchanged state machine) is never called, and no `signature_event` row is written.
+- **Business signing authority**: reuses Sprint 4's existing
+  `business_staff_member.is_authorized_representative` field (FR-B2B-002) — the business owner is
+  always authorized (consistent with every other business-authorization check in this project); a
+  staff member must have this flag explicitly set, not just active membership.
+- **Immutable PDF generation** (`src/lib/documents/agreementPdf.ts`, `pdf-lib`): agreement
+  number, parties, debt purpose, financial terms, payment schedule, fees, no-interest terms,
+  amendment-terms boilerplate, a payment-authorization placeholder, signatures, a witness section
+  (empty — Sprint 7's scope), version, and hash/reference — every content item this sprint's text
+  names. Generated exactly once per version, automatically, the moment both parties have signed
+  (`agreement_pdf`'s unique index on `agreement_version_id` enforces this at the DB level too);
+  never regenerated.
+- **Supabase Storage abstraction** (`src/lib/documents/documentStorage.ts` +
+  `supabaseDocumentStorage.ts`): private-bucket upload (`upsert: false`), signed-URL-only retrieval
+  (never `getPublicUrl`), matching this sprint's "Never expose private buckets publicly." **Not
+  exercised against a live Supabase project this session — no credentials configured in this
+  environment.** See `docs/SPRINT_CONTROL.md`'s "Sprint 6 implementation notes" for the honest
+  detail on this and every other scope boundary/design choice made this sprint (agreement-number
+  format, consent-version/auth-method being client-supplied, no UI, etc.).
+- **Document access isolation**: `SignatureService.getSignedPdfUrl` re-runs full party
+  authorization (via `AgreementService.getAgreement`) before ever asking storage for a URL — a
+  short-lived, freshly issued signed URL every call, never cached.
+- **Shared document-hash extraction**: `AgreementService`'s private `computeDocumentHash` was
+  moved to `src/lib/agreements/documentHash.ts` as a reusable pure function — identical algorithm
+  and output, zero behavior change (Sprint 5's 26 tests all still pass unchanged), so
+  `SignatureService` can compute the same per-signature hash without duplicating it.
+- **`AgreementService.resolvePartyRole`**: one new public method, a thin wrapper around the
+  existing private `authorizeEitherParty` — purely additive, no existing behavior touched.
+- **Payments**: deliberately not implemented — only the reserved, always-`null`
+  `agreement_pdf.payment_authorization_ref` placeholder column exists, per the sprint's explicit
+  "Do not implement payment authorization yet except required schema/interface placeholders."
+
+### Files created (16)
+
+Schema: `src/db/schema/signature.ts`. Domain logic: `src/lib/agreements/documentHash.ts`,
+`src/lib/signatures/{signatureService,getSignatureService,drizzleSignatureEventRepository,
+drizzleAgreementPdfRepository,testFakes}.ts`, `src/lib/documents/{documentStorage,
+supabaseDocumentStorage,getDocumentStorage,agreementPdf,profileDisplayReader,
+drizzleProfileDisplayReader,testFakes}.ts`. Tests: `src/lib/signatures/signatureService.test.ts`
+(13 tests). API route: `src/app/api/agreements/pdf/route.ts`. Migration:
+`drizzle/migrations/0006_last_otto_octavius.sql` (+ `meta/0006_snapshot.json`).
+
+### Files modified (9)
+
+`src/app/api/agreements/sign/route.ts` (now calls `SignatureService.sign` instead of raw
+`AgreementService.signAgreement`; request body extended with `authMethod`/`consentVersion`/
+`timezone`/`deviceInfo`; IP captured server-side via `getClientIp`), `src/components/
+AgreementDetail.tsx` (sign button now honestly disabled with an explanation, since signing requires
+a step-up-challenge UI that doesn't exist yet — was not left silently broken by the new required
+fields), `src/config/env.ts` (added optional `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`),
+`src/db/schema/{enums,index}.ts` (added `signingAuthorityEnum`, exported the new `signature`
+module), `src/lib/agreements/agreementService.ts` (extracted hash function, added
+`resolvePartyRole` — both additive/non-breaking, confirmed by Sprint 5's full test suite still
+passing), `src/lib/staff/testFakes.ts` (`seed()` gained an optional `isAuthorizedRepresentative`
+parameter, default `false` — backward-compatible with every existing Sprint 4/5 call site),
+`drizzle/migrations/meta/_journal.json`, `package.json`/`package-lock.json` (added `pdf-lib` and
+`@supabase/supabase-js`).
+
+### Tests
+
+282/282 passing across 47 files (up from 269/46 at the end of Sprint 5 — 13 net new, all in
+`src/lib/signatures/signatureService.test.ts`). Covers all 11 of the sprint's named required-test
+scenarios: signature authorization, second-party signature, unauthorized signer, signing blocked
+without a passed step-up challenge, signing blocked when signer profile is not `FULL_VERIFIED`,
+signing blocked when business profile is not `FULL_VERIFIED`, business signer authority (owner,
+non-authorized staff rejected, authorized staff accepted), PDF generated, document access
+isolation, hash stability, and signed agreement cannot be edited. Sprint 5's own 26 tests (and
+every other prior sprint's tests) all still pass unchanged.
+
+### Verification commands run
+
+`npm run typecheck` — pass, no errors. `npm run lint` — pass, no errors. `npm run test` — pass,
+282/282. `npm run build` — pass; `/api/agreements/pdf` generated correctly as a new dynamic route,
+`/api/agreements/sign` unchanged in classification, no change to any other route. `npx drizzle-kit
+check` — pass, migration history internally consistent, no drift.
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction, commit/push/PR is deferred until
+after Product Owner review of this status entry. `git status` at the time of this report: modified
+`drizzle/migrations/meta/_journal.json`, `package.json`, `package-lock.json`,
+`src/app/api/agreements/sign/route.ts`, `src/components/AgreementDetail.tsx`, `src/config/env.ts`,
+`src/db/schema/{enums,index}.ts`, `src/lib/agreements/agreementService.ts`,
+`src/lib/staff/testFakes.ts`; untracked `drizzle/migrations/0006_last_otto_octavius.sql`,
+`drizzle/migrations/meta/0006_snapshot.json`, `src/app/api/agreements/pdf/`,
+`src/db/schema/signature.ts`, `src/lib/agreements/documentHash.ts`, `src/lib/documents/`,
+`src/lib/signatures/`. No file outside this list was touched; no prior sprint's behavior changed
+beyond the two additive AgreementService touches noted above.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

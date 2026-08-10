@@ -110,3 +110,17 @@ export const installmentItemStatusEnum = pgEnum("installment_item_status", [
   "past_due",
   "waived",
 ]);
+
+/**
+ * Sprint 6 (docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md): business-signer authority
+ * evidence — null on `signature_event` for a personal-profile signer, since "signing authority" is
+ * a business-specific concept per this sprint's text ("signing authority where business").
+ * `account_owner` covers the pre-Sprint-4-staff-row bootstrap gap (same as AgreementService's own
+ * authorization — a business owner is always authorized even with no `business_staff_member` row);
+ * `authorized_representative` requires `business_staff_member.is_authorized_representative = true`
+ * (src/db/schema/identity.ts's FR-B2B-002 field), never mere active staff membership.
+ */
+export const signingAuthorityEnum = pgEnum("signing_authority", [
+  "account_owner",
+  "authorized_representative",
+]);

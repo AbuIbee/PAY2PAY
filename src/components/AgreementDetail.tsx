@@ -352,23 +352,19 @@ export function AgreementDetail() {
         (() => {
           const alreadySigned = (iAmCreditor && !!data.version.creditorSignedAt) || (iAmDebtor && !!data.version.debtorSignedAt);
           return (
-            <div className="hero__actions">
-              <button
-                type="button"
-                className="button button--primary"
-                disabled={actionStatus === "working" || alreadySigned}
-                onClick={() =>
-                  void runAction(() =>
-                    fetch("/api/agreements/sign", {
-                      method: "POST",
-                      headers: { "content-type": "application/json" },
-                      body: JSON.stringify({ agreementId: data.id }),
-                    }),
-                  )
-                }
-              >
-                {alreadySigned ? "Waiting on the other party to sign" : "Sign this agreement"}
-              </button>
+            <div style={{ display: "grid", gap: "0.5rem" }}>
+              <div className="hero__actions">
+                <button type="button" className="button button--primary" disabled aria-disabled="true">
+                  {alreadySigned ? "Waiting on the other party to sign" : "Sign this agreement (not yet available)"}
+                </button>
+              </div>
+              {!alreadySigned ? (
+                <p className="form-status" style={{ maxWidth: "32rem" }}>
+                  Signing now requires a step-up verification challenge (Sprint 6). That challenge
+                  flow is not yet built into this screen — use the API directly, or wait for a
+                  later phase to add it here.
+                </p>
+              ) : null}
             </div>
           );
         })()

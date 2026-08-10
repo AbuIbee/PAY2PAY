@@ -43,6 +43,13 @@
       "when": 1786300291775,
       "tag": "0005_slim_shadow_king",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786387758304,
+      "tag": "0006_last_otto_octavius",
+      "breakpoints": true
     }
   ]
 }
