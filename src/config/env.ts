@@ -40,6 +40,14 @@ const serverEnvSchema = z.object({
   // localhost for development convenience; must be set to the real deployed
   // origin in preview/staging/production.
   APP_URL: z.string().url().default("http://localhost:3000"),
+  // Sprint 6 (docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md): Supabase Storage
+  // credentials for the private signed-agreement-PDF bucket. Optional at the environment-schema
+  // level (so the app still starts, and every route unrelated to PDF storage still works, with
+  // neither configured) — SupabaseDocumentStorage itself throws a clear ConfigurationError only
+  // when a document-storage operation is actually attempted without them, mirroring "Auth routes
+  // fail safely with no live database" from Phase 0.
+  SUPABASE_URL: z.string().url().optional(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

@@ -1,10 +1,10 @@
 import "server-only";
-import { createHash } from "node:crypto";
 import type { AuditService } from "@/lib/audit/auditService";
 import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
+import { computeVersionHash } from "./documentHash";
 import { computeSchedule } from "./schedule";
 import type { PaymentFrequency, ScheduleItem } from "./schedule";
 
@@ -439,6 +439,18 @@ export class AgreementService {
     return this.deps.agreements.listForProfile(profile.kind, profile.id);
   }
 
+  /**
+   * Sprint 6 (docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md): public wrapper around the
+   * existing private authorizeEitherParty, so SignatureService can determine (and confirm
+   * authorization for) which role an acting user occupies before running its own step-up/
+   * verification/signing-authority gates — without re-implementing this authorization logic.
+   * Purely additive; does not change any existing Sprint 5 behavior.
+   */
+  async resolvePartyRole(agreementId: string, actingUserId: string): Promise<PartyRole> {
+    const agreement = await this.requireAgreement(agreementId);
+    return this.authorizeEitherParty(agreement, actingUserId, null);
+  }
+
   relationshipShape(agreement: Pick<AgreementRecord, "creditorProfileKind" | "debtorProfileKind">): "P2P" | "B2C" | "C2B" | "B2B" {
     if (agreement.creditorProfileKind === "personal" && agreement.debtorProfileKind === "personal") return "P2P";
     if (agreement.creditorProfileKind === "business" && agreement.debtorProfileKind === "personal") return "B2C";
@@ -543,9 +555,7 @@ export class AgreementService {
   }
 
   private computeDocumentHash(version: AgreementVersionRecord): string {
-    return createHash("sha256")
-      .update(JSON.stringify({ agreementId: version.agreementId, versionNumber: version.versionNumber, terms: version.terms }))
-      .digest("hex");
+    return computeVersionHash(version);
   }
 
   private async recordAudit(agreementId: string, actorUserId: string, action: string, newValue: unknown): Promise<void> {

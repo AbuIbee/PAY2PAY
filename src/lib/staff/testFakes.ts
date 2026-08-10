@@ -75,6 +75,7 @@ export class InMemoryBusinessStaffMemberRepository implements BusinessStaffMembe
     userId: string;
     role: StaffRole;
     customRoleId?: string | null;
+    isAuthorizedRepresentative?: boolean;
   }): BusinessStaffMemberRecord {
     const record: BusinessStaffMemberRecord = {
       id: randomUUID(),
@@ -82,7 +83,7 @@ export class InMemoryBusinessStaffMemberRepository implements BusinessStaffMembe
       userId: input.userId,
       role: input.role,
       customRoleId: input.customRoleId ?? null,
-      isAuthorizedRepresentative: false,
+      isAuthorizedRepresentative: input.isAuthorizedRepresentative ?? false,
       removedAt: null,
       createdAt: new Date(),
     };

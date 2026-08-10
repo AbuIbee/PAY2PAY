@@ -123,7 +123,70 @@ execution.
 | 3 | **COMPLETE.** All required items from `docs/sprints/SPRINT_03_Personal_Business_Profiles.md` implemented on branch `sprint-03-profiles` (branched from `sprint-02-authentication`'s merged tip). Local `lint`/`typecheck`/`test`/`build` all pass (221/221 tests). GitHub CI: **success** (run [31326343117](https://github.com/AbuIbee/PAY2PAY/actions/runs/31326343117)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO, same as Sprint 2). **Not merged into `master`. Not deployed to production** (confirmed: `master` HEAD unchanged at `026b371`, PR #2 open/unmerged, and `https://paid2you.com` re-fetched — shows Sprint 2's "Sign in" link but no "Dashboard" mention, i.e. still exactly the Sprint 2 merged state). ChatGPT/Product Owner review: **PASS**. |
 | 4 | **COMPLETE — awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_04_BusinessStaff_Permissions.md` (capability model, staff invitation/acceptance/removal, custom roles, settlement/balance-adjustment approval limits, two-person/owner-required approval configuration, step-up hooks on every high-risk change, RLS on all three new tables) implemented on branch `sprint-04-business-permissions` (branched from `sprint-03-profiles`'s merged tip). Local `lint`/`typecheck`/`test`/`build` all pass (243/243 tests). GitHub CI: **success** (run [31328386726](https://github.com/AbuIbee/PAY2PAY/actions/runs/31328386726)). Vercel preview: **success** (build completed; content not independently browsed — protected by Vercel SSO, same as Sprints 2–3). **Not merged into `master`. Not deployed to production** (confirmed: `master` HEAD unchanged at `4a62d6d`, the Sprint 3 merge commit; PR #3 open/unmerged). ChatGPT/Product Owner review: **pending**. |
 | 5 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_05_Agreement_Engine.md` (P2P/B2C/C2B/B2B agreements, either-party draft initiation, debtor acknowledgment, all 20 required terms fields, integer-minor-unit schedule calculation with deterministic rounding, the full 14-state lifecycle with invalid-transition guards, signed-version immutability, audit events on every transition, creditor accept/reject/counter, and a functional UI) implemented on branch `sprint-05-agreement-engine`. A first pass was audited and found incomplete (missing the creditor-decide and sign API routes, no UI, a dead-code duplication in `validation.ts`); a second pass closed all three gaps — see "Sprint 5 gap-closure record" below. Local `lint`/`typecheck`/`test`/`build` all pass (269/269 tests, up from 243 at the end of Sprint 4). `drizzle-kit check` confirms the new migration (`0005_slim_shadow_king.sql`) is internally consistent. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — per this session's explicit instruction, commit/push is deferred until Product Owner review of this status entry. No payment integration (explicitly out of scope for this sprint) and no prior sprint's behavior was altered. |
-| 6–20 | Not started. Sprint plan documents for 6, 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+| 6 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md` (full electronic-signature evidence capture, step-up + full-verification + business-signing-authority gates before any signature, immutable per-version PDF generation, Supabase Storage private-bucket abstraction with signed-URL access, tamper-evident hashing, and all 11 required test categories) implemented on branch `sprint-06-ElectronicSignatures_PDFRecords`, branched from `master`'s tip (`55ae530`, the Sprint 5 merge commit — confirmed via `git merge-base --is-ancestor`). Local `lint`/`typecheck`/`test`/`build` all pass (282/282 tests, up from 269 at the end of Sprint 5). `drizzle-kit check` confirms the new migration (`0006_last_otto_octavius.sql`) is internally consistent. Sprint 5's own 26 tests all still pass unchanged, confirming no Sprint 5 behavior was altered beyond the two explicitly-required, purely-additive touches (a shared `computeVersionHash` extraction with identical output, and a new public `resolvePartyRole` wrapper). **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. No payment integration (explicitly out of scope) was added. See "Sprint 6 implementation notes" below for what was and wasn't built, and why. |
+| 7–20 | Not started. Sprint plan documents for 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 6 implementation notes
+
+**New external dependencies:** `pdf-lib` (PDF generation, pure JS, no native deps) and
+`@supabase/supabase-js` (Storage client). Both added via `npm install`; `npm audit`'s 5 existing
+moderate/high findings are all in the pre-existing `drizzle-kit`/`vite`/`esbuild` dev-tooling chain
+and unrelated to either new package.
+
+**Supabase Storage is code-complete but not exercised against a live bucket.** No
+`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` are configured in this environment (confirmed: neither
+key exists in `.env.local`), so `SupabaseDocumentStorage` — real, correct calls to
+`@supabase/supabase-js`'s `storage.from(bucket).upload(...)`/`.createSignedUrl(...)`, `upsert:
+false` for immutability, never `getPublicUrl` — has not been run against an actual Supabase
+project. Both env vars are optional at the schema level so the app still starts and every unrelated
+route still works with neither set; `SupabaseDocumentStorage` itself throws a clear
+`ConfigurationError` only when a storage operation is actually attempted without them (same pattern
+as "Auth routes fail safely with no live database", Phase 0). All required tests (PDF generated,
+hash stability, document access isolation) are satisfied against `InMemoryDocumentStorage`, a
+same-contract test fake — this is the same honesty pattern already used for Vercel previews
+("build success confirmed via status report, not visual inspection — protected by SSO") applied to
+a provider this session has no live credentials for at all. **Before this ships to a real
+environment, someone with Supabase project access needs to: create a private bucket named
+`agreement-pdfs` (`src/lib/documents/supabaseDocumentStorage.ts`'s `AGREEMENT_PDF_BUCKET`
+constant), set the two env vars, and confirm one real upload + signed-URL round trip.**
+
+**No UI was built.** Unlike Sprint 5, `docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md`
+has no "UI" bullet in its required-work list (same precedent as Sprint 4's "Scope note: no UI built
+this sprint"). The existing Sprint 5 sign button in `src/components/AgreementDetail.tsx` was
+updated (not left silently broken) to state honestly that signing now requires a step-up
+verification challenge that has no UI yet, rather than send a request that would always fail.
+
+**Consent version and auth method are client-supplied, not derived server-side.** The sprint
+requires capturing "consent version" and "authentication method" as evidence. This codebase has no
+concept of versioned consent-text yet and `MfaService`'s step-up record doesn't track which method
+(`totp`/`sms`) was used for a given completed challenge — only that a fresh one exists. `POST
+/api/agreements/sign` therefore requires the caller to state both explicitly
+(`authMethod: "totp"|"sms"`, `consentVersion: string`); a future UI/consent-text system would
+supply real values here. This is an honest scope boundary, not a silent gap — flagged for whoever
+builds the eventual signing UI.
+
+**"Signing authority where business" reuses Sprint 4's existing `is_authorized_representative`
+field** (`business_staff_member.is_authorized_representative`, defaults `false`,
+FR-B2B-002) rather than inventing a new authorization concept — a business owner is always
+authorized to sign (same bootstrap-gap handling as every other business authorization check in this
+project); a staff member must have this flag explicitly set, not just active membership or any
+particular role/capability.
+
+**Agreement number** in the generated PDF is the agreement's UUID — this project has no
+human-readable sequential agreement-numbering scheme, and inventing one (with its own concurrency/
+uniqueness design) was judged out of scope for this sprint. Flagged as an open item, not silently
+assumed.
+
+**Amendment terms and payment-authorization placeholder in the PDF are boilerplate, not real
+data** — no amendment has ever been made to any Sprint 5/6 agreement (amendments are Sprint 14/15's
+scope; every agreement is still on version 1), and payment authorization is explicitly out of scope
+this sprint per its own text ("Do not implement payment authorization yet except required schema/
+interface placeholders"). The PDF states both facts plainly rather than fabricating either.
+`agreement_pdf.payment_authorization_ref` is a reserved, always-`null` placeholder column for
+Sprint 9+, per the sprint's "required schema/interface placeholders" instruction.
+
+**Witness attestations** are rendered as "None recorded" in the PDF — Sprint 7 owns the
+`witness_attestation` table, which does not exist yet.
 
 ### Sprint 5 gap-closure record
 
