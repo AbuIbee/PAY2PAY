@@ -126,7 +126,70 @@ execution.
 | 6 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md` (full electronic-signature evidence capture, step-up + full-verification + business-signing-authority gates before any signature, immutable per-version PDF generation, Supabase Storage private-bucket abstraction with signed-URL access, tamper-evident hashing, and all 11 required test categories) implemented on branch `sprint-06-ElectronicSignatures_PDFRecords`, branched from `master`'s tip (`55ae530`, the Sprint 5 merge commit — confirmed via `git merge-base --is-ancestor`). Local `lint`/`typecheck`/`test`/`build` all pass (282/282 tests, up from 269 at the end of Sprint 5). `drizzle-kit check` confirms the new migration (`0006_last_otto_octavius.sql`) is internally consistent. Sprint 5's own 26 tests all still pass unchanged, confirming no Sprint 5 behavior was altered beyond the two explicitly-required, purely-additive touches (a shared `computeVersionHash` extraction with identical output, and a new public `resolvePartyRole` wrapper). **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. No payment integration (explicitly out of scope) was added. See "Sprint 6 implementation notes" below for what was and wasn't built, and why. |
 | 6A | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md` (three-tier platform-role model, protected `/admin` control plane with server-side-only authorization, functional dashboard/user-search/user-detail UI backed entirely by real data, suspend/reactivate/revoke-sessions/role-change/classification admin operations, durable test-account classification, full audit logging of every admin action, read-only "View As User" support view, documented break-glass recovery with no in-app bypass, and all 10 required test categories) implemented on branch `sprint-06A-platform-administration`, branched from `master`'s tip (`72ae5b4`, the Sprint 6 merge commit). Local `lint`/`typecheck`/`test`/`build` all pass (303/303 tests, up from 282 at the end of Sprint 6). `drizzle-kit check` confirms the new migration (`0007_short_gauntlet.sql`) is internally consistent. Sprints 1–6's own tests all still pass unchanged, confirming no regression despite three necessary, narrowly-scoped touches to Sprint 2's auth layer (see "Sprint 6A implementation notes" below). **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. No agreement/signature/PDF table was ever imported by any Sprint 6A code — see the implementation notes for how that guarantee is structural, not just tested. |
 | 7 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_07_Evidence_Documents_Witnesses.md` (evidence upload/metadata/uploader/timestamp/agreement-association, shared/private classification, witness-sharing, dispute flag, withdrawal state, malware/file-validation abstraction, secure signed-URL access, mandatory post-signing labeling, and the full witness model — max two, verified, view-only, version-bound attestation) implemented on branch `sprint-07-evidence-documents-witnesses`. **This branch was stale when this session started** — it had been created before Sprint 6A was merged and had zero unique commits of its own, so it was fast-forwarded to `master`'s current tip (`4356d24`, the Sprint 6A merge commit) before any Sprint 7 work began; confirmed safe via `git merge-base --is-ancestor` (no divergence, no data loss, branch not yet pushed to origin). Local `lint`/`typecheck`/`test`/`build` all pass (326/326 tests, up from 303 at the end of Sprint 6A). `drizzle-kit check` confirms the new migration (`0008_steep_mysterio.sql`) is internally consistent; RLS + `REVOKE` confirmed present on both new tables. Sprints 1–6A's own tests all still pass unchanged. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. No payment-processing functionality was added (not required by this sprint). See "Sprint 7 implementation notes" below for design choices and scope boundaries. |
-| 8–20 | Not started. Sprint plan documents for 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+| 8 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_08_Workflows_CSVImports.md` (B2B workflow completion requiring both parties to be verified business profiles, invoice/PO/contract reference tracking, a real-data business financial dashboard, and the full CSV import pipeline — UPLOAD/VALIDATE/PREVIEW/DUPLICATE CHECK/ERROR REPORT/CREATE DRAFTS — with no bulk activation) implemented on branch `sprint-08-workflows-csv-imports`, branched from `master`'s tip (`261ec0e`, the Sprint 7 merge commit; this branch was already up to date, no fast-forward needed this time). Local `lint`/`typecheck`/`test`/`build` all pass (343/343 tests, up from 326 at the end of Sprint 7). `drizzle-kit check` confirms the new migration (`0009_flat_barracuda.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all three new tables. Sprints 1–7's own tests all still pass unchanged, including Sprint 3's `/api/dashboard/business` route test, which was deliberately never touched. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 8 implementation notes" below for design choices and scope boundaries. |
+| 9–20 | Not started. Sprint plan documents for 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 8 implementation notes
+
+**The business financial dashboard is a new, separate route, not an extension of Sprint 3's
+stub.** `/api/dashboard/business/route.test.ts` asserts an exact-match (`toEqual`) empty-state
+response body; adding fields to that route would have broken that test for no real benefit. Sprint
+8's real-data dashboard lives at `GET /api/b2b/dashboard?businessProfileId=` instead
+(`src/lib/b2b/drizzleB2BDashboardReader.ts`), reusing the same ownership-verification discipline
+(`ProfileAccessService.resolveActiveProfile`) without touching Sprint 3's file at all — mirroring
+Sprint 5's own precedent of building `/agreements` as a separate surface rather than modifying that
+same stub.
+
+**Accounts Receivable/Payable reflect `current_principal_minor_units` as recorded at signing, not
+a live running balance.** No payment-tracking table exists yet (Sprint 9+), so these figures cannot
+reflect payments already made after signing — this is a disclosed, honest limitation ("No fake
+financial data," Sprint 3's own precedent for this dashboard family), not a silent inaccuracy.
+Settlements and Disputes are honestly empty arrays (Sprint 15/16 don't exist yet).
+
+**"Authorized signers, titles, signing authority" are not re-implemented.** Sprint 6's
+`signature_event.signer_title`/`signing_authority` already capture this per-signature; a new
+integration test (`b2bWorkflowService.test.ts`'s "signer authority" describe block) proves a fully
+signed B2B agreement — both sides genuine, verified businesses, unlike Sprint 6's own B2C-shaped
+test fixture — correctly attributes `signingAuthority: "account_owner"` to both signers, without
+`B2BWorkflowService` or `AgreementService` needing any change.
+
+**"Legal entities" are not duplicated either** — `business_profile.legal_business_name` (Sprint 3)
+already is the legal-entity record; Sprint 8 only adds the one genuinely new piece: structured,
+repeatable invoice/PO/contract reference numbers (`agreement_reference`), since one agreement can
+reference more than one.
+
+**CSV import cannot create a draft for a customer with no existing account, and says so
+explicitly.** This project has no invitation/account-creation-by-email system yet (that would be
+Sprint 17's scope). A row whose `customerEmail` matches no `user_account` is left un-drafted with an
+explanatory validation note ("No matching account found for this email — a draft could not be
+created yet") rather than silently skipped or given a fabricated invitation flow. This is a real,
+disclosed scope boundary, not a bug.
+
+**"Never bulk activate" is structural, not just tested.** `CsvImportService`
+(`src/lib/csvImport/csvImportService.ts`) has exactly one write path into the agreement system —
+`AgreementService.createDraft`, whose result always starts at `draft` status — and no method that
+submits, acknowledges, accepts, or signs anything. Proven both structurally (reflecting the class's
+own method list finds nothing matching) and behaviorally (a created row's agreement is asserted
+`draft`-status immediately after `createDrafts` returns).
+
+**Duplicate detection runs two independent checks in one pass**: within the same file (same
+customer email + invoice reference appearing twice) and against existing agreements (a non-closed
+agreement already exists between this business as creditor and a debtor account matching that
+email). Both are exercised by dedicated tests.
+
+**CSV parsing is a small, dependency-free, RFC-4180-ish parser** (`src/lib/csvImport/csvParser.ts`)
+— quoted fields, embedded commas, escaped `""`, CRLF/LF — sufficient for a typical spreadsheet
+export; no new npm dependency was added for this.
+
+**No UI was built.** `docs/sprints/SPRINT_08_Workflows_CSVImports.md` has no "UI" bullet in its
+required-work list, matching Sprint 4's, Sprint 6's, and Sprint 7's own precedent.
+
+**Tenant isolation** is enforced the same way as every other business-scoped action in this project
+(Sprint 4/5's precedent): owner-first via `ProfileOwnerReader`, else `StaffService.
+requireCapability(..., "create_agreement")` — a small, intentional amount of duplicated logic
+inside `CsvImportService` rather than a forced reuse of `AgreementService`'s own two-party
+`authorizeParty`, since CSV import is fundamentally a single-business action, not a two-party
+agreement action.
 
 ### Sprint 7 implementation notes
 

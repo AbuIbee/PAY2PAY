@@ -1027,3 +1027,88 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 8 — B2B Workflows & CSV Imports
+
+Source: `docs/sprints/SPRINT_08_Workflows_CSVImports.md`. Developed on branch
+`sprint-08-workflows-csv-imports`, branched from `master`'s tip (`261ec0e`, the Sprint 7 merge
+commit; already up to date this time, unlike the two prior sprints — no fast-forward needed).
+
+### Scope delivered
+
+- **B2B workflow completion** (`src/lib/b2b/b2bWorkflowService.ts`): "Both parties must use
+  verified business profiles" is now enforced *before* draft creation for B2B agreements — either
+  side being personal, or either business not being `FULL_VERIFIED`, is rejected outright.
+  "Legal entities" reuse `business_profile.legal_business_name` (Sprint 3, not duplicated);
+  "authorized signers/titles/signing authority" reuse Sprint 6's `signature_event` capture (not
+  duplicated — a new integration test proves it works correctly for genuine B2B, both-sides-
+  business agreements, which Sprint 6's own tests never exercised). The one genuinely new piece is
+  structured, repeatable invoice/PO/contract reference tracking (`agreement_reference`).
+- **Business financial dashboard** (`GET /api/b2b/dashboard`): real Accounts Receivable/Payable,
+  Active Agreements, Upcoming/Past-Due payments, computed directly from Sprint 5's tables.
+  Settlements/Disputes stay honestly empty (Sprint 15/16 don't exist yet). Deliberately a *new*
+  route — Sprint 3's `/api/dashboard/business` has an exact-match test that extending it would have
+  broken, so it was left completely untouched (confirmed: its own test still passes unchanged).
+- **CSV import** (`src/lib/csvImport/csvImportService.ts`): the full UPLOAD → VALIDATE → PREVIEW →
+  DUPLICATE CHECK → ERROR REPORT → CREATE DRAFTS pipeline for customers/invoices/balances/proposed
+  plans. Validation reuses Sprint 5's own `computeSchedule` to confirm each proposed plan is
+  internally consistent, not a re-implementation of that logic. Duplicate checking covers both
+  within-file and against-existing-agreement cases. **Never bulk activates**: the only write path
+  into the agreement system is the unchanged `AgreementService.createDraft` (always `draft` status);
+  a debtor with no existing account is left un-drafted with an explicit explanatory note rather than
+  silently skipped or given an invented invitation flow (this project has no invitation system yet —
+  Sprint 17's scope).
+- **Dependency-free CSV parser** (`src/lib/csvImport/csvParser.ts`) — no new npm package.
+
+### Files created (26)
+
+Schema: `src/db/schema/{b2bWorkflow,csvImport}.ts`. B2B domain logic: `src/lib/b2b/{b2bWorkflowService,
+b2bDashboardReader,drizzleB2BDashboardReader,drizzleAgreementReferenceRepository,
+getB2BWorkflowService,getB2BDashboardReader,testFakes,b2bWorkflowService.test}.ts` (6 tests). CSV
+import domain logic: `src/lib/csvImport/{csvParser,csvImportService,drizzleCsvImportBatchRepository,
+drizzleCsvImportRowRepository,drizzleCustomerAccountResolver,drizzleExistingAgreementDuplicateChecker,
+getCsvImportService,testFakes,csvImportService.test}.ts` (11 tests). API routes:
+`src/app/api/b2b/{agreements/route,agreements/references/route,dashboard/route}.ts`,
+`src/app/api/csv-import/{upload,validate,preview,create-drafts}/route.ts`. Migration:
+`drizzle/migrations/0009_flat_barracuda.sql` (+ `meta/0009_snapshot.json`).
+
+### Files modified (3)
+
+`src/db/schema/{enums,index}.ts` (new enums, export the two new schema modules),
+`drizzle/migrations/meta/_journal.json`. **`src/app/api/dashboard/business/route.ts` (and its test)
+were deliberately left untouched** — see "Scope delivered" above.
+
+### Tests
+
+343/343 passing across 53 files (up from 326/51 at the end of Sprint 7 — 17 net new: 6 in
+`b2bWorkflowService.test.ts`, 11 in `csvImportService.test.ts`). Covers all 7 of the sprint's named
+required-test categories: B2B authorization, signer authority, import validation, duplicate
+handling, invalid row, no bulk activation, and tenant isolation. Sprint 3's `/api/dashboard/business`
+route test and every other prior sprint's tests all still pass unchanged.
+
+### Verification commands run
+
+`npm run typecheck` — pass, no errors. `npm run lint` — pass, no errors. `npm run test` — pass,
+343/343. `npm run build` — pass; 7 new `/api/{b2b,csv-import}/*` routes generated correctly, no
+change to any existing route's classification. `npx drizzle-kit check` — pass, migration history
+internally consistent, no drift. RLS + `REVOKE ALL ... FROM anon, authenticated` confirmed present
+on all three new tables (`agreement_reference`, `csv_import_batch`, `csv_import_row`).
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction, commit/push/PR is deferred until
+after Product Owner review of this status entry. `git status` at the time of this report: modified
+`drizzle/migrations/meta/_journal.json`, `src/db/schema/{enums,index}.ts`; untracked
+`drizzle/migrations/0009_flat_barracuda.sql`, `drizzle/migrations/meta/0009_snapshot.json`,
+`src/app/api/b2b/`, `src/app/api/csv-import/`, `src/db/schema/{b2bWorkflow,csvImport}.ts`,
+`src/lib/b2b/`, `src/lib/csvImport/`. No file outside this list was touched; no prior sprint's
+behavior changed at all this sprint (unlike Sprints 6/7, which each needed one narrow, additive
+touch to a prior sprint's file — Sprint 8 needed none).
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**
