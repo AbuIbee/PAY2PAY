@@ -190,3 +190,31 @@ export const evidenceFileValidationStatusEnum = pgEnum("evidence_file_validation
   "clean",
   "rejected",
 ]);
+
+/** Sprint 8 (docs/sprints/SPRINT_08_Workflows_CSVImports.md): "invoice/PO/contract references" recorded against a B2B agreement. */
+export const agreementReferenceTypeEnum = pgEnum("agreement_reference_type", [
+  "invoice",
+  "purchase_order",
+  "contract",
+]);
+
+/** Sprint 8: CSV import batch lifecycle — UPLOAD -> VALIDATE -> (preview/error-report are read-only) -> CREATE DRAFTS. Never a "bulk activate" state; "drafts_created" only means individual draft agreements now exist, each still requiring its own submit/acknowledge/accept/sign. */
+export const csvImportBatchStatusEnum = pgEnum("csv_import_batch_status", [
+  "uploaded",
+  "validated",
+  "drafts_created",
+]);
+
+/** Sprint 8: per-row validation outcome — "pending" until validateBatch runs. */
+export const csvImportRowValidationStatusEnum = pgEnum("csv_import_row_validation_status", [
+  "pending",
+  "valid",
+  "invalid",
+]);
+
+/** Sprint 8: "duplicate check" outcome — checked both within the same file and against existing agreements. */
+export const csvImportRowDuplicateStatusEnum = pgEnum("csv_import_row_duplicate_status", [
+  "unique",
+  "duplicate_in_file",
+  "duplicate_existing_agreement",
+]);
