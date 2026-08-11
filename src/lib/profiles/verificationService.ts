@@ -14,6 +14,12 @@ export interface IdentityVerificationRecordRecord {
   tier: VerificationTier;
   status: VerificationRecordStatus;
   reviewerUserId: string | null;
+  // Sprint 9: the KYC/KYB provider's own verification id for this attempt, reserved on this column
+  // since Sprint 3 (src/db/schema/verification.ts's `provider_ref`). Null until
+  // recordProviderSubmission attaches it; used by the provider webhook to resolve an inbound event
+  // back to a profile via findByProviderRef, without providerPaymentId/providerVerificationId ever
+  // becoming a join key anywhere else (Sprint 9's "external references, not primary identifiers").
+  providerRef: string | null;
   decidedAt: Date | null;
   decisionReason: string | null;
   createdAt: Date;
@@ -37,10 +43,20 @@ export interface IdentityVerificationRecordRepository {
     profileKind: ProfileKind,
     profileId: string,
   ): Promise<IdentityVerificationRecordRecord | null>;
+  /**
+   * `reviewerUserId` is `string | null` — null for Sprint 9's provider-driven decision path (no
+   * human reviewer), a string for Sprint 3's existing audited manual/mock path. The DB column was
+   * already nullable; only this method's input type is widened, and every existing call site
+   * already passes a string, so this is a backward-compatible loosening, not a behavior change.
+   */
   updateDecision(
     id: string,
-    input: { status: "verified" | "rejected"; reviewerUserId: string; reason: string | null },
+    input: { status: "verified" | "rejected"; reviewerUserId: string | null; reason: string | null },
   ): Promise<void>;
+  /** Sprint 9: attaches the KYC/KYB provider's verification id once submission succeeds. */
+  attachProviderRef(id: string, providerRef: string): Promise<void>;
+  /** Sprint 9: resolves an inbound provider webhook back to the record it belongs to. */
+  findByProviderRef(providerRef: string): Promise<IdentityVerificationRecordRecord | null>;
 }
 
 /**
@@ -146,16 +162,66 @@ export class VerificationService {
     );
   }
 
+  /**
+   * Sprint 9: called once the KYC/KYB provider has accepted a submission and returned its own
+   * verification id, so a later webhook (which only carries that provider id) can be resolved back
+   * to this profile's pending record. Does not itself change `status` — only
+   * recordProviderVerificationDecision (driven by the provider's webhook) does that.
+   */
+  async recordProviderSubmission(profileKind: ProfileKind, profileId: string, providerRef: string): Promise<void> {
+    const latest = await this.records.findLatestByProfile(profileKind, profileId);
+    if (!latest || latest.status !== "pending") {
+      throw new ValidationError("No pending verification request found for this profile.");
+    }
+    await this.records.attachProviderRef(latest.id, providerRef);
+    await this.recordAudit(profileKind, profileId, "identity_verification_provider_submitted", null, null, "kyc_provider");
+  }
+
+  /**
+   * Sprint 9: the provider-driven counterpart to recordManualVerificationDecision — reached only
+   * through KycWebhookService after independent signature verification and replay/duplicate-event
+   * protection, never directly from a client request. Requiring `latest.status === "pending"`
+   * (same guard as the manual path) makes a duplicate/replayed decision for an already-decided
+   * record a no-op error rather than silently reapplying, and keeps a profile gated
+   * (isFullyVerified false) for the entire time it sits at PENDING or REJECTED — there is no path
+   * from REJECTED back to VERIFIED without a brand-new submitFullVerificationRequest.
+   */
+  async recordProviderVerificationDecision(input: {
+    providerRef: string;
+    decision: "verified" | "rejected";
+    reason: string | null;
+  }): Promise<void> {
+    const latest = await this.records.findByProviderRef(input.providerRef);
+    if (!latest || latest.status !== "pending") {
+      throw new ValidationError("No pending verification request found for this provider reference.");
+    }
+
+    await this.records.updateDecision(latest.id, {
+      status: input.decision,
+      reviewerUserId: null,
+      reason: input.reason,
+    });
+    await this.recordAudit(
+      latest.profileKind,
+      latest.profileId,
+      input.decision === "verified" ? "identity_verification_approved" : "identity_verification_rejected",
+      null,
+      input.reason,
+      "kyc_provider",
+    );
+  }
+
   private async recordAudit(
     profileKind: ProfileKind,
     profileId: string,
     action: string,
     actorUserId: string | null,
     reason: string | null,
+    actorRoleOverride?: string,
   ): Promise<void> {
     await this.audit.record({
       actorUserId,
-      actorRole: actorUserId ? "reviewer" : "personal_user",
+      actorRole: actorRoleOverride ?? (actorUserId ? "reviewer" : "personal_user"),
       profileKind,
       profileId,
       agreementId: null,

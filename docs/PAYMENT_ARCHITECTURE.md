@@ -345,6 +345,67 @@ compare against the processor.
 - All amounts are integer minor units throughout (FR-MONEY-001) — no floating-point arithmetic
   anywhere in ledger posting logic.
 
+## 15. Sprint 9: provider evaluation and sandbox implementation
+
+`docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md` required evaluating processor and
+KYC/KYB provider candidates, documenting a recommendation and contingency without assuming
+approval, and then building the provider-independent abstraction plus a sandbox/mock adapter behind
+it. This section records both; `src/lib/payments/`, `src/lib/kyc/` are the implementation.
+
+### 15.1 Payment-processor evaluation
+
+| Candidate | Fit | Risk |
+|---|---|---|
+| **Stripe Connect** (recipient/connected accounts) + **Stripe ACH Direct Debit** + **Stripe Financial Connections** (bank linking) + Stripe debit-card charges | Matches Sections 1–5 above closely — Connect's agent-of-payee model is exactly the "does not intentionally hold customer funds" posture the master spec asserts (open decision #2); one vendor covers recipient accounts, both payment rails, and bank-account linking. | Debt-repayment/installment-collection is a higher-scrutiny MVP category for most processors' underwriting (open decision #3, explicit in this sprint's text: "Do not assume provider approval"); approval is not guaranteed and no application has been submitted. |
+| **Plaid Link/Transfer** (bank linking + ACH movement) paired with a separate money-movement processor (e.g. Dwolla, Increase) | Recommended **contingency** if Stripe's underwriting declines — Plaid is best-in-class for bank-account linking/ownership verification specifically and is processor-agnostic, so it can sit in front of whichever processor is ultimately approved. | Two-vendor integration (bank linking + money movement) instead of one; more integration surface, not a bundled underwriting decision. |
+
+**Recommendation: Stripe (Connect + ACH Direct Debit + Financial Connections + debit card) as the
+primary candidate, with Plaid Link/Transfer + a separate ACH-capable processor as the documented
+contingency if Stripe's underwriting declines this business model.** This is a recommendation for a
+future business/legal decision, not a commitment — no processor has been contacted or approved, and
+open decision #3 remains open.
+
+### 15.2 KYC/KYB-provider evaluation
+
+| Candidate | Fit | Risk |
+|---|---|---|
+| **Stripe Identity** | Bundled with the payment processor if Stripe is selected — one vendor relationship, one underwriting/compliance surface, matches `identity_verification_record.provider_ref`'s single-provider-reference shape directly. | Couples identity verification to the payment-processor decision; if Stripe's payment-side underwriting declines this business model, Identity may be affected by the same decision even though KYC and payment underwriting are formally separate products. |
+| **Persona** (or Onfido) | Recommended **contingency** — a dedicated KYC/KYB vendor, decoupled from whichever payment processor is ultimately selected, so a later processor change (Stripe → Plaid+other) does not force a simultaneous identity-provider change. | Second vendor relationship/compliance review, distinct from the payment processor's. |
+
+**Recommendation: Stripe Identity if Stripe is the selected payment processor (fewest vendors,
+bundled compliance surface); Persona as the documented contingency, selected independently of the
+payment-processor decision if Stripe Identity is unavailable or a decoupled identity provider is
+preferred.** Open decision #16 remains open; no KYC/KYB vendor has been contacted or approved.
+
+### 15.3 What Sprint 9 actually built
+
+- `PaymentProvider` (`src/lib/payments/paymentProvider.ts`) and `KycKybProvider`
+  (`src/lib/kyc/kycProvider.ts`) — the provider-independent interfaces described above (create
+  recipient/connected account, bank linking, payment-method token, create/retrieve/cancel/refund
+  payment, dispute/payout events via webhook, webhook verification; submit individual/business
+  verification, retrieve status, webhook verification), deliberately kept as two separate
+  interfaces per this sprint's instruction.
+- `SandboxPaymentProvider`/`SandboxKycProvider` — deterministic, local-only mock adapters
+  implementing those interfaces with **no real network call to any processor or KYC vendor** (none
+  is configured or approved yet). Real HMAC-SHA256 webhook signing/verification
+  (`src/lib/webhookSignature.ts`), so signature-verification tests exercise genuine cryptography.
+- `PaymentService` (`src/lib/payments/paymentService.ts`) — the shared abstraction application code
+  depends on. Enforces Sprint 3's `isFullyVerified` for both payer and recipient exactly once,
+  before any provider call or payment row is created; enforces outbound idempotency via a unique
+  `idempotency_key`; owns retrieve/cancel/refund authorization.
+- `PaymentWebhookService`/`KycWebhookService` — signature verification → `(provider,
+  provider_event_id)`-keyed replay/duplicate-event protection → processing → audit, for both
+  provider integrations independently (`payment_webhook_event`/`kyc_webhook_event` tables).
+- KYC/KYB provider-driven decisions wire into Sprint 3's existing `FULL_PENDING →
+  FULL_VERIFIED`/`FULL_REJECTED` transition via two new, additive `VerificationService` methods —
+  `isFullyVerified` and its existing callers (Sprint 6 signing, this sprint's own payment gate)
+  needed no changes.
+
+**No production money moves, and no UI may claim a sandbox transaction or sandbox verification is
+real** — every provider name in this section remains a recommendation, not an integration; see
+`docs/SPRINT_CONTROL.md`'s "Sprint 9 implementation notes" for further detail and known
+limitations.
+
 ---
 
 **No live payment integration exists or is implied by this document** — every processor name is
@@ -355,6 +416,9 @@ production code implements any of the flows above.
 mechanics specifically, building on the payment/payout state machines in `docs/PAYMENT_STATE_MACHINE.md`
 and the schema in `docs/DATA_MODEL.md`. The exact processor-level mechanics of post-payout clawback
 recourse remain dependent on the final processor selection (open decision #3); no new open decision
-is added here since this is the same underlying gap, not a new one.
+is added here since this is the same underlying gap, not a new one. Section 15 was added by Sprint 9
+(`docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md`) — the provider-independent
+abstraction and sandbox adapter now exist in code (`src/lib/payments/`, `src/lib/kyc/`), but the
+processor/KYC-provider selection itself (open decisions #3 and #16) is unchanged and still open.
 
 *Canonical location for Deliverable 9. Companion: `docs/PAYMENT_STATE_MACHINE.md`.*

@@ -62,7 +62,7 @@ determination this consolidation feeds.
 
 2. **Money-transmission licensing posture is not yet determined.** The spec asserts the platform "is not a lender," "does not advance funds," and "does not intentionally hold customer funds," which points toward a payment-facilitator/agent-of-payee model (e.g., Stripe Connect) rather than a money-transmitter model — but this is an architectural intent, not a legal conclusion. Requires qualified U.S. fintech counsel review before any launch decision. Carried forward to Deliverable 11.
 
-3. **Payment-provider underwriting risk for this business model is unresolved.** Section 6 explicitly instructs not to assume provider approval (debt-repayment / installment-collection use cases can draw extra underwriting scrutiny from processors) and to document a contingency architecture if a preferred provider declines. No contingency provider has been selected yet. Carried forward to Deliverable 9 (Payment architecture) and Deliverable 11.
+3. **Payment-provider underwriting risk for this business model is unresolved.** Section 6 explicitly instructs not to assume provider approval (debt-repayment / installment-collection use cases can draw extra underwriting scrutiny from processors) and to document a contingency architecture if a preferred provider declines. No contingency provider has been selected yet. Carried forward to Deliverable 9 (Payment architecture) and Deliverable 11. **Sprint 9 update:** the provider-independent payment abstraction and a sandbox/mock adapter now exist in code (`docs/PAYMENT_ARCHITECTURE.md` §15), with Stripe recommended and Plaid+separate processor documented as contingency — but no processor has been contacted or approved; this decision remains open.
 
 4. **B2B pricing allocation when both businesses are paid-tier customers is unresolved.** Section 18A notes pricing must be "configurable if both businesses are charged for premium business functionality" but does not specify the default allocation. Carried forward to Deliverable 19-related work (pricing tables) and Deliverable 4 (functional requirements).
 
@@ -143,6 +143,10 @@ determination this consolidation feeds.
     Onfido). This affects `docs/ARCHITECTURE.md` §1's external-services list and the
     `identity_verification_record.provider_ref` field in `docs/DATA_MODEL.md` §4. Needs a
     product/engineering decision, likely alongside open decision #3 (payment-processor selection).
+    **Sprint 9 update:** the KYC/KYB provider-independent abstraction and a sandbox/mock adapter now
+    exist in code (`docs/PAYMENT_ARCHITECTURE.md` §15), with Stripe Identity recommended if Stripe is
+    selected as the payment processor and Persona documented as a decoupled contingency — but no
+    KYC/KYB vendor has been contacted or approved; this decision remains open.
 
 17. **Post-close payment reversal does not have a defined agreement-status effect.** FR-UPAY-005
     says a reversed payment reduces the agreement's recorded paid balance, but the master spec never

@@ -28,6 +28,7 @@ export class InMemoryIdentityVerificationRecordRepository implements IdentityVer
       id: randomUUID(),
       status: "pending",
       reviewerUserId: null,
+      providerRef: null,
       decidedAt: null,
       decisionReason: null,
       createdAt: new Date(),
@@ -49,7 +50,7 @@ export class InMemoryIdentityVerificationRecordRepository implements IdentityVer
 
   async updateDecision(
     id: string,
-    input: { status: "verified" | "rejected"; reviewerUserId: string; reason: string | null },
+    input: { status: "verified" | "rejected"; reviewerUserId: string | null; reason: string | null },
   ): Promise<void> {
     const record = this.byId.get(id);
     if (!record) return;
@@ -57,6 +58,15 @@ export class InMemoryIdentityVerificationRecordRepository implements IdentityVer
     record.reviewerUserId = input.reviewerUserId;
     record.decisionReason = input.reason;
     record.decidedAt = new Date();
+  }
+
+  async attachProviderRef(id: string, providerRef: string): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) record.providerRef = providerRef;
+  }
+
+  async findByProviderRef(providerRef: string): Promise<IdentityVerificationRecordRecord | null> {
+    return [...this.byId.values()].find((r) => r.providerRef === providerRef) ?? null;
   }
 }
 

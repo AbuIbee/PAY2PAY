@@ -127,7 +127,96 @@ execution.
 | 6A | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md` (three-tier platform-role model, protected `/admin` control plane with server-side-only authorization, functional dashboard/user-search/user-detail UI backed entirely by real data, suspend/reactivate/revoke-sessions/role-change/classification admin operations, durable test-account classification, full audit logging of every admin action, read-only "View As User" support view, documented break-glass recovery with no in-app bypass, and all 10 required test categories) implemented on branch `sprint-06A-platform-administration`, branched from `master`'s tip (`72ae5b4`, the Sprint 6 merge commit). Local `lint`/`typecheck`/`test`/`build` all pass (303/303 tests, up from 282 at the end of Sprint 6). `drizzle-kit check` confirms the new migration (`0007_short_gauntlet.sql`) is internally consistent. Sprints 1–6's own tests all still pass unchanged, confirming no regression despite three necessary, narrowly-scoped touches to Sprint 2's auth layer (see "Sprint 6A implementation notes" below). **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. No agreement/signature/PDF table was ever imported by any Sprint 6A code — see the implementation notes for how that guarantee is structural, not just tested. |
 | 7 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_07_Evidence_Documents_Witnesses.md` (evidence upload/metadata/uploader/timestamp/agreement-association, shared/private classification, witness-sharing, dispute flag, withdrawal state, malware/file-validation abstraction, secure signed-URL access, mandatory post-signing labeling, and the full witness model — max two, verified, view-only, version-bound attestation) implemented on branch `sprint-07-evidence-documents-witnesses`. **This branch was stale when this session started** — it had been created before Sprint 6A was merged and had zero unique commits of its own, so it was fast-forwarded to `master`'s current tip (`4356d24`, the Sprint 6A merge commit) before any Sprint 7 work began; confirmed safe via `git merge-base --is-ancestor` (no divergence, no data loss, branch not yet pushed to origin). Local `lint`/`typecheck`/`test`/`build` all pass (326/326 tests, up from 303 at the end of Sprint 6A). `drizzle-kit check` confirms the new migration (`0008_steep_mysterio.sql`) is internally consistent; RLS + `REVOKE` confirmed present on both new tables. Sprints 1–6A's own tests all still pass unchanged. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. No payment-processing functionality was added (not required by this sprint). See "Sprint 7 implementation notes" below for design choices and scope boundaries. |
 | 8 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_08_Workflows_CSVImports.md` (B2B workflow completion requiring both parties to be verified business profiles, invoice/PO/contract reference tracking, a real-data business financial dashboard, and the full CSV import pipeline — UPLOAD/VALIDATE/PREVIEW/DUPLICATE CHECK/ERROR REPORT/CREATE DRAFTS — with no bulk activation) implemented on branch `sprint-08-workflows-csv-imports`, branched from `master`'s tip (`261ec0e`, the Sprint 7 merge commit; this branch was already up to date, no fast-forward needed this time). Local `lint`/`typecheck`/`test`/`build` all pass (343/343 tests, up from 326 at the end of Sprint 7). `drizzle-kit check` confirms the new migration (`0009_flat_barracuda.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all three new tables. Sprints 1–7's own tests all still pass unchanged, including Sprint 3's `/api/dashboard/business` route test, which was deliberately never touched. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 8 implementation notes" below for design choices and scope boundaries. |
-| 9–20 | Not started. Sprint plan documents for 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+| 9 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md` (provider-independent payment abstraction with sandbox adapter, the shared `isFullyVerified` payer-and-recipient gate enforced once in `PaymentService.createPayment`, outbound idempotency-key dedupe, inbound webhook signature verification/replay protection/idempotent processing, and the separate KYC/KYB provider abstraction wired to Sprint 3's `FULL_PENDING → FULL_VERIFIED/FULL_REJECTED` transition) implemented on branch `sprint-09-payment-provider-abstraction`, branched from `master`'s tip (`b5f68ed`, the Sprint 8 merge commit; already up to date, no fast-forward needed). Local `lint`/`typecheck`/`test`/`build` all pass (394/394 tests, up from 343 at the end of Sprint 8). `drizzle-kit check` confirms the new migration (`0010_great_human_fly.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all three new tables (`payment_attempt`, `payment_webhook_event`, `kyc_webhook_event`). Sprints 1–8's own tests all still pass unchanged, including Sprint 3's `isFullyVerified`/`getVerificationState`/`submitFullVerificationRequest`/`recordManualVerificationDecision` bodies, which are byte-identical to before this sprint. **No production/live payment or KYC provider was integrated or called — sandbox/mock only, per "NO PRODUCTION MONEY."** **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 9 implementation notes" below for design choices, provider recommendations, and scope boundaries. |
+| 10–20 | Not started. Sprint plan documents for 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 9 implementation notes
+
+**No live processor or KYC/KYB provider account exists in this environment; every operation is a
+deterministic local simulation.** `SandboxPaymentProvider`/`SandboxKycProvider`
+(`src/lib/payments/sandboxPaymentProvider.ts`, `src/lib/kyc/sandboxKycProvider.ts`) never make a
+network call — per this sprint's own "Do not fake successful external-provider execution where no
+real sandbox/provider call occurred; report that limitation explicitly." The one piece of genuinely
+real behavior is the webhook HMAC-SHA256 signing/verification (`src/lib/webhookSignature.ts`,
+shared by both sandbox adapters) — that cryptography is correct and exercised by real
+signature-mismatch tests, standing in for wherever a real processor's signing scheme would sit.
+`docs/PAYMENT_ARCHITECTURE.md`'s new "Sprint 9: provider evaluation and sandbox implementation"
+section carries the processor/KYC-provider recommendation and contingency — no provider has been
+contacted or approved (open decisions #3 and #16 remain open).
+
+**The payer/recipient full-verification gate is enforced exactly once, in
+`PaymentService.createPayment`** (`src/lib/payments/paymentService.ts`), calling Sprint 3's
+`VerificationService.isFullyVerified` for both profiles before ever calling the provider or
+inserting a payment row — per this sprint's explicit instruction, individual provider adapters and
+the future Sprint 10 ledger have no path to create a payment that bypasses this, since they never
+call a `PaymentProvider` directly; they call `PaymentService`.
+
+**Idempotency is two distinct mechanisms, exactly as `docs/PAYMENT_ARCHITECTURE.md` §11
+describes.** Outbound: `payment_attempt.idempotency_key` is unique at the DB level;
+`PaymentService.createPayment` checks for an existing record first, and on an insert race (two
+concurrent requests with the same key) catches the failure and re-reads rather than erroring.
+Inbound: `payment_webhook_event`/`kyc_webhook_event` are each uniquely keyed on
+`(provider, provider_event_id)`; a redelivered webhook is detected before its business-logic effect
+is ever reapplied, and reported back as `"duplicate"` rather than reprocessed or rejected (a
+provider's retry loop must never see an error for a redelivery it's expected to send).
+
+**The KYC/KYB integration extends Sprint 3's `verificationService.ts` additively, never rewriting
+its existing behavior.** `IdentityVerificationRecordRepository.updateDecision`'s `reviewerUserId`
+widened from `string` to `string | null` (the DB column was already nullable; every existing manual
+call site still passes a string, so this is a backward-compatible loosening only). Two new methods —
+`recordProviderSubmission` and `recordProviderVerificationDecision` — reuse the existing
+`provider_ref` column (reserved for this sprint since Sprint 3) and the existing `pending` status
+guard, giving "duplicate verification submission" and "profile stays gated while pending/rejected"
+for free rather than reimplementing them. `isFullyVerified`, `getVerificationState`,
+`submitFullVerificationRequest`, and `recordManualVerificationDecision` are byte-identical to
+before this sprint — proven by every one of Sprint 3's original tests passing unchanged, plus new
+tests exercising only the two additive methods.
+
+**The two provider interfaces are deliberately never merged**, per the sprint's own instruction —
+`PaymentProvider` (`src/lib/payments/paymentProvider.ts`) and `KycKybProvider`
+(`src/lib/kyc/kycProvider.ts`) are separate files, separate sandbox adapters, and separate webhook
+event tables (`payment_webhook_event` vs. `kyc_webhook_event`), even though both need the same
+signature-verification/replay-protection shape — that shared *mechanism* (not domain interface) is
+the one piece of legitimate reuse (`src/lib/webhookSignature.ts`).
+
+**Government-ID, selfie/liveness, and bank-account-ownership checks are folded into one submission
+call each** (`submitIndividualVerification`/`submitBusinessVerification`), taking only opaque
+reference/token strings — never a raw image or document upload — matching real KYC-provider session
+design (Persona/Onfido-style) and this sprint's "never store the raw government-ID image or selfie
+beyond what the provider integration requires in transit" requirement. No document-upload endpoint
+was built in this sprint; a caller is expected to already hold a reference from wherever the file
+was captured (out of this sprint's scope).
+
+**Payment authorization is deliberately simple for this sprint: profile-ownership only, not
+business-staff-capability-aware.** `PaymentService` requires the caller to own the payer profile to
+create a payment, own either the payer or recipient profile to retrieve/cancel, and own the
+recipient profile specifically to refund. Finer-grained business-staff payment permissions (Sprint
+4's capability model extended into payments) are out of this sprint's "provider abstraction and
+sandbox architecture" scope and are a reasonable Sprint 10+ follow-up once real money movement and
+the ledger exist.
+
+**Seven new routes, no new UI** (`docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md` has
+no "UI" bullet, matching Sprint 4/6/7/8's precedent): `POST /api/payments/create`,
+`GET /api/payments/detail`, `POST /api/payments/cancel`, `POST /api/payments/refund`,
+`POST /api/payments/webhook` (unauthenticated, signature-gated), `POST /api/kyc/submit`,
+`POST /api/kyc/webhook` (unauthenticated, signature-gated). `createRecipientAccount`,
+`linkBankAccount`, and `createPaymentMethodToken` are fully implemented and tested at the
+`PaymentProvider`/`PaymentService` level but have no dedicated route yet — no onboarding/payment-method
+UI flow consumes them in this sprint, so exposing routes for them now would be unreachable surface
+area; the interface methods exist and are ready for whichever future sprint builds that flow.
+
+**A payment attempt's status model is intentionally smaller than `docs/PAYMENT_STATE_MACHINE.md`'s
+full processor-integration lifecycle** — `pending → succeeded/failed/canceled`, plus
+`succeeded → refunded/disputed` — omitting `submitted`/`processing`/`cleared`/`payout_pending`/
+`paid_out`/`returned`, which depend on a real processor adapter and the ledger (Sprint 10+) this
+sprint does not build. `payment_attempt.agreement_id` is nullable for the same reason: this sprint's
+abstraction is not yet required to be called only from an agreement-installment context.
+
+**Known limitation: a KYC/KYB submission that creates Sprint 3's pending record but then fails at
+the provider-call step leaves that profile stuck at `FULL_PENDING` with no `provider_ref`
+attached.** No automated resubmission/cleanup job exists yet; recovering requires a manual
+resubmission or an administrator decision, same as any other stuck-pending case. Flagged here rather
+than silently assumed handled.
 
 ### Sprint 8 implementation notes
 
