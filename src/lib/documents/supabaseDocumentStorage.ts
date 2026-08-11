@@ -21,6 +21,16 @@ export const AGREEMENT_PDF_BUCKET = "agreement-pdfs";
 export class SupabaseDocumentStorage implements DocumentStorage {
   private client: SupabaseClient | null = null;
 
+  /**
+   * Sprint 7 (docs/sprints/SPRINT_07_Evidence_Documents_Witnesses.md): bucket is now a constructor
+   * parameter rather than the hard-coded `AGREEMENT_PDF_BUCKET` module constant, so this same class
+   * can also back evidence-document storage in a *separate* private bucket without duplicating the
+   * upload/signed-URL logic. `getDocumentStorage()` still passes `AGREEMENT_PDF_BUCKET` (unchanged
+   * behavior for Sprint 6 callers); `getEvidenceStorage()` (src/lib/evidence/) passes a different
+   * bucket name.
+   */
+  constructor(private readonly bucket: string) {}
+
   private getClient(): SupabaseClient {
     if (this.client) return this.client;
     const env = getServerEnv();
@@ -37,7 +47,7 @@ export class SupabaseDocumentStorage implements DocumentStorage {
 
   async uploadPrivate(input: { path: string; content: Uint8Array; contentType: string }): Promise<void> {
     const client = this.getClient();
-    const { error } = await client.storage.from(AGREEMENT_PDF_BUCKET).upload(input.path, input.content, {
+    const { error } = await client.storage.from(this.bucket).upload(input.path, input.content, {
       contentType: input.contentType,
       upsert: false, // immutable — never overwrite an already-stored document
     });
@@ -48,7 +58,7 @@ export class SupabaseDocumentStorage implements DocumentStorage {
 
   async createSignedUrl(path: string, expiresInSeconds: number): Promise<string> {
     const client = this.getClient();
-    const { data, error } = await client.storage.from(AGREEMENT_PDF_BUCKET).createSignedUrl(path, expiresInSeconds);
+    const { data, error } = await client.storage.from(this.bucket).createSignedUrl(path, expiresInSeconds);
     if (error || !data?.signedUrl) {
       throw new ConfigurationError(`Failed to create a signed URL for the agreement PDF: ${error?.message ?? "unknown error"}`, error);
     }

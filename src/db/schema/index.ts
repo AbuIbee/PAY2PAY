@@ -9,3 +9,4 @@ export * from "./staff";
 export * from "./agreement";
 export * from "./signature";
 export * from "./admin";
+export * from "./evidence";
