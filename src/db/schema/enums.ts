@@ -218,3 +218,21 @@ export const csvImportRowDuplicateStatusEnum = pgEnum("csv_import_row_duplicate_
   "duplicate_in_file",
   "duplicate_existing_agreement",
 ]);
+
+/**
+ * Sprint 9 (docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md): the payment-attempt
+ * lifecycle this sprint's provider-abstraction scope owns. Deliberately smaller than
+ * docs/PAYMENT_STATE_MACHINE.md's full processor-integration lifecycle (scheduled/submitted/
+ * processing/cleared/payout_pending/paid_out/returned) — that full state machine belongs to a real
+ * processor adapter and the ledger (Sprint 10+), which this sprint does not build. "pending" covers
+ * everything between creation and a provider's first definitive webhook/response; "disputed" is
+ * reachable only via a webhook event, never set directly by application code.
+ */
+export const paymentAttemptStatusEnum = pgEnum("payment_attempt_status", [
+  "pending",
+  "succeeded",
+  "failed",
+  "canceled",
+  "refunded",
+  "disputed",
+]);

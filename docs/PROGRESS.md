@@ -1112,3 +1112,114 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 9 — Payment Provider Abstraction & Sandbox
+
+Source: `docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md`. Developed on branch
+`sprint-09-payment-provider-abstraction`, branched from `master`'s tip (`b5f68ed`, the Sprint 8
+merge commit; already up to date, no fast-forward needed).
+
+### Scope delivered
+
+- **Payment-provider abstraction** (`src/lib/payments/paymentProvider.ts`): interfaces for create
+  recipient/connected account, bank linking, payment-method token, create/retrieve/cancel/refund
+  payment, and webhook verification, plus a deterministic `SandboxPaymentProvider`
+  (`src/lib/payments/sandboxPaymentProvider.ts`) — no live processor is configured or called.
+- **`PaymentService`** (`src/lib/payments/paymentService.ts`): the ONE call site that enforces
+  Sprint 3's `isFullyVerified` for both payer and recipient before any payment is created, so
+  neither a future provider adapter nor the Sprint 10 ledger can bypass it. Also owns outbound
+  idempotency (`payment_attempt.idempotency_key`, unique, race-safe insert-then-recheck) and
+  retrieve/cancel/refund authorization.
+- **`PaymentWebhookService`** (`src/lib/payments/paymentWebhookService.ts`): signature verification
+  → `(provider, provider_event_id)`-keyed replay/duplicate-event protection → status-transition
+  processing → audit.
+- **KYC/KYB provider abstraction** (`src/lib/kyc/kycProvider.ts`, `sandboxKycProvider.ts`) — a
+  deliberately separate interface/adapter from the payment side. `KycVerificationService`
+  (`src/lib/kyc/kycVerificationService.ts`) reuses Sprint 3's `submitFullVerificationRequest` (its
+  existing "already pending" guard IS the duplicate-submission protection) and attaches the
+  provider's verification id via a new `recordProviderSubmission` method.
+  `KycWebhookService`(`src/lib/kyc/kycWebhookService.ts`) applies the same
+  signature/replay/idempotency shape to drive Sprint 3's `FULL_PENDING → FULL_VERIFIED`/
+  `FULL_REJECTED` transition via a new `recordProviderVerificationDecision` method.
+  `isFullyVerified`/`getVerificationState`/`submitFullVerificationRequest`/
+  `recordManualVerificationDecision` are byte-identical to before this sprint.
+- **Shared webhook HMAC helper** (`src/lib/webhookSignature.ts`) — the one piece of code shared
+  between the two otherwise-separate provider integrations, since it is pure cryptography, not a
+  merge of the two domain interfaces.
+- **Processor/KYC-provider evaluation and recommendation**: `docs/PAYMENT_ARCHITECTURE.md` §15 —
+  Stripe (Connect + ACH Direct Debit + Financial Connections + debit card) recommended, Plaid
+  Link/Transfer + a separate processor documented as contingency; Stripe Identity recommended if
+  Stripe is selected, Persona documented as a decoupled contingency. No provider approval is
+  assumed or implied; open decisions #3 and #16 remain open (`docs/OPEN_DECISIONS.md` updated).
+- **Seven new routes, no UI** (this sprint's spec has no "UI" bullet): payments
+  create/detail/cancel/refund/webhook, kyc submit/webhook.
+
+### Files created (32)
+
+Schema: `src/db/schema/{payment,kyc}.ts`. Payments domain logic: `src/lib/payments/{paymentProvider,
+sandboxPaymentProvider,paymentService,drizzlePaymentAttemptRepository,paymentWebhookService,
+drizzlePaymentWebhookEventRepository,getPaymentProvider,getPaymentService,getPaymentWebhookService,
+testFakes,sandboxPaymentProvider.test,paymentService.test,paymentWebhookService.test}.ts` (29
+tests). KYC/KYB domain logic: `src/lib/kyc/{kycProvider,sandboxKycProvider,kycVerificationService,
+kycWebhookService,drizzleKycWebhookEventRepository,getKycProvider,getKycVerificationService,
+getKycWebhookService,testFakes,sandboxKycProvider.test,kycVerificationService.test,
+kycWebhookService.test}.ts` (15 tests). Shared: `src/lib/webhookSignature.ts`. API routes:
+`src/app/api/payments/{create,detail,cancel,refund,webhook}/route.ts`,
+`src/app/api/kyc/{submit,webhook}/route.ts`. Migration: `drizzle/migrations/0010_great_human_fly.sql`
+(+ `meta/0010_snapshot.json`).
+
+### Files modified (10)
+
+`src/db/schema/{enums,index}.ts` (new `payment_attempt_status` enum, export the two new schema
+modules); `src/config/env.ts` (two new optional sandbox-webhook-secret env vars);
+`src/lib/profiles/verificationService.ts` (additive: `providerRef` field, widened
+`IdentityVerificationRecordRepository.updateDecision`/new `attachProviderRef`/`findByProviderRef`
+methods, new `recordProviderSubmission`/`recordProviderVerificationDecision` service methods) with
+matching updates to `drizzleIdentityVerificationRecordRepository.ts` and `testFakes.ts`; 7 new tests
+appended to `verificationService.test.ts` for the additive methods only. `drizzle/migrations/meta/
+_journal.json`. `docs/{PAYMENT_ARCHITECTURE,OPEN_DECISIONS,SPRINT_CONTROL}.md`.
+
+### Tests
+
+394/394 passing across 65 files (up from 343/53 at the end of Sprint 8 — 51 net new: 7 in
+`verificationService.test.ts`, 11 in `sandboxPaymentProvider.test.ts`, 12 in `paymentService.test.ts`,
+6 in `paymentWebhookService.test.ts`, 6 in `sandboxKycProvider.test.ts`, 3 in
+`kycVerificationService.test.ts`, 6 in `kycWebhookService.test.ts`). Covers every one of the
+sprint's named required-test categories on both sides: provider adapter, webhook spoof, replay,
+idempotency, duplicate event, processor failure, payment creation blocked when payer/recipient not
+`FULL_VERIFIED` (payment side); provider adapter, webhook spoof, `FULL_PENDING → FULL_VERIFIED`,
+`FULL_PENDING → FULL_REJECTED`, gated while pending/rejected, duplicate verification submission
+(KYC/KYB side). Sprints 1–8's own tests all still pass unchanged.
+
+### Verification commands run
+
+`npx tsc --noEmit` — pass, no errors. `npx eslint .` — pass, 0 errors (6 pre-existing-pattern
+warnings for intentionally-unused mock-adapter parameters, consistent with this codebase's existing
+lint configuration). `npx vitest run` — pass, 394/394 across 59 files. `npx next build` — pass; all
+7 new `/api/{payments,kyc}/*` routes generated correctly, no change to any existing route's
+classification. `npx drizzle-kit check` — pass, migration history internally consistent, no drift.
+RLS + `REVOKE ALL ... FROM anon, authenticated` confirmed present on all three new tables
+(`payment_attempt`, `payment_webhook_event`, `kyc_webhook_event`).
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction, commit/push/PR is deferred until
+after Product Owner review of this status entry. `git status` at the time of this report: modified
+`docs/{OPEN_DECISIONS,PAYMENT_ARCHITECTURE,SPRINT_CONTROL}.md`,
+`drizzle/migrations/meta/_journal.json`, `src/config/env.ts`, `src/db/schema/{enums,index}.ts`,
+`src/lib/profiles/{drizzleIdentityVerificationRecordRepository,testFakes,verificationService,
+verificationService.test}.ts`; untracked `drizzle/migrations/0010_great_human_fly.sql`,
+`drizzle/migrations/meta/0010_snapshot.json`, `src/app/api/kyc/`, `src/app/api/payments/`,
+`src/db/schema/{kyc,payment}.ts`, `src/lib/kyc/`, `src/lib/payments/`,
+`src/lib/webhookSignature.ts`. No file outside this list was touched. The only prior-sprint file
+with behavior changes is Sprint 3's `verificationService.ts`, and only additively — every existing
+Sprint 3 test still passes unchanged, proving `isFullyVerified` and its three other existing public
+methods are byte-identical to before this sprint.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

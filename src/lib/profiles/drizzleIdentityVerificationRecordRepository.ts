@@ -21,6 +21,7 @@ function toRecord(row: Row): IdentityVerificationRecordRecord {
     tier: row.tier,
     status: row.status,
     reviewerUserId: row.reviewerUserId,
+    providerRef: row.providerRef,
     decidedAt: row.decidedAt,
     decisionReason: row.decisionReason,
     createdAt: row.createdAt,
@@ -61,7 +62,7 @@ export class DrizzleIdentityVerificationRecordRepository implements IdentityVeri
 
   async updateDecision(
     id: string,
-    input: { status: "verified" | "rejected"; reviewerUserId: string; reason: string | null },
+    input: { status: "verified" | "rejected"; reviewerUserId: string | null; reason: string | null },
   ): Promise<void> {
     const db = getDb();
     await db
@@ -73,5 +74,21 @@ export class DrizzleIdentityVerificationRecordRepository implements IdentityVeri
         decidedAt: new Date(),
       })
       .where(eq(identityVerificationRecord.id, id));
+  }
+
+  async attachProviderRef(id: string, providerRef: string): Promise<void> {
+    const db = getDb();
+    await db.update(identityVerificationRecord).set({ providerRef }).where(eq(identityVerificationRecord.id, id));
+  }
+
+  async findByProviderRef(providerRef: string): Promise<IdentityVerificationRecordRecord | null> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(identityVerificationRecord)
+      .where(eq(identityVerificationRecord.providerRef, providerRef))
+      .limit(1);
+    const row = rows[0];
+    return row ? toRecord(row) : null;
   }
 }

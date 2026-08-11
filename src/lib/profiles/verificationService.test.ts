@@ -131,4 +131,109 @@ describe("VerificationService", () => {
     // The personal profile is unaffected by the business profile's verification.
     expect(await ctx.verificationService.isFullyVerified("personal", PROFILE_ID)).toBe(false);
   });
+
+  // Sprint 9 (docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md): the provider-driven
+  // counterpart to the manual decision path above — isFullyVerified/getVerificationState are
+  // unchanged; only the mechanism producing verified/rejected changes.
+  describe("provider-driven decisions (Sprint 9)", () => {
+    const PROVIDER_REF = "sandbox_kyc_ref_1";
+
+    it("attaches a provider reference only to a pending record", async () => {
+      await ctx.verificationService.submitFullVerificationRequest("personal", PROFILE_ID);
+      await ctx.verificationService.recordProviderSubmission("personal", PROFILE_ID, PROVIDER_REF);
+      const record = await ctx.records.findByProviderRef(PROVIDER_REF);
+      expect(record?.profileId).toBe(PROFILE_ID);
+      expect(record?.status).toBe("pending");
+    });
+
+    it("rejects a provider submission with no pending request", async () => {
+      await expect(
+        ctx.verificationService.recordProviderSubmission("personal", PROFILE_ID, PROVIDER_REF),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("moves FULL_PENDING to FULL_VERIFIED via a provider decision, keyed by provider reference", async () => {
+      await ctx.verificationService.submitFullVerificationRequest("personal", PROFILE_ID);
+      await ctx.verificationService.recordProviderSubmission("personal", PROFILE_ID, PROVIDER_REF);
+      await ctx.verificationService.recordProviderVerificationDecision({
+        providerRef: PROVIDER_REF,
+        decision: "verified",
+        reason: null,
+      });
+      expect(await ctx.verificationService.getVerificationState("personal", PROFILE_ID)).toBe("FULL_VERIFIED");
+      expect(await ctx.verificationService.isFullyVerified("personal", PROFILE_ID)).toBe(true);
+    });
+
+    it("moves FULL_PENDING to FULL_REJECTED via a provider decision; profile stays gated", async () => {
+      await ctx.verificationService.submitFullVerificationRequest("personal", PROFILE_ID);
+      await ctx.verificationService.recordProviderSubmission("personal", PROFILE_ID, PROVIDER_REF);
+      await ctx.verificationService.recordProviderVerificationDecision({
+        providerRef: PROVIDER_REF,
+        decision: "rejected",
+        reason: "Document mismatch.",
+      });
+      expect(await ctx.verificationService.getVerificationState("personal", PROFILE_ID)).toBe("FULL_REJECTED");
+      expect(await ctx.verificationService.isFullyVerified("personal", PROFILE_ID)).toBe(false);
+    });
+
+    it("stays gated (isFullyVerified false) throughout PENDING and after REJECTED", async () => {
+      await ctx.verificationService.submitFullVerificationRequest("personal", PROFILE_ID);
+      await ctx.verificationService.recordProviderSubmission("personal", PROFILE_ID, PROVIDER_REF);
+      expect(await ctx.verificationService.isFullyVerified("personal", PROFILE_ID)).toBe(false);
+      await ctx.verificationService.recordProviderVerificationDecision({
+        providerRef: PROVIDER_REF,
+        decision: "rejected",
+        reason: null,
+      });
+      expect(await ctx.verificationService.isFullyVerified("personal", PROFILE_ID)).toBe(false);
+    });
+
+    it("rejects a decision for an unknown provider reference", async () => {
+      await expect(
+        ctx.verificationService.recordProviderVerificationDecision({
+          providerRef: "no-such-ref",
+          decision: "verified",
+          reason: null,
+        }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects a duplicate/replayed decision for an already-decided record", async () => {
+      await ctx.verificationService.submitFullVerificationRequest("personal", PROFILE_ID);
+      await ctx.verificationService.recordProviderSubmission("personal", PROFILE_ID, PROVIDER_REF);
+      await ctx.verificationService.recordProviderVerificationDecision({
+        providerRef: PROVIDER_REF,
+        decision: "verified",
+        reason: null,
+      });
+      await expect(
+        ctx.verificationService.recordProviderVerificationDecision({
+          providerRef: PROVIDER_REF,
+          decision: "rejected",
+          reason: null,
+        }),
+      ).rejects.toThrow(ValidationError);
+      // The first (correct) decision is not overwritten by the rejected replay attempt.
+      expect(await ctx.verificationService.isFullyVerified("personal", PROFILE_ID)).toBe(true);
+    });
+
+    it("audits provider-driven events with no human actor and a distinct actor role", async () => {
+      await ctx.verificationService.submitFullVerificationRequest("personal", PROFILE_ID);
+      await ctx.verificationService.recordProviderSubmission("personal", PROFILE_ID, PROVIDER_REF);
+      await ctx.verificationService.recordProviderVerificationDecision({
+        providerRef: PROVIDER_REF,
+        decision: "verified",
+        reason: null,
+      });
+      const events = ctx.auditRepo.events.slice(-2);
+      expect(events.map((e) => e.action)).toEqual([
+        "identity_verification_provider_submitted",
+        "identity_verification_approved",
+      ]);
+      for (const event of events) {
+        expect(event.actorUserId).toBeNull();
+        expect(event.actorRole).toBe("kyc_provider");
+      }
+    });
+  });
 });

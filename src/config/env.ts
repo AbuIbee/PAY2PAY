@@ -48,6 +48,13 @@ const serverEnvSchema = z.object({
   // fail safely with no live database" from Phase 0.
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
+  // Sprint 9 (docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md): HMAC secrets for the
+  // sandbox/mock payment and KYC/KYB provider webhook signatures. Optional at the environment-schema
+  // level (mirrors SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY above) so the app still starts with
+  // neither configured; getPaymentProvider()/getKycProvider() throw a clear ConfigurationError only
+  // when a payment or KYC operation is actually attempted without one.
+  PAYMENT_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
+  KYC_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

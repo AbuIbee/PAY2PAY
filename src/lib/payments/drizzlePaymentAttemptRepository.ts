@@ -1,0 +1,80 @@
+import "server-only";
+import { eq } from "drizzle-orm";
+import { getDb } from "@/db/client";
+import { paymentAttempt } from "@/db/schema";
+import { ConfigurationError } from "@/lib/errors";
+import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus } from "./paymentService";
+
+type Row = typeof paymentAttempt.$inferSelect;
+
+function toRecord(row: Row): PaymentAttemptRecord {
+  return {
+    id: row.id,
+    idempotencyKey: row.idempotencyKey,
+    payerProfileKind: row.payerProfileKind,
+    payerProfileId: row.payerProfileId,
+    recipientProfileKind: row.recipientProfileKind,
+    recipientProfileId: row.recipientProfileId,
+    amountMinorUnits: row.amountMinorUnits,
+    currency: row.currency,
+    agreementId: row.agreementId,
+    status: row.status,
+    providerName: row.providerName,
+    providerPaymentId: row.providerPaymentId,
+    failureReason: row.failureReason,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository {
+  async insertPending(input: {
+    idempotencyKey: string;
+    payerProfileKind: "personal" | "business";
+    payerProfileId: string;
+    recipientProfileKind: "personal" | "business";
+    recipientProfileId: string;
+    amountMinorUnits: number;
+    currency: string;
+    agreementId: string | null;
+    providerName: string;
+  }): Promise<PaymentAttemptRecord> {
+    const db = getDb();
+    const [row] = await db.insert(paymentAttempt).values({ ...input, status: "pending" }).returning();
+    if (!row) throw new ConfigurationError("payment_attempt insert returned no row");
+    return toRecord(row);
+  }
+
+  async updateStatus(
+    id: string,
+    status: PaymentAttemptStatus,
+    fields: { providerPaymentId?: string; failureReason?: string },
+  ): Promise<PaymentAttemptRecord> {
+    const db = getDb();
+    const [row] = await db
+      .update(paymentAttempt)
+      .set({ status, updatedAt: new Date(), ...fields })
+      .where(eq(paymentAttempt.id, id))
+      .returning();
+    if (!row) throw new ConfigurationError("payment_attempt update returned no row");
+    return toRecord(row);
+  }
+
+  async findById(id: string): Promise<PaymentAttemptRecord | null> {
+    const db = getDb();
+    const rows = await db.select().from(paymentAttempt).where(eq(paymentAttempt.id, id)).limit(1);
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  async findByIdempotencyKey(idempotencyKey: string): Promise<PaymentAttemptRecord | null> {
+    const db = getDb();
+    const rows = await db.select().from(paymentAttempt).where(eq(paymentAttempt.idempotencyKey, idempotencyKey)).limit(1);
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  async findByProviderPaymentId(providerPaymentId: string): Promise<PaymentAttemptRecord | null> {
+    const db = getDb();
+    const rows = await db.select().from(paymentAttempt).where(eq(paymentAttempt.providerPaymentId, providerPaymentId)).limit(1);
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+}
