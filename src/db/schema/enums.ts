@@ -235,4 +235,71 @@ export const paymentAttemptStatusEnum = pgEnum("payment_attempt_status", [
   "canceled",
   "refunded",
   "disputed",
+  // Sprint 10 (docs/sprints/SPRINT_10_InternalFinancialLedger.md) addition: a bank/network-initiated
+  // return (e.g. late ACH return), distinct from "refunded" (voluntary/dispute-resolved) — see
+  // ledger.ts's `ledger_entry_type` doc comment for the same refund/reversal distinction mirrored
+  // at the ledger-posting level.
+  "reversed",
 ]);
+
+/**
+ * Sprint 10 (docs/sprints/SPRINT_10_InternalFinancialLedger.md): the shadow-ledger chart of
+ * accounts, matching docs/PAYMENT_ARCHITECTURE.md §14's illustrative accounts exactly (minus
+ * `payout_in_transit`, since this sprint models payout as a single direct posting rather than a
+ * two-step in-transit intermediate — see ledgerService.ts for why). One row per (account_type,
+ * agreement_id) in `ledger_account`, created lazily — there is deliberately no "debtor_obligation"
+ * account: original principal already lives in `agreement_version.terms` (Sprint 5) and the ledger
+ * must never duplicate or rewrite it (this sprint's requirement #7).
+ */
+export const ledgerAccountTypeEnum = pgEnum("ledger_account_type", [
+  "processor_clearing",
+  "creditor_proceeds_payable",
+  "platform_fee_revenue",
+  "processor_fee_expense",
+  "creditor_clawback_exposure",
+  // Balancing counter-leg for administrative corrections only (requirement #18) — never touched by
+  // any automatic/webhook-driven posting.
+  "admin_adjustment_suspense",
+]);
+
+/**
+ * Sprint 10: one row per balanced financial event. `payment_cleared` mirrors
+ * docs/PAYMENT_ARCHITECTURE.md §14 posting 1; `payout` mirrors posting 2; `refund` (voluntary/
+ * dispute-resolved) and `reversal` (bank/network-initiated return, e.g. ACH return) both mirror
+ * posting 3 or 4 depending on whether a `payout` entry already exists for the same payment attempt
+ * — see §10's "all three [return, chargeback, refund] converge on the same ledger operation."
+ * `dispute_adjustment` is posted when a dispute is opened (freezing recoverable funds), using the
+ * same shape, before any final resolution. `admin_adjustment` is the only entry type a human can
+ * trigger directly, always balanced against `admin_adjustment_suspense`.
+ */
+export const ledgerEntryTypeEnum = pgEnum("ledger_entry_type", [
+  "payment_cleared",
+  "refund",
+  "reversal",
+  "payout",
+  "dispute_adjustment",
+  "admin_adjustment",
+]);
+
+export const ledgerPostingDirectionEnum = pgEnum("ledger_posting_direction", ["debit", "credit"]);
+
+/**
+ * Sprint 10 reconciliation exception vocabulary — matches the sprint's own required list exactly.
+ * See reconciliationService.ts for which of these have live automated detectors in this sprint vs.
+ * are reserved vocabulary for a future, fuller reconciliation pass.
+ */
+export const reconciliationExceptionTypeEnum = pgEnum("reconciliation_exception_type", [
+  "missing_provider_transaction",
+  "unmatched_provider_transaction",
+  "amount_mismatch",
+  "currency_mismatch",
+  "duplicate_transaction",
+  "status_mismatch",
+  "reversal_refund_mismatch",
+  "stale_pending_settlement",
+  "internal_posting_failure",
+  "provider_event_without_internal_state",
+]);
+
+/** Sprint 10: an exception stays "open" until an administrator (or a future automated repair) explicitly resolves it — reconciliation itself never auto-resolves anything, matching the sprint's "must not silently ignore mismatches." */
+export const reconciliationExceptionStatusEnum = pgEnum("reconciliation_exception_status", ["open", "resolved"]);

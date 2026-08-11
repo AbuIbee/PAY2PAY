@@ -1223,3 +1223,110 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 10 — Internal Financial Ledger & Reconciliation
+
+Source: `docs/sprints/SPRINT_10_InternalFinancialLedger.md`. Developed on branch
+`sprint-10-ledger-reconciliation`, branched from `master`'s tip (`d64bcae`, the Sprint 9 merge
+commit; already up to date, no fast-forward needed).
+
+### Scope delivered
+
+- **Shadow ledger** (`src/lib/ledger/ledgerService.ts`): double-entry-style, balanced, append-only
+  journal entries over a 6-account chart matching `docs/PAYMENT_ARCHITECTURE.md` §14
+  (`processor_clearing`, `creditor_proceeds_payable`, `platform_fee_revenue`,
+  `processor_fee_expense`, `creditor_clawback_exposure`, `admin_adjustment_suspense`). Every account
+  is scoped to one `(account_type, agreement_id)` pair — no platform-wide singleton, so every
+  balance traces deterministically to its agreement. `postPaymentCleared` (with processor/platform
+  fee splits), `reversePayment` (refund/reversal/dispute_adjustment, auto-selecting pre-payout mirror
+  vs. post-payout clawback shape), `postPayout`, and `postAdminAdjustment` are all idempotent, keyed
+  by `(payment_attempt_id, entry_type)`.
+- **`BalanceService`** (`src/lib/ledger/balanceService.ts`): reads Sprint 5's
+  `agreement_version.terms.currentPrincipalMinorUnits` (read-only, never duplicated or mutated) and
+  reconstructs amount-paid/remaining-balance/settlement-state entirely from `LedgerService`'s journal
+  history — no cached balance field exists anywhere.
+- **Webhook → ledger wiring** (`src/lib/payments/paymentWebhookService.ts`, additive to Sprint 9):
+  `payment.succeeded` posts `payment_cleared`; `payment.refunded`/`payment.returned`/`payment.disputed`
+  post the appropriate reversal; a new `payout.paid` event posts `payout` and sets
+  `payment_attempt.payout_completed_at`. A ledger-posting failure (most commonly: no `agreementId`)
+  is caught and logged, never fails the webhook or the already-applied status update — the resulting
+  gap is exactly what reconciliation's `internal_posting_failure` check exists to catch.
+- **`ReconciliationService`** (`src/lib/ledger/reconciliationService.ts`): real, independent
+  detection logic for all 10 of the sprint's required exception types (missing/unmatched provider
+  transaction, amount/currency mismatch, duplicate transaction, status mismatch, reversal/refund
+  mismatch, stale pending settlement, internal posting failure, provider event without internal
+  state). Idempotent re-run via an application-level "find open exception before inserting" check.
+- **Admin visibility** (`src/lib/ledger/ledgerAdminService.ts`, new file — Sprint 6A's
+  `adminService.ts` untouched): Platform Admin+ can view an agreement's ledger entries, balance, and
+  reconciliation exceptions, list open exceptions, resolve them, and trigger a reconciliation run.
+  Platform Owner only may post an administrative adjustment — always balanced against a dedicated
+  suspense account, always reasoned, always audited, never an edit/delete of a prior entry.
+- **Five new admin routes, no UI**: `GET /api/admin/ledger/{agreement,exceptions}`,
+  `POST /api/admin/ledger/{exceptions/resolve,reconcile,adjustment}`.
+
+### Files created (23)
+
+Schema: `src/db/schema/ledger.ts`. Ledger/reconciliation/admin domain logic:
+`src/lib/ledger/{ledgerService,drizzleLedgerAccountRepository,drizzleLedgerJournalEntryRepository,
+getLedgerService,balanceService,drizzleAgreementTermsReader,getBalanceService,
+reconciliationService,drizzleReconciliationExceptionRepository,getReconciliationService,
+ledgerAdminService,getLedgerAdminService,testFakes,integrationTestFakes,ledgerService.test,
+balanceService.test,reconciliationService.test,paymentLedgerIntegration.test,
+ledgerAdminService.test}.ts` (53 tests). API routes:
+`src/app/api/admin/ledger/{agreement/route,exceptions/route,exceptions/resolve/route,reconcile/route,
+adjustment/route}.ts`. Migration: `drizzle/migrations/0011_slippery_payback.sql`
+(+ `meta/0011_snapshot.json`).
+
+### Files modified (11)
+
+`src/db/schema/{enums,index,payment}.ts` (4 new ledger/reconciliation enums, `reversed` added to
+`payment_attempt_status`, `payout_completed_at` column, export the new schema module);
+`src/lib/payments/paymentService.ts` (additive: `"reversed"` status, `payoutCompletedAt` field,
+`markPayoutCompleted`/`listAll` repository methods); `src/lib/payments/
+{drizzlePaymentAttemptRepository,drizzlePaymentWebhookEventRepository,getPaymentWebhookService,
+paymentWebhookService,testFakes}.ts` (ledger wiring + matching repository method additions);
+`drizzle/migrations/meta/_journal.json`; `docs/SPRINT_CONTROL.md`.
+
+### Tests
+
+447/447 passing across 64 files (up from 394/59 at the end of Sprint 9 — 53 net new: 19 in
+`ledgerService.test.ts`, 8 in `balanceService.test.ts`, 14 in `reconciliationService.test.ts`, 7 in
+`paymentLedgerIntegration.test.ts`, 5 in `ledgerAdminService.test.ts`). Covers every one of the
+sprint's named required-test categories: balance invariant, duplicate event, reversal, refund,
+processor fee, payout, reconciliation mismatch — plus this session's added requirements: duplicate-post
+prevention, payment success/failed-payment posting behavior, balance reconstruction (including
+order-independence), reconciliation success/rerun-idempotency, unauthorized ledger access, admin
+authorization (Platform Admin vs. Owner), immutable-agreement-terms protection, and integer-money
+invariants. Sprints 1–9's own tests all still pass unchanged, including every Sprint 9
+payment/webhook test (whose fixtures never set an `agreementId` — exercising this sprint's
+fail-soft ledger-posting path for free).
+
+### Verification commands run
+
+`npx tsc --noEmit` — pass, no errors. `npx eslint .` — pass, 0 errors (6 pre-existing-pattern
+warnings, unchanged from Sprint 9). `npx vitest run` — pass, 447/447 across 64 files. `npx next build`
+— pass; all 5 new `/api/admin/ledger/*` routes generated correctly, no change to any existing
+route's classification. `npx drizzle-kit check` — pass, migration history internally consistent, no
+drift. RLS + `REVOKE ALL ... FROM anon, authenticated` confirmed present on all four new tables
+(`ledger_account`, `ledger_journal_entry`, `ledger_posting`, `reconciliation_exception`).
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction, commit/push/PR is deferred until
+after Product Owner review of this status entry. `git status` at the time of this report: modified
+`docs/SPRINT_CONTROL.md`, `drizzle/migrations/meta/_journal.json`, `src/db/schema/{enums,index,
+payment}.ts`, `src/lib/payments/{drizzlePaymentAttemptRepository,drizzlePaymentWebhookEventRepository,
+getPaymentWebhookService,paymentService,paymentWebhookService,testFakes}.ts`; untracked
+`drizzle/migrations/0011_slippery_payback.sql`, `drizzle/migrations/meta/0011_snapshot.json`,
+`src/app/api/admin/ledger/`, `src/db/schema/ledger.ts`, `src/lib/ledger/`. No file outside this list
+was touched. The only prior-sprint files with behavior changes are Sprint 9's payment/webhook files,
+and only additively — every existing Sprint 9 test still passes unchanged, and Sprint 3's
+verification-service files (touched in Sprint 9, not this sprint) were not touched again here.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

@@ -128,9 +128,109 @@ execution.
 | 7 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_07_Evidence_Documents_Witnesses.md` (evidence upload/metadata/uploader/timestamp/agreement-association, shared/private classification, witness-sharing, dispute flag, withdrawal state, malware/file-validation abstraction, secure signed-URL access, mandatory post-signing labeling, and the full witness model — max two, verified, view-only, version-bound attestation) implemented on branch `sprint-07-evidence-documents-witnesses`. **This branch was stale when this session started** — it had been created before Sprint 6A was merged and had zero unique commits of its own, so it was fast-forwarded to `master`'s current tip (`4356d24`, the Sprint 6A merge commit) before any Sprint 7 work began; confirmed safe via `git merge-base --is-ancestor` (no divergence, no data loss, branch not yet pushed to origin). Local `lint`/`typecheck`/`test`/`build` all pass (326/326 tests, up from 303 at the end of Sprint 6A). `drizzle-kit check` confirms the new migration (`0008_steep_mysterio.sql`) is internally consistent; RLS + `REVOKE` confirmed present on both new tables. Sprints 1–6A's own tests all still pass unchanged. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. No payment-processing functionality was added (not required by this sprint). See "Sprint 7 implementation notes" below for design choices and scope boundaries. |
 | 8 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_08_Workflows_CSVImports.md` (B2B workflow completion requiring both parties to be verified business profiles, invoice/PO/contract reference tracking, a real-data business financial dashboard, and the full CSV import pipeline — UPLOAD/VALIDATE/PREVIEW/DUPLICATE CHECK/ERROR REPORT/CREATE DRAFTS — with no bulk activation) implemented on branch `sprint-08-workflows-csv-imports`, branched from `master`'s tip (`261ec0e`, the Sprint 7 merge commit; this branch was already up to date, no fast-forward needed this time). Local `lint`/`typecheck`/`test`/`build` all pass (343/343 tests, up from 326 at the end of Sprint 7). `drizzle-kit check` confirms the new migration (`0009_flat_barracuda.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all three new tables. Sprints 1–7's own tests all still pass unchanged, including Sprint 3's `/api/dashboard/business` route test, which was deliberately never touched. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 8 implementation notes" below for design choices and scope boundaries. |
 | 9 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md` (provider-independent payment abstraction with sandbox adapter, the shared `isFullyVerified` payer-and-recipient gate enforced once in `PaymentService.createPayment`, outbound idempotency-key dedupe, inbound webhook signature verification/replay protection/idempotent processing, and the separate KYC/KYB provider abstraction wired to Sprint 3's `FULL_PENDING → FULL_VERIFIED/FULL_REJECTED` transition) implemented on branch `sprint-09-payment-provider-abstraction`, branched from `master`'s tip (`b5f68ed`, the Sprint 8 merge commit; already up to date, no fast-forward needed). Local `lint`/`typecheck`/`test`/`build` all pass (394/394 tests, up from 343 at the end of Sprint 8). `drizzle-kit check` confirms the new migration (`0010_great_human_fly.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all three new tables (`payment_attempt`, `payment_webhook_event`, `kyc_webhook_event`). Sprints 1–8's own tests all still pass unchanged, including Sprint 3's `isFullyVerified`/`getVerificationState`/`submitFullVerificationRequest`/`recordManualVerificationDecision` bodies, which are byte-identical to before this sprint. **No production/live payment or KYC provider was integrated or called — sandbox/mock only, per "NO PRODUCTION MONEY."** **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 9 implementation notes" below for design choices, provider recommendations, and scope boundaries. |
-| 10–20 | Not started. Sprint plan documents for 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+| 10 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_10_InternalFinancialLedger.md` (double-entry-style shadow ledger with a five-account chart matching `docs/PAYMENT_ARCHITECTURE.md` §14, balanced/immutable/append-only journal entries idempotent per `(payment_attempt_id, entry_type)`, reconciliation against provider records covering all 10 required exception types, deterministic balance reconstruction from ledger history alone, and Platform Admin/Owner-gated administrative visibility with a reason-required, append-only correction path) implemented on branch `sprint-10-ledger-reconciliation`, branched from `master`'s tip (`d64bcae`, the Sprint 9 merge commit; already up to date, no fast-forward needed). Local `lint`/`typecheck`/`test`/`build` all pass (447/447 tests, up from 394 at the end of Sprint 9). `drizzle-kit check` confirms the new migration (`0011_slippery_payback.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all four new tables (`ledger_account`, `ledger_journal_entry`, `ledger_posting`, `reconciliation_exception`). Sprints 1–9's own tests all still pass unchanged, including every Sprint 9 payment/webhook test — the ledger wiring added to `PaymentWebhookService` is additive and fails soft (logs, never throws) when a payment has no `agreementId`, matching Sprint 9's own test fixtures that never set one. **No production/live money movement — this sprint posts to an internal shadow ledger only, never a real processor, per "Do not enable production transactions."** **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 10 implementation notes" below for design choices, scope boundaries, and known limitations. |
+| 11–20 | Not started. Sprint plan documents for 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
 
-### Sprint 9 implementation notes
+### Sprint 10 implementation notes
+
+**No "debtor_obligation" ledger account exists — original principal is read directly from Sprint 5's
+`agreement_version.terms.currentPrincipalMinorUnits`, never duplicated into the ledger.** This is
+the concrete mechanism behind requirement #7 ("ledger activity must never rewrite agreement
+principal, terms"): `BalanceService`'s `AgreementTermsReader` interface has exactly one method,
+`getPrincipal` — there is no write method for `LedgerService` or `BalanceService` to call even by
+mistake. `balanceService.test.ts`'s "never mutates the underlying agreement principal it reads" test
+proves this behaviorally, not just structurally.
+
+**The chart of accounts matches `docs/PAYMENT_ARCHITECTURE.md` §14 exactly, minus
+`payout_in_transit`.** Payout is modeled as a single direct posting
+(`creditor_proceeds_payable → processor_clearing`) rather than a two-step in-transit intermediate —
+this sprint's payment_attempt model has no separate payout-attempt row to track a "submitted but not
+yet confirmed" payout state, so the two-step model would have nothing real to represent. Every
+account is scoped to exactly one `(account_type, agreement_id)` pair (`ledger_account`'s unique
+index) — there is no platform-wide singleton account, so every balance is directly, deterministically
+traceable to its agreement without any additional join.
+
+**`refund` (voluntary/dispute-resolved) and `reversal` (bank/network-initiated return) are the same
+accounting operation with different labels, auto-selecting pre-payout (full mirror of the clear
+entry) or post-payout (`creditor_clawback_exposure`-only) shape based on whether a `payout` entry
+already exists** — mirrors `docs/PAYMENT_ARCHITECTURE.md` §10's "all three [return, chargeback,
+refund] converge on the same ledger operation." `dispute_adjustment` uses the identical shape for a
+dispute that has been opened but not yet resolved. The post-payout shape claws back only the
+creditor's net proceeds, not platform/processor fees already recognized — `docs/PAYMENT_ARCHITECTURE.md`
+§14's own documented simplification, carried forward unchanged.
+
+**Idempotency is enforced twice, independently.** `LedgerJournalEntryRepository`'s
+`(payment_attempt_id, entry_type)` unique index means a payment can have at most one
+`payment_cleared`, one `refund`, one `reversal`, one `payout`, one `dispute_adjustment`, and one
+`admin_adjustment` — combined with Sprint 9's own webhook-event-id replay protection, a redelivered
+webhook cannot double-post even if it somehow bypassed the event-level dedupe.
+`paymentLedgerIntegration.test.ts`'s "never double-credits or double-debits" test delivers the same
+signed webhook twice and asserts exactly one `payment_cleared` entry results.
+
+**A ledger-posting failure never fails the webhook or rolls back the payment-status update that
+already happened.** The most common cause in this sprint's own test suite: a payment created with no
+`agreementId` (Sprint 9 made that field optional; Sprint 10's ledger requires one). This is caught,
+logged (`payment_webhook_ledger_posting_failed` / `_skip_no_agreement`), and left for
+`ReconciliationService`'s `internal_posting_failure` detector to surface as an explicit, visible
+exception — proven end-to-end in `paymentLedgerIntegration.test.ts`'s last test, which creates
+exactly this gap and then reconciles it into a real exception record, rather than treating the gap
+as untestable.
+
+**Reconciliation implements real, independent detection logic for all 10 of the sprint's required
+exception types**, not a partial subset with placeholder vocabulary — see `reconciliationService.ts`'s
+per-check doc comments and `reconciliationService.test.ts`'s one test per type.
+`missing_provider_transaction` (we never captured a provider reference), `unmatched_provider_transaction`
+(the provider itself doesn't recognize our reference — checked live against `PaymentProvider.retrievePayment`),
+and `provider_event_without_internal_state` (a webhook references a payment we have no record of at
+all) are three genuinely distinct conditions, not the same check under three names.
+`duplicate_transaction` is a defensive, whole-table-scan check (`reconcileAll`) — the DB unique
+constraint already prevents this via the normal application path, so it is only reachable in tests
+by constructing data directly through the repository, which is exactly how it's tested.
+
+**Reconciliation re-run idempotency is an application-level check
+(`ReconciliationExceptionRepository.findOpen` before every insert), not a DB partial-unique-index** —
+`payment_attempt_id` and `provider_event_id` are each independently nullable depending on exception
+type, and this project hasn't otherwise depended on Drizzle 0.45's partial-index support elsewhere,
+so this sprint didn't introduce that dependency for what is an administrative/batch operation, not a
+concurrent-request hot path. Documented as an accepted, narrow race window in
+`reconciliationService.ts`'s doc comment.
+
+**Balance reconstruction treats a payment as "not paid toward the debtor's obligation" once *any*
+reversal-type entry exists for it, regardless of pre- or post-payout shape** — `docs/PAYMENT_ARCHITECTURE.md`
+§7's "reduce the agreement's recorded paid balance" applies to a late return whether or not payout
+already happened; only *who bears the clawback exposure* differs (the ledger's own accounts), not
+whether the debtor's payment still counts toward their obligation. `balanceService.test.ts`'s
+"excludes a reversed payment... whether reversed pre- or post-payout" test proves both branches
+produce the same debtor-facing result.
+
+**Administrative corrections (`admin_adjustment`) are Platform Owner-only, not Platform Admin** —
+stricter than this sprint's own read-only visibility (`platform_admin`+), mirroring Sprint 6A's own
+precedent of gating money/role-affecting actions to Owner while read access is broader. Always
+balanced against a dedicated `admin_adjustment_suspense` account (never fabricates a fake
+counterparty movement), always requires a non-empty reason, and is capped at one adjustment per
+payment in this sprint — `ledgerService.ts`'s doc comment explains why multiple sequential
+corrections per payment were left out of scope rather than solved with a partial-unique-index.
+`LedgerAdminService` is a new, separate file — Sprint 6A's `adminService.ts` was not touched at all;
+only its already-audited `isAdminRole`/`isOwnerRole` helpers are reused.
+
+**Five new admin routes, no new UI**: `GET /api/admin/ledger/agreement`,
+`GET /api/admin/ledger/exceptions`, `POST /api/admin/ledger/exceptions/resolve`,
+`POST /api/admin/ledger/reconcile` (all Platform Admin+), and `POST /api/admin/ledger/adjustment`
+(Platform Owner only). None of them "edit" or "delete" a posted entry — proven structurally in
+`ledgerAdminService.test.ts`.
+
+**Known limitation: only full refunds/reversals are modeled, not partial ones.** Sprint 9's
+`PaymentService.refundPayment` only ever refunds a payment's full amount, so this sprint's ledger
+reversal shapes assume the same; `requirement #11`'s "partially refunded" state is not implemented.
+A future sprint adding partial-refund support to `PaymentService` would need a corresponding
+partial-amount reversal posting here.
+
+**Known limitation: processor fee and platform fee amounts are caller-supplied, not
+processor-derived.** Sprint 9's sandbox provider has no real fee-reporting capability (no live
+processor is integrated); `PaymentWebhookService` reads `processorFeeMinorUnits`/
+`platformFeeMinorUnits` directly from the webhook payload if present, defaulting to 0. A real
+processor adapter (Sprint 11/12) would source these from the provider's own settlement/balance-transaction
+report instead.
 
 **No live processor or KYC/KYB provider account exists in this environment; every operation is a
 deterministic local simulation.** `SandboxPaymentProvider`/`SandboxKycProvider`

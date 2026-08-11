@@ -34,6 +34,10 @@ export const paymentAttempt = pgTable(
     providerName: text("provider_name").notNull(),
     providerPaymentId: text("provider_payment_id"),
     failureReason: text("failure_reason"),
+    // Sprint 10 (docs/sprints/SPRINT_10_InternalFinancialLedger.md) addition: set once, when the
+    // ledger's "payout" entry posts (see ledgerService.ts) — never written any other way. Nullable;
+    // null means no payout has occurred yet, regardless of payment status.
+    payoutCompletedAt: timestamp("payout_completed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

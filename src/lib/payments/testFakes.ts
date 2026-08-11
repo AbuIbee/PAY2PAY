@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
+import { createTestLedgerService } from "@/lib/ledger/testFakes";
 import { createTestVerificationService } from "@/lib/profiles/testFakes";
 import { PaymentService } from "./paymentService";
 import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus } from "./paymentService";
@@ -34,6 +35,7 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
       status: "pending",
       providerPaymentId: null,
       failureReason: null,
+      payoutCompletedAt: null,
       createdAt: now,
       updatedAt: now,
       ...input,
@@ -66,6 +68,24 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
 
   async findByProviderPaymentId(providerPaymentId: string): Promise<PaymentAttemptRecord | null> {
     return [...this.byId.values()].find((r) => r.providerPaymentId === providerPaymentId) ?? null;
+  }
+
+  async markPayoutCompleted(id: string, payoutCompletedAt: Date): Promise<PaymentAttemptRecord> {
+    const record = this.byId.get(id);
+    if (!record) throw new Error("payment_attempt not found");
+    record.payoutCompletedAt = payoutCompletedAt;
+    record.updatedAt = new Date();
+    return record;
+  }
+
+  async listAll(): Promise<PaymentAttemptRecord[]> {
+    return [...this.byId.values()];
+  }
+
+  /** Test-only helper (not part of PaymentAttemptRepository) — backdates a record for staleness tests. */
+  setCreatedAt(id: string, createdAt: Date): void {
+    const record = this.byId.get(id);
+    if (record) record.createdAt = createdAt;
   }
 }
 
@@ -129,17 +149,30 @@ export class InMemoryPaymentWebhookEventRepository implements PaymentWebhookEven
     const record = this.byId.get(id);
     if (record) record.processedAt = new Date();
   }
+
+  async listAll(): Promise<PaymentWebhookEventRecord[]> {
+    return [...this.byId.values()];
+  }
 }
 
-/** Builds a full PaymentWebhookService test context sharing the same provider/payments repo as an existing PaymentService context (pass one in to correlate webhook events with payments already created through it). */
-export function createTestPaymentWebhookService(paymentCtx: ReturnType<typeof createTestPaymentService>) {
+/**
+ * Builds a full PaymentWebhookService test context sharing the same provider/payments repo as an
+ * existing PaymentService context (pass one in to correlate webhook events with payments already
+ * created through it). Sprint 10: also wires a LedgerService test context — pass one in (e.g. to
+ * inspect posted entries afterward) or a fresh one is created.
+ */
+export function createTestPaymentWebhookService(
+  paymentCtx: ReturnType<typeof createTestPaymentService>,
+  ledgerCtx: ReturnType<typeof createTestLedgerService> = createTestLedgerService(),
+) {
   const events = new InMemoryPaymentWebhookEventRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForPayments();
   const paymentWebhookService = new PaymentWebhookService({
     provider: paymentCtx.provider,
     events,
     payments: paymentCtx.payments,
+    ledger: ledgerCtx.ledgerService,
     audit: new AuditService(auditRepo),
   });
-  return { events, auditRepo, paymentWebhookService };
+  return { events, auditRepo, ledgerCtx, paymentWebhookService };
 }

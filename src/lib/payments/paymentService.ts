@@ -5,7 +5,7 @@ import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificatio
 import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { PaymentProvider, ProfileRef } from "./paymentProvider";
 
-export type PaymentAttemptStatus = "pending" | "succeeded" | "failed" | "canceled" | "refunded" | "disputed";
+export type PaymentAttemptStatus = "pending" | "succeeded" | "failed" | "canceled" | "refunded" | "disputed" | "reversed";
 
 export interface PaymentAttemptRecord {
   id: string;
@@ -21,6 +21,8 @@ export interface PaymentAttemptRecord {
   providerName: string;
   providerPaymentId: string | null;
   failureReason: string | null;
+  /** Sprint 10: set once, when the ledger's "payout" entry posts — see markPayoutCompleted. */
+  payoutCompletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -52,6 +54,10 @@ export interface PaymentAttemptRepository {
   findById(id: string): Promise<PaymentAttemptRecord | null>;
   findByIdempotencyKey(idempotencyKey: string): Promise<PaymentAttemptRecord | null>;
   findByProviderPaymentId(providerPaymentId: string): Promise<PaymentAttemptRecord | null>;
+  /** Sprint 10: recorded once, when LedgerService.postPayout succeeds — never any other way. */
+  markPayoutCompleted(id: string, payoutCompletedAt: Date): Promise<PaymentAttemptRecord>;
+  /** Sprint 10: batch reconciliation's full-scan entry point (ReconciliationService.reconcileAll) — a periodic/administrative operation, not a per-request hot path. */
+  listAll(): Promise<PaymentAttemptRecord[]>;
 }
 
 /**
