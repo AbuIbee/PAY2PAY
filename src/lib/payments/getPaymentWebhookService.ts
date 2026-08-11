@@ -1,6 +1,7 @@
 import "server-only";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
+import { getLedgerService } from "@/lib/ledger/getLedgerService";
 import { DrizzlePaymentAttemptRepository } from "./drizzlePaymentAttemptRepository";
 import { DrizzlePaymentWebhookEventRepository } from "./drizzlePaymentWebhookEventRepository";
 import { getPaymentProvider } from "./getPaymentProvider";
@@ -14,6 +15,7 @@ export function getPaymentWebhookService(): PaymentWebhookService {
       provider: getPaymentProvider(),
       events: new DrizzlePaymentWebhookEventRepository(),
       payments: new DrizzlePaymentAttemptRepository(),
+      ledger: getLedgerService(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
     });
   }

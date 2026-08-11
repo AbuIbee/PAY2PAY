@@ -22,6 +22,7 @@ function toRecord(row: Row): PaymentAttemptRecord {
     providerName: row.providerName,
     providerPaymentId: row.providerPaymentId,
     failureReason: row.failureReason,
+    payoutCompletedAt: row.payoutCompletedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -76,5 +77,22 @@ export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository
     const db = getDb();
     const rows = await db.select().from(paymentAttempt).where(eq(paymentAttempt.providerPaymentId, providerPaymentId)).limit(1);
     return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  async markPayoutCompleted(id: string, payoutCompletedAt: Date): Promise<PaymentAttemptRecord> {
+    const db = getDb();
+    const [row] = await db
+      .update(paymentAttempt)
+      .set({ payoutCompletedAt, updatedAt: new Date() })
+      .where(eq(paymentAttempt.id, id))
+      .returning();
+    if (!row) throw new ConfigurationError("payment_attempt markPayoutCompleted found no row");
+    return toRecord(row);
+  }
+
+  async listAll(): Promise<PaymentAttemptRecord[]> {
+    const db = getDb();
+    const rows = await db.select().from(paymentAttempt);
+    return rows.map(toRecord);
   }
 }

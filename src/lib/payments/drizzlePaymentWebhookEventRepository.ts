@@ -48,4 +48,10 @@ export class DrizzlePaymentWebhookEventRepository implements PaymentWebhookEvent
     const db = getDb();
     await db.update(paymentWebhookEvent).set({ processedAt: new Date() }).where(eq(paymentWebhookEvent.id, id));
   }
+
+  async listAll(): Promise<PaymentWebhookEventRecord[]> {
+    const db = getDb();
+    const rows = await db.select().from(paymentWebhookEvent);
+    return rows.map(toRecord);
+  }
 }
