@@ -74,9 +74,20 @@ export class EnvironmentValidationError extends Error {
  * {@link EnvironmentValidationError} when a required value is missing or
  * malformed — never falls back to a silently-invalid default for required
  * fields.
+ *
+ * If `DATABASE_URL` is unset but `POSTGRES_URL` is present, `POSTGRES_URL` is
+ * used in its place. Vercel's native Postgres storage integration provisions
+ * `POSTGRES_URL` (not `DATABASE_URL`) into the project's environment
+ * variables, so this lets that integration work without requiring a
+ * hand-added duplicate `DATABASE_URL` variable in the Vercel dashboard.
+ * `DATABASE_URL` still wins when both are set.
  */
 export function parseServerEnv(raw: Record<string, string | undefined>): ServerEnv {
-  const result = serverEnvSchema.safeParse(raw);
+  const normalized = {
+    ...raw,
+    DATABASE_URL: raw.DATABASE_URL ?? raw.POSTGRES_URL,
+  };
+  const result = serverEnvSchema.safeParse(normalized);
   if (!result.success) {
     throw new EnvironmentValidationError(result.error.issues);
   }

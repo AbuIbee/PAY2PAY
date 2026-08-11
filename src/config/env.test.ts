@@ -69,6 +69,23 @@ describe("parseServerEnv", () => {
     ).toThrow(EnvironmentValidationError);
   });
 
+  it("falls back to POSTGRES_URL when DATABASE_URL is unset", () => {
+    const withoutDatabaseUrl = omit(validEnv, "DATABASE_URL");
+    const env = parseServerEnv({
+      ...withoutDatabaseUrl,
+      POSTGRES_URL: "postgres://user:pass@localhost:5432/vercel-postgres",
+    });
+    expect(env.DATABASE_URL).toBe("postgres://user:pass@localhost:5432/vercel-postgres");
+  });
+
+  it("prefers DATABASE_URL over POSTGRES_URL when both are set", () => {
+    const env = parseServerEnv({
+      ...validEnv,
+      POSTGRES_URL: "postgres://user:pass@localhost:5432/should-be-ignored",
+    });
+    expect(env.DATABASE_URL).toBe(validEnv.DATABASE_URL);
+  });
+
   it("rejects an empty environment entirely", () => {
     expect(() => parseServerEnv({})).toThrow(EnvironmentValidationError);
   });

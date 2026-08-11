@@ -26,6 +26,7 @@ was added), not an oversight; flagged here for explicit visibility since the spr
 |---|---|---|---|
 | `APP_ENV` | Server-only | local dev, preview, staging, production (optional — defaults to `development`) | Distinguishes staging from production at the application-config level, since Next.js's own `NODE_ENV` only knows development/test/production. |
 | `DATABASE_URL` | Server-only, **secret** (contains credentials) | local dev, preview, staging, production — required by any request that touches the database, including Sprint 1's `POST /api/early-access` | Postgres connection string. Points at a local Postgres in development and at the project's Supabase Postgres connection string in preview/staging/production. Never required for the landing page's own static rendering — only when a database-backed route (like early-access submission) actually runs, per `src/db/client.ts`'s lazy-connection pattern. |
+| `POSTGRES_URL` | Server-only, **secret** (contains credentials), optional | any environment, only as a fallback | Fallback for `DATABASE_URL`, consulted by `parseServerEnv` (`src/config/env.ts`) and `drizzle.config.ts` only when `DATABASE_URL` is unset — `DATABASE_URL` always wins if both are present. Exists because Vercel's native Postgres storage integration provisions `POSTGRES_URL` (not `DATABASE_URL`) automatically when attached to a project. Not needed, and should be left unset, for the Supabase-hosted setup described above. |
 | `AUDIT_HASH_SECRET` | Server-only, **secret** | staging, production (required wherever audit-logged code paths run); optional in preview/local dev if those routes aren't exercised | Pepper for the audit hash chain (`src/lib/audit/hash.ts`). Not used by Sprint 1's early-access feature. |
 | `AUTH_PASSWORD_PEPPER` | Server-only, **secret** | staging, production (required wherever auth routes run); optional in preview/local dev if those routes aren't exercised | Pepper mixed into password hashes (`src/lib/auth/password.ts`). Not used by Sprint 1's early-access feature. |
 | `NEXT_PUBLIC_APP_NAME` | Client-safe | local dev, preview, staging, production (optional — defaults to `PAY2PAY`) | Inlined into the browser bundle at build time. Contains no secret. |
@@ -38,7 +39,10 @@ No new environment variable was introduced by Sprint 1 — the early-access feat
 ## Vercel configuration checklist (Sprint 1 acceptance)
 
 - `DATABASE_URL`, `AUDIT_HASH_SECRET`, `AUTH_PASSWORD_PEPPER` must be set as **server-only** Vercel
-  environment variables (never exposed with a `NEXT_PUBLIC_` prefix).
+  environment variables (never exposed with a `NEXT_PUBLIC_` prefix). If the project instead uses
+  Vercel's native Postgres storage integration, the auto-provisioned `POSTGRES_URL` is also
+  server-only and satisfies this requirement in place of a hand-set `DATABASE_URL` — see the
+  `POSTGRES_URL` row above.
 - `NEXT_PUBLIC_APP_NAME` / `NEXT_PUBLIC_APP_ENV` may be set at any scope; they are safe to appear in
   the client bundle by design.
 - No variable in this table is a "production financial credential" (payment-processor API key,
