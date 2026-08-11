@@ -235,12 +235,37 @@ export const paymentAttemptStatusEnum = pgEnum("payment_attempt_status", [
   "canceled",
   "refunded",
   "disputed",
-  // Sprint 10 (docs/sprints/SPRINT_10_InternalFinancialLedger.md) addition: a bank/network-initiated
-  // return (e.g. late ACH return), distinct from "refunded" (voluntary/dispute-resolved) — see
-  // ledger.ts's `ledger_entry_type` doc comment for the same refund/reversal distinction mirrored
-  // at the ledger-posting level.
+  // Sprint 10 (docs/sprints/SPRINT_10_InternalFinancialLedger.md): reserved for a card/network
+  // chargeback ("Reversed" in docs/PAYMENT_STATE_MACHINE.md §1 — explicitly *not* an ACH concept
+  // per that doc's method-nuance table). Not exercised by Sprint 11 (ACH); Sprint 12 (debit card)
+  // owns this transition. Sprint 10 originally mislabeled this value's doc comment as covering late
+  // ACH returns — corrected in Sprint 11 once the canonical state machine's Returned/Reversed
+  // distinction was cross-checked; see "returned" below for the value ACH actually uses.
   "reversed",
+  // Sprint 11 (docs/sprints/SPRINT_11_ACH_Sandbox.md) additions — the fuller granular lifecycle
+  // docs/PAYMENT_STATE_MACHINE.md §1 models (Scheduled → Submitted → Processing → Cleared, plus the
+  // ACH-specific late-return branch). "succeeded" continues to mean "Cleared" (unchanged, Sprint
+  // 9); "pending" remains a valid catch-all for payment methods/tests that don't need this
+  // granularity (Sprint 9's sandbox default).
+  "scheduled",
+  "submitted",
+  "processing",
+  // The correctly-named counterpart to "reversed" above — a late ACH return
+  // (docs/PAYMENT_STATE_MACHINE.md §1: "Cleared/PayoutPending/PaidOut → Returned: late ACH
+  // return"). The `payment.returned` webhook event (Sprint 10) now sets this instead of the
+  // mislabeled "reversed".
+  "returned",
 ]);
+
+/**
+ * Sprint 11 (docs/sprints/SPRINT_11_ACH_Sandbox.md): a borrower's mandate/authorization to debit
+ * their bank account is either currently in force ("active") or not ("revoked" — by the borrower,
+ * or superseded by a bank-change re-authorization; "expired" reserved for a future
+ * provider-driven expiry signal, never set by this sprint's code). Exactly one of these states at
+ * a time per mandate row — mandates are never deleted (audit/immutability, matching every other
+ * table in this schema), only superseded by a new row.
+ */
+export const achMandateStatusEnum = pgEnum("ach_mandate_status", ["active", "revoked", "expired"]);
 
 /**
  * Sprint 10 (docs/sprints/SPRINT_10_InternalFinancialLedger.md): the shadow-ledger chart of

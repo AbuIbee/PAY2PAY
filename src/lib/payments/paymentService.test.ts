@@ -144,4 +144,46 @@ describe("PaymentService", () => {
       await expect(ctx.paymentService.refundPayment(record.id, RECIPIENT_USER_ID)).rejects.toThrow(ValidationError);
     });
   });
+
+  describe("schedulePayment / submitPending (Sprint 11 two-phase flow)", () => {
+    beforeEach(async () => {
+      await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+      await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+    });
+
+    it("schedulePayment creates a 'scheduled' record without ever calling the provider", async () => {
+      const record = await ctx.paymentService.schedulePayment(baseInput({ idempotencyKey: "sched-1" }));
+      expect(record.status).toBe("scheduled");
+      expect(record.providerPaymentId).toBeNull();
+    });
+
+    it("schedulePayment still runs the full idempotency/ownership/verification gate", async () => {
+      await expect(
+        ctx.paymentService.schedulePayment(baseInput({ idempotencyKey: "sched-2", actingUserId: OTHER_USER_ID })),
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it("submitPending transitions scheduled -> submitted -> processing and calls the provider", async () => {
+      const scheduled = await ctx.paymentService.schedulePayment(baseInput({ idempotencyKey: "sched-3" }));
+      const submitted = await ctx.paymentService.submitPending(scheduled.id, PAYER_USER_ID);
+      expect(submitted.status).toBe("processing");
+      expect(submitted.providerPaymentId).toBeTruthy();
+    });
+
+    it("submitPending rejects a payment that is not currently scheduled", async () => {
+      const record = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "sched-4" }));
+      await expect(ctx.paymentService.submitPending(record.id, PAYER_USER_ID)).rejects.toThrow(ValidationError);
+    });
+
+    it("cancelPayment cancels a scheduled payment locally, without calling the provider", async () => {
+      const scheduled = await ctx.paymentService.schedulePayment(baseInput({ idempotencyKey: "sched-5" }));
+      const originalCancel = ctx.provider.cancelPayment.bind(ctx.provider);
+      ctx.provider.cancelPayment = async () => {
+        throw new Error("must not be called for a scheduled (never-submitted) payment");
+      };
+      const canceled = await ctx.paymentService.cancelPayment(scheduled.id, PAYER_USER_ID);
+      expect(canceled.status).toBe("canceled");
+      ctx.provider.cancelPayment = originalCancel;
+    });
+  });
 });

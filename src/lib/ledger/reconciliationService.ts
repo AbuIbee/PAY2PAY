@@ -88,8 +88,10 @@ export class ReconciliationService {
 
     const found: ReconciliationExceptionRecord[] = [];
 
-    // missing_provider_transaction: something happened (not pending) but we never captured a provider reference.
-    if (payment.status !== "pending" && !payment.providerPaymentId) {
+    // missing_provider_transaction: something was submitted (not merely pending/scheduled) but we
+    // never captured a provider reference. "scheduled" (Sprint 11) is deliberately excluded — a
+    // scheduled-but-not-yet-submitted ACH payment legitimately has no provider reference yet.
+    if (!["pending", "scheduled"].includes(payment.status) && !payment.providerPaymentId) {
       found.push(await this.recordException("missing_provider_transaction", payment.id, null, { status: payment.status }));
     }
 
@@ -162,7 +164,7 @@ export class ReconciliationService {
     // reversal_refund_mismatch: a reversing ledger entry exists but the payment's own status was never updated to match.
     const reversalChecks: { entryType: "refund" | "reversal" | "dispute_adjustment"; expectedStatus: PaymentAttemptRecord["status"] }[] = [
       { entryType: "refund", expectedStatus: "refunded" },
-      { entryType: "reversal", expectedStatus: "reversed" },
+      { entryType: "reversal", expectedStatus: "returned" },
       { entryType: "dispute_adjustment", expectedStatus: "disputed" },
     ];
     for (const check of reversalChecks) {

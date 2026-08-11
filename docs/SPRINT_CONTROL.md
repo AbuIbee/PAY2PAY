@@ -129,7 +129,88 @@ execution.
 | 8 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_08_Workflows_CSVImports.md` (B2B workflow completion requiring both parties to be verified business profiles, invoice/PO/contract reference tracking, a real-data business financial dashboard, and the full CSV import pipeline — UPLOAD/VALIDATE/PREVIEW/DUPLICATE CHECK/ERROR REPORT/CREATE DRAFTS — with no bulk activation) implemented on branch `sprint-08-workflows-csv-imports`, branched from `master`'s tip (`261ec0e`, the Sprint 7 merge commit; this branch was already up to date, no fast-forward needed this time). Local `lint`/`typecheck`/`test`/`build` all pass (343/343 tests, up from 326 at the end of Sprint 7). `drizzle-kit check` confirms the new migration (`0009_flat_barracuda.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all three new tables. Sprints 1–7's own tests all still pass unchanged, including Sprint 3's `/api/dashboard/business` route test, which was deliberately never touched. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 8 implementation notes" below for design choices and scope boundaries. |
 | 9 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md` (provider-independent payment abstraction with sandbox adapter, the shared `isFullyVerified` payer-and-recipient gate enforced once in `PaymentService.createPayment`, outbound idempotency-key dedupe, inbound webhook signature verification/replay protection/idempotent processing, and the separate KYC/KYB provider abstraction wired to Sprint 3's `FULL_PENDING → FULL_VERIFIED/FULL_REJECTED` transition) implemented on branch `sprint-09-payment-provider-abstraction`, branched from `master`'s tip (`b5f68ed`, the Sprint 8 merge commit; already up to date, no fast-forward needed). Local `lint`/`typecheck`/`test`/`build` all pass (394/394 tests, up from 343 at the end of Sprint 8). `drizzle-kit check` confirms the new migration (`0010_great_human_fly.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all three new tables (`payment_attempt`, `payment_webhook_event`, `kyc_webhook_event`). Sprints 1–8's own tests all still pass unchanged, including Sprint 3's `isFullyVerified`/`getVerificationState`/`submitFullVerificationRequest`/`recordManualVerificationDecision` bodies, which are byte-identical to before this sprint. **No production/live payment or KYC provider was integrated or called — sandbox/mock only, per "NO PRODUCTION MONEY."** **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 9 implementation notes" below for design choices, provider recommendations, and scope boundaries. |
 | 10 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_10_InternalFinancialLedger.md` (double-entry-style shadow ledger with a five-account chart matching `docs/PAYMENT_ARCHITECTURE.md` §14, balanced/immutable/append-only journal entries idempotent per `(payment_attempt_id, entry_type)`, reconciliation against provider records covering all 10 required exception types, deterministic balance reconstruction from ledger history alone, and Platform Admin/Owner-gated administrative visibility with a reason-required, append-only correction path) implemented on branch `sprint-10-ledger-reconciliation`, branched from `master`'s tip (`d64bcae`, the Sprint 9 merge commit; already up to date, no fast-forward needed). Local `lint`/`typecheck`/`test`/`build` all pass (447/447 tests, up from 394 at the end of Sprint 9). `drizzle-kit check` confirms the new migration (`0011_slippery_payback.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all four new tables (`ledger_account`, `ledger_journal_entry`, `ledger_posting`, `reconciliation_exception`). Sprints 1–9's own tests all still pass unchanged, including every Sprint 9 payment/webhook test — the ledger wiring added to `PaymentWebhookService` is additive and fails soft (logs, never throws) when a payment has no `agreementId`, matching Sprint 9's own test fixtures that never set one. **No production/live money movement — this sprint posts to an internal shadow ledger only, never a real processor, per "Do not enable production transactions."** **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 10 implementation notes" below for design choices, scope boundaries, and known limitations. |
-| 11–20 | Not started. Sprint plan documents for 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+| 11 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_11_ACH_Sandbox.md` (borrower mandate/authorization with revocation and a bank-change hook, first/recurring/manual ACH payment scheduling and submission, the granular Scheduled→Submitted→Processing lifecycle cross-checked against `docs/PAYMENT_STATE_MACHINE.md` §1, duplicate-debit prevention, and "payout only after Cleared" reusing Sprint 10's existing guard) implemented on branch `sprint-11-ach-sandbox`, branched from `master`'s tip (`c902790`, the Sprint 10 merge commit). Local `lint`/`typecheck`/`test`/`build` all pass (473/473 tests, up from 447 at the end of Sprint 10). `drizzle-kit check` confirms the new migration (`0012_crazy_kylun.sql`) is internally consistent — purely additive (one new enum, four `ALTER TYPE ADD VALUE`s, one new table, two new nullable columns); RLS + `REVOKE` confirmed present on the one new table (`ach_mandate`). Sprints 1–10's own tests all still pass unchanged. **No production/live money movement — sandbox only, per "Implement ACH payment behavior in sandbox/test mode."** **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. See "Sprint 11 implementation notes" below, including a correction to Sprint 10's `reversed`/`returned` status naming. |
+| 12–20 | Not started. Sprint plan documents for 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 11 implementation notes
+
+**Cross-checking the sprint's terse state list against `docs/PAYMENT_STATE_MACHINE.md` (the canonical,
+detailed reference) surfaced and fixed a real Sprint 10 naming error.** Sprint 10 added a
+`payment_attempt_status` value `"reversed"`, documented as covering "a bank/network-initiated return
+(e.g. late ACH return)." The canonical doc's §1 state diagram defines `Returned` (late ACH return)
+and `Reversed` (card/network chargeback) as two distinct states — and its own method-nuance table
+says `Reversed` is explicitly *not applicable* to ACH. Sprint 10 had the right ledger-entry-type
+label (`reversal`, already correctly scoped) but the wrong payment-status name. This sprint adds a
+correctly-named `"returned"` status value (additive `ALTER TYPE`), repoints the existing
+`payment.returned` webhook event to set it, and updates the one existing Sprint 10 test and the
+reconciliation exception mapping that referenced the old name. `"reversed"` remains in the enum,
+reserved for Sprint 12 (debit card chargebacks) — nothing currently sets it.
+
+**The granular pre-clearing lifecycle (`scheduled`/`submitted`/`processing`) is additive to
+`payment_attempt_status`, not a replacement of Sprint 9's `"pending"`.** `"pending"` remains valid
+for payment methods/tests that don't need this granularity (Sprint 9's sandbox default still uses
+it). `"succeeded"` continues to mean "Cleared," unchanged. Sprint 10's `LedgerService`,
+`BalanceService`, and `ReconciliationService` needed exactly one small update:
+`missing_provider_transaction` now also excludes `"scheduled"` (a scheduled-but-not-yet-submitted
+payment legitimately has no provider reference yet) — everything else in those three services was
+already written generically enough (keying off `"succeeded"`/specific ledger entry types, never an
+exhaustive status switch) to need no other change.
+
+**Payout-pending granularity reuses Sprint 10's own precedent (a timestamp, not a status value) —
+`payoutInitiatedAt` alongside the existing `payoutCompletedAt`.** `docs/PAYMENT_STATE_MACHINE.md` §2
+models payout as its own small state machine layered on top of the payment's — treating it as an
+orthogonal timestamp pair (null/null = not yet payout-pending, set/null = PayoutPending, set/set =
+PaidOut) avoids overloading `payment_attempt.status` with a concern that isn't really part of the
+payment's own lifecycle, consistent with why Sprint 10 didn't add a `payout_in_transit` ledger
+account either.
+
+**Two-phase payment creation required one deliberate, minimal extension to Sprint 9's
+`PaymentService`, not a bypass of it.** `PaymentService.schedulePayment`/`submitPending` are new
+methods that share the *exact* idempotency/ownership/verification gate `createPayment` already had
+— extracted into a private `reserveAttempt` helper both paths call — so there remains exactly one
+way to reach the payment provider through a verification check, matching Sprint 9's own explicit
+"individual provider adapters ... must not be able to bypass this by calling a PaymentProvider
+directly" invariant. `AchPaymentService` never touches `PaymentProvider` and has no dependency
+capable of doing so (proven structurally in `achPaymentService.test.ts`).
+
+**`AchMandateService` is structurally incapable of touching ledger, balance, or agreement data** —
+its constructor depends only on its own mandate repository, `ProfileOwnerReader`, and `AuditService`.
+This is the concrete mechanism behind "revoking authorization stops future automatic debits but does
+not erase debt": revocation literally cannot write to anything representing the debt. Enforcement
+that a revoked mandate blocks *new* debits lives in `AchPaymentService` (checks mandate state before
+scheduling), not in the mandate service itself.
+
+**Mandates are append-only, matching every other table in this schema.** `handleBankChange` never
+mutates an existing mandate's `bank_account_ref` — it revokes the old row and inserts a new one
+linked back via `supersedes_mandate_id`, preserving the full authorization history an
+unauthorized-payment claim would need (mirroring FR-UPAY-003's evidence requirements).
+
+**Duplicate-debit prevention is two independent mechanisms, not one.** `AchPaymentService` checks
+for an existing *open* (unresolved) attempt per installment before scheduling — a defensive,
+clear-error-message check. The race-safe backstop is the same one Sprint 9 already built:
+`payment_attempt.idempotency_key`'s DB-level uniqueness, which is race-safe under concurrent
+requests where the pre-check alone would not be; callers are expected to derive a deterministic key
+from the installment id for this to apply. A payment that already reached a *terminal* state
+(succeeded, failed, canceled, ...) does not block a new attempt — matching
+`docs/PAYMENT_STATE_MACHINE.md`'s "a failed attempt is never mutated into a retry; a new row is
+created."
+
+**"No unsettled ACH funds may be treated as received by creditor" is enforced by construction, not
+a new check.** `BalanceService` only counts a payment toward `amountPaidMinorUnits` once a
+`payment_cleared` ledger entry exists, which only happens once `LedgerService.postPaymentCleared`
+runs on a `payment.succeeded` webhook — a `scheduled`/`submitted`/`processing` attempt has no ledger
+entries at all yet, so it is already correctly excluded; `achPaymentService.test.ts`'s "pending" test
+proves this explicitly rather than assuming it.
+
+**No UI was built** (this sprint's spec has no "UI" bullet, matching Sprint 4/6/7/8's precedent). Six
+new routes: `POST /api/ach/mandate`, `POST /api/ach/mandate/revoke`, `POST /api/ach/mandate/bank-change`,
+`POST /api/ach/payments/{schedule,submit,manual}`.
+
+**Known limitation: NSF and other decline reasons are caller-supplied strings on the webhook
+payload** (`failureReason`), not a closed, typed failure-category enum — matching
+`docs/PAYMENT_ARCHITECTURE.md` §6's "non-sensitive failure categories" concept in spirit, but no
+processor exists yet to define the real category vocabulary (open decision #3). A future sprint
+wiring a real ACH processor would map its actual return-code taxonomy onto this field.
 
 ### Sprint 10 implementation notes
 

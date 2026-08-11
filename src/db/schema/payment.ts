@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { boolean, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { agreement } from "./agreement";
+import { agreement, installmentScheduleItem } from "./agreement";
 import { paymentAttemptStatusEnum, profileKindEnum } from "./enums";
 
 /**
@@ -38,6 +38,19 @@ export const paymentAttempt = pgTable(
     // ledger's "payout" entry posts (see ledgerService.ts) — never written any other way. Nullable;
     // null means no payout has occurred yet, regardless of payment status.
     payoutCompletedAt: timestamp("payout_completed_at", { withTimezone: true }),
+    // Sprint 11 (docs/sprints/SPRINT_11_ACH_Sandbox.md) addition: set when payout is initiated,
+    // before it settles — docs/PAYMENT_STATE_MACHINE.md §1's "Cleared → PayoutPending" step.
+    // Payout status is derived from these two timestamps rather than a separate enum column,
+    // mirroring Sprint 10's own precedent (payoutCompletedAt) rather than overloading the main
+    // `status` column with a concern §2 of that doc models as its own lifecycle: null/null = not
+    // yet payout-pending, set/null = PayoutPending, set/set = PaidOut.
+    payoutInitiatedAt: timestamp("payout_initiated_at", { withTimezone: true }),
+    // Sprint 11 addition: which installment this attempt is collecting, per
+    // docs/PAYMENT_STATE_MACHINE.md §1's own opening line ("each payment_attempt row is one attempt
+    // at collecting one installment") and docs/DATA_MODEL.md §4's illustrative shape. Nullable —
+    // Sprint 9's abstraction-level tests and any future extra/settlement payment (Sprint 15+) have
+    // no specific installment to link to.
+    installmentScheduleItemId: uuid("installment_schedule_item_id").references(() => installmentScheduleItem.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

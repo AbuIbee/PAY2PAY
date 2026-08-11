@@ -126,7 +126,7 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
     expect(balance.reversedMinorUnits).toBe(5_000);
   });
 
-  it("posts a reversal on payment.returned and sets status to reversed", async () => {
+  it("posts a reversal on payment.returned and sets status to returned", async () => {
     const agreementId = "agreement-5";
     const payment = await createPayment("k5", agreementId, 3_000);
     await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
@@ -137,7 +137,7 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
     );
 
     const updated = await ctx.paymentCtx.payments.findById(payment.id);
-    expect(updated?.status).toBe("reversed");
+    expect(updated?.status).toBe("returned");
     const reversalEntry = await ctx.ledgerCtx.ledgerService.findEntry(payment.id, "reversal");
     expect(reversalEntry).not.toBeNull();
   });
