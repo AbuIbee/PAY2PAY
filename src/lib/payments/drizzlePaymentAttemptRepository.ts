@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { paymentAttempt } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -23,6 +23,8 @@ function toRecord(row: Row): PaymentAttemptRecord {
     providerPaymentId: row.providerPaymentId,
     failureReason: row.failureReason,
     payoutCompletedAt: row.payoutCompletedAt,
+    payoutInitiatedAt: row.payoutInitiatedAt,
+    installmentScheduleItemId: row.installmentScheduleItemId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -39,9 +41,15 @@ export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository
     currency: string;
     agreementId: string | null;
     providerName: string;
+    installmentScheduleItemId?: string | null;
+    initialStatus?: PaymentAttemptStatus;
   }): Promise<PaymentAttemptRecord> {
     const db = getDb();
-    const [row] = await db.insert(paymentAttempt).values({ ...input, status: "pending" }).returning();
+    const { initialStatus, ...rest } = input;
+    const [row] = await db
+      .insert(paymentAttempt)
+      .values({ ...rest, status: initialStatus ?? "pending" })
+      .returning();
     if (!row) throw new ConfigurationError("payment_attempt insert returned no row");
     return toRecord(row);
   }
@@ -88,6 +96,32 @@ export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository
       .returning();
     if (!row) throw new ConfigurationError("payment_attempt markPayoutCompleted found no row");
     return toRecord(row);
+  }
+
+  async markPayoutInitiated(id: string, payoutInitiatedAt: Date): Promise<PaymentAttemptRecord> {
+    const db = getDb();
+    const [row] = await db
+      .update(paymentAttempt)
+      .set({ payoutInitiatedAt, updatedAt: new Date() })
+      .where(eq(paymentAttempt.id, id))
+      .returning();
+    if (!row) throw new ConfigurationError("payment_attempt markPayoutInitiated found no row");
+    return toRecord(row);
+  }
+
+  async findOpenByInstallment(installmentScheduleItemId: string): Promise<PaymentAttemptRecord | null> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(paymentAttempt)
+      .where(
+        and(
+          eq(paymentAttempt.installmentScheduleItemId, installmentScheduleItemId),
+          inArray(paymentAttempt.status, ["pending", "scheduled", "submitted", "processing"]),
+        ),
+      )
+      .limit(1);
+    return rows[0] ? toRecord(rows[0]) : null;
   }
 
   async listAll(): Promise<PaymentAttemptRecord[]> {

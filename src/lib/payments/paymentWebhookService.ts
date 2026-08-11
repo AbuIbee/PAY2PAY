@@ -42,10 +42,12 @@ const EVENT_TYPE_TO_STATUS: Record<string, PaymentAttemptStatus> = {
   "payment.failed": "failed",
   "payment.refunded": "refunded",
   "payment.disputed": "disputed",
-  // Sprint 10 (docs/sprints/SPRINT_10_InternalFinancialLedger.md) addition: a bank/network-initiated
-  // return, distinct from a voluntary/dispute-resolved "refunded" — see paymentService.ts's
-  // PaymentAttemptStatus doc comment.
-  "payment.returned": "reversed",
+  // A bank/network-initiated return (late ACH return), distinct from a voluntary/dispute-resolved
+  // "refunded" — see paymentService.ts's PaymentAttemptStatus doc comment. Sprint 10 originally
+  // mapped this to the mislabeled "reversed"; Sprint 11 corrected it to "returned" once
+  // docs/PAYMENT_STATE_MACHINE.md's Returned/Reversed distinction was cross-checked (Returned =
+  // ACH; Reversed = card chargeback, not applicable here).
+  "payment.returned": "returned",
 };
 
 /** Sprint 10: entry type each status-changing event maps to in the ledger, when that status change should also post a reversal. `payment.succeeded` and `payout.paid` are handled separately below (different LedgerService methods). */

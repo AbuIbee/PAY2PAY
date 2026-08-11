@@ -24,21 +24,26 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     currency: string;
     agreementId: string | null;
     providerName: string;
+    installmentScheduleItemId?: string | null;
+    initialStatus?: PaymentAttemptStatus;
   }): Promise<PaymentAttemptRecord> {
     if (this.idempotencyKeys.has(input.idempotencyKey)) {
       throw new Error("duplicate idempotency key");
     }
     this.idempotencyKeys.add(input.idempotencyKey);
     const now = new Date();
+    const { initialStatus, installmentScheduleItemId, ...rest } = input;
     const record: PaymentAttemptRecord = {
       id: randomUUID(),
-      status: "pending",
+      status: initialStatus ?? "pending",
       providerPaymentId: null,
       failureReason: null,
       payoutCompletedAt: null,
+      payoutInitiatedAt: null,
+      installmentScheduleItemId: installmentScheduleItemId ?? null,
       createdAt: now,
       updatedAt: now,
-      ...input,
+      ...rest,
     };
     this.byId.set(record.id, record);
     return record;
@@ -76,6 +81,23 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     record.payoutCompletedAt = payoutCompletedAt;
     record.updatedAt = new Date();
     return record;
+  }
+
+  async markPayoutInitiated(id: string, payoutInitiatedAt: Date): Promise<PaymentAttemptRecord> {
+    const record = this.byId.get(id);
+    if (!record) throw new Error("payment_attempt not found");
+    record.payoutInitiatedAt = payoutInitiatedAt;
+    record.updatedAt = new Date();
+    return record;
+  }
+
+  async findOpenByInstallment(installmentScheduleItemId: string): Promise<PaymentAttemptRecord | null> {
+    const openStatuses: PaymentAttemptStatus[] = ["pending", "scheduled", "submitted", "processing"];
+    return (
+      [...this.byId.values()].find(
+        (r) => r.installmentScheduleItemId === installmentScheduleItemId && openStatuses.includes(r.status),
+      ) ?? null
+    );
   }
 
   async listAll(): Promise<PaymentAttemptRecord[]> {

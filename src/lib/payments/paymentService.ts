@@ -5,7 +5,21 @@ import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificatio
 import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { PaymentProvider, ProfileRef } from "./paymentProvider";
 
-export type PaymentAttemptStatus = "pending" | "succeeded" | "failed" | "canceled" | "refunded" | "disputed" | "reversed";
+export type PaymentAttemptStatus =
+  | "pending"
+  | "succeeded"
+  | "failed"
+  | "canceled"
+  | "refunded"
+  | "disputed"
+  /** Reserved for card/network chargebacks (Sprint 12) — not an ACH concept; see enums.ts's doc comment. */
+  | "reversed"
+  /** Sprint 11: the granular pre-clearing ACH lifecycle (docs/PAYMENT_STATE_MACHINE.md §1). */
+  | "scheduled"
+  | "submitted"
+  | "processing"
+  /** Sprint 11: a late ACH return — the correctly-named counterpart to "reversed" above. */
+  | "returned";
 
 export interface PaymentAttemptRecord {
   id: string;
@@ -23,6 +37,10 @@ export interface PaymentAttemptRecord {
   failureReason: string | null;
   /** Sprint 10: set once, when the ledger's "payout" entry posts — see markPayoutCompleted. */
   payoutCompletedAt: Date | null;
+  /** Sprint 11: set once payout is initiated, before it settles — see markPayoutInitiated. */
+  payoutInitiatedAt: Date | null;
+  /** Sprint 11: which installment (Sprint 5) this attempt collects, if any. */
+  installmentScheduleItemId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -45,6 +63,10 @@ export interface PaymentAttemptRepository {
     currency: string;
     agreementId: string | null;
     providerName: string;
+    /** Sprint 11: which installment this attempt collects, if any. */
+    installmentScheduleItemId?: string | null;
+    /** Sprint 11: the initial status a caller wants — defaults to "pending" (Sprint 9 behavior) if omitted; AchPaymentService passes "scheduled". */
+    initialStatus?: PaymentAttemptStatus;
   }): Promise<PaymentAttemptRecord>;
   updateStatus(
     id: string,
@@ -56,6 +78,16 @@ export interface PaymentAttemptRepository {
   findByProviderPaymentId(providerPaymentId: string): Promise<PaymentAttemptRecord | null>;
   /** Sprint 10: recorded once, when LedgerService.postPayout succeeds — never any other way. */
   markPayoutCompleted(id: string, payoutCompletedAt: Date): Promise<PaymentAttemptRecord>;
+  /** Sprint 11: recorded once payout is initiated, before it settles. */
+  markPayoutInitiated(id: string, payoutInitiatedAt: Date): Promise<PaymentAttemptRecord>;
+  /**
+   * Sprint 11: duplicate-debit prevention — is there already an unresolved (pending/scheduled/
+   * submitted/processing) attempt for this installment? Only unresolved attempts count: a prior
+   * attempt that already reached a terminal state (succeeded, failed, canceled, ...) does not block
+   * a new one — docs/PAYMENT_STATE_MACHINE.md's "a failed attempt is never mutated into a retry — a
+   * new row is created."
+   */
+  findOpenByInstallment(installmentScheduleItemId: string): Promise<PaymentAttemptRecord | null>;
   /** Sprint 10: batch reconciliation's full-scan entry point (ReconciliationService.reconcileAll) — a periodic/administrative operation, not a per-request hot path. */
   listAll(): Promise<PaymentAttemptRecord[]>;
 }
@@ -90,8 +122,73 @@ export class PaymentService {
     ipAddress: string | null;
     deviceInfo: unknown;
   }): Promise<PaymentAttemptRecord> {
+    const reserved = await this.reserveAttempt(input);
+    if (reserved.alreadyResolved) return reserved.record;
+    return this.submitToProvider(reserved.record, input);
+  }
+
+  /**
+   * Sprint 11 (docs/sprints/SPRINT_11_ACH_Sandbox.md): the two-phase counterpart to
+   * `createPayment`, for callers (AchPaymentService) that need to record a payment as "scheduled"
+   * ahead of the actual submission time, without calling the provider yet. Runs through exactly the
+   * same idempotency/ownership/verification gate as `createPayment` — there is still no way to
+   * reach the provider (`submitPending`) without having passed through this gate first, preserving
+   * this class's "the only place that calls isFullyVerified" guarantee.
+   */
+  async schedulePayment(
+    input: {
+      idempotencyKey: string;
+      payer: ProfileRef;
+      recipient: ProfileRef;
+      amountMinorUnits: number;
+      currency: string;
+      agreementId?: string | null;
+      actingUserId: string;
+      installmentScheduleItemId?: string | null;
+    },
+    initialStatus: PaymentAttemptStatus = "scheduled",
+  ): Promise<PaymentAttemptRecord> {
+    const reserved = await this.reserveAttempt(input, initialStatus);
+    return reserved.record;
+  }
+
+  /**
+   * Sprint 11: performs the provider call for a payment previously created via `schedulePayment`
+   * (status "scheduled"). Transitions scheduled → submitted → processing (or "failed" if the
+   * provider call itself fails) — the same failure-handling shape as `createPayment`'s own
+   * provider-call step.
+   */
+  async submitPending(id: string, actingUserId: string, ipAddress: string | null = null, deviceInfo: unknown = null): Promise<PaymentAttemptRecord> {
+    const record = await this.deps.payments.findById(id);
+    if (!record) throw new ValidationError("Payment not found.");
+    if (record.status !== "scheduled") {
+      throw new ValidationError("Only a scheduled payment can be submitted.");
+    }
+    const submitted = await this.deps.payments.updateStatus(record.id, "submitted", {});
+    return this.submitToProvider(submitted, {
+      payer: { profileKind: record.payerProfileKind, profileId: record.payerProfileId },
+      recipient: { profileKind: record.recipientProfileKind, profileId: record.recipientProfileId },
+      actingUserId,
+      ipAddress,
+      deviceInfo,
+    });
+  }
+
+  private async reserveAttempt(
+    input: {
+      idempotencyKey: string;
+      payer: ProfileRef;
+      recipient: ProfileRef;
+      amountMinorUnits: number;
+      currency: string;
+      agreementId?: string | null;
+      actingUserId: string;
+      installmentScheduleItemId?: string | null;
+    },
+    initialStatus?: PaymentAttemptStatus,
+  ): Promise<{ record: PaymentAttemptRecord; alreadyResolved: boolean }> {
     const existing = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
-    if (existing) return existing;
+    if (existing) return { record: existing, alreadyResolved: true };
 
     const payerOwnerUserId = await this.deps.profileOwners.getOwnerUserId(
       input.payer.profileKind,
@@ -116,9 +213,8 @@ export class PaymentService {
       throw new ValidationError("The recipient must complete identity verification before a payment can be created.");
     }
 
-    let record: PaymentAttemptRecord;
     try {
-      record = await this.deps.payments.insertPending({
+      const record = await this.deps.payments.insertPending({
         idempotencyKey: input.idempotencyKey,
         payerProfileKind: input.payer.profileKind,
         payerProfileId: input.payer.profileId,
@@ -128,22 +224,31 @@ export class PaymentService {
         currency: input.currency,
         agreementId: input.agreementId ?? null,
         providerName: this.deps.provider.providerName,
+        installmentScheduleItemId: input.installmentScheduleItemId ?? null,
+        initialStatus,
       });
+      return { record, alreadyResolved: false };
     } catch (error) {
       const raced = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
-      if (raced) return raced;
+      if (raced) return { record: raced, alreadyResolved: true };
       throw error;
     }
+  }
 
+  private async submitToProvider(
+    record: PaymentAttemptRecord,
+    input: { payer: ProfileRef; recipient: ProfileRef; actingUserId: string; ipAddress: string | null; deviceInfo: unknown },
+  ): Promise<PaymentAttemptRecord> {
     try {
       const result = await this.deps.provider.createPayment({
-        idempotencyKey: input.idempotencyKey,
-        amountMinorUnits: input.amountMinorUnits,
-        currency: input.currency,
+        idempotencyKey: record.idempotencyKey,
+        amountMinorUnits: record.amountMinorUnits,
+        currency: record.currency,
         payer: input.payer,
         recipient: input.recipient,
       });
-      const updated = await this.deps.payments.updateStatus(record.id, result.status, {
+      const resolvedStatus: PaymentAttemptStatus = result.status === "pending" && record.status === "submitted" ? "processing" : result.status;
+      const updated = await this.deps.payments.updateStatus(record.id, resolvedStatus, {
         providerPaymentId: result.providerPaymentId,
       });
       await this.recordAudit(updated, "payment_created", input.actingUserId, input.ipAddress, input.deviceInfo);
@@ -163,12 +268,17 @@ export class PaymentService {
 
   async cancelPayment(id: string, actingUserId: string): Promise<PaymentAttemptRecord> {
     const record = await this.getAuthorizedRecord(id, actingUserId, "payer_or_recipient");
-    if (record.status !== "pending") {
-      throw new ValidationError("Only a pending payment can be canceled.");
+    if (!["pending", "scheduled"].includes(record.status)) {
+      throw new ValidationError("Only a pending or scheduled payment can be canceled.");
     }
-    const result = await this.deps.provider.cancelPayment(record.providerPaymentId ?? "");
-    if (!result.canceled) {
-      throw new ValidationError("The payment provider did not permit cancellation.");
+    // Sprint 11: a "scheduled" payment was never submitted to the provider (docs/PAYMENT_STATE_MACHINE.md
+    // §1: "Scheduled → Canceled: superseded by manual payment before retry fires") — there is
+    // nothing for the provider to cancel, so this is a local-only transition.
+    if (record.status !== "scheduled") {
+      const result = await this.deps.provider.cancelPayment(record.providerPaymentId ?? "");
+      if (!result.canceled) {
+        throw new ValidationError("The payment provider did not permit cancellation.");
+      }
     }
     const updated = await this.deps.payments.updateStatus(record.id, "canceled", {});
     await this.recordAudit(updated, "payment_canceled", actingUserId, null, null);

@@ -1330,3 +1330,100 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 11 — ACH Sandbox
+
+Source: `docs/sprints/SPRINT_11_ACH_Sandbox.md`. Developed on branch `sprint-11-ach-sandbox`,
+branched from `master`'s tip (`c902790`, the Sprint 10 merge commit).
+
+### Scope delivered
+
+- **Borrower mandate/authorization** (`src/lib/ach/achMandateService.ts`): authorize, revoke
+  (append-only — revocation only ever sets `revoked_at`/`revoked_reason` on the existing row), and a
+  bank-change hook (`handleBankChange`) that revokes the current mandate and authorizes a new one
+  linked via `supersedes_mandate_id`, never mutating the old bank reference in place. Structurally
+  incapable of touching ledger/balance/agreement data (no such dependency exists on the class) — the
+  concrete mechanism behind "revocation stops future debits but does not erase debt."
+- **Two-phase payment scheduling** (`src/lib/ach/achPaymentService.ts` on top of an extended
+  `src/lib/payments/paymentService.ts`): `schedulePayment`/`submitPending` are new `PaymentService`
+  methods sharing the exact idempotency/ownership/verification gate `createPayment` already had
+  (extracted into a private `reserveAttempt` helper) — `AchPaymentService` never touches
+  `PaymentProvider` directly, preserving Sprint 9's single-gate invariant. Covers first payment,
+  recurring installments, and manual (ad-hoc) payments; requires an active mandate; prevents a
+  second open attempt per installment (duplicate-debit prevention), backed by Sprint 9's existing
+  idempotency-key DB uniqueness for the race-safe case.
+- **Granular ACH lifecycle**: `payment_attempt_status` gains `scheduled`/`submitted`/`processing`
+  (additive to Sprint 9's `pending`, which remains valid for non-ACH/simpler cases) and a corrected
+  `returned` value. Payout-pending is tracked via a new `payoutInitiatedAt` timestamp alongside
+  Sprint 10's existing `payoutCompletedAt`, mirroring that sprint's own precedent rather than
+  overloading `status`.
+- **Naming correction to Sprint 10**: `payment.returned` now sets status `"returned"` (not the
+  mislabeled `"reversed"`), matching `docs/PAYMENT_STATE_MACHINE.md`'s canonical Returned (ACH) vs.
+  Reversed (card chargeback, not applicable to ACH) distinction. `"reversed"` remains reserved for
+  Sprint 12.
+- **Six new routes, no UI**: `POST /api/ach/mandate`, `POST /api/ach/mandate/revoke`,
+  `POST /api/ach/mandate/bank-change`, `POST /api/ach/payments/{schedule,submit,manual}`.
+
+### Files created (14)
+
+Schema: `src/db/schema/ach.ts`. ACH domain logic: `src/lib/ach/{achMandateService,
+drizzleAchMandateRepository,getAchMandateService,achPaymentService,getAchPaymentService,testFakes,
+achMandateService.test,achPaymentService.test}.ts` (21 tests). API routes:
+`src/app/api/ach/mandate/{route,revoke/route,bank-change/route}.ts`,
+`src/app/api/ach/payments/{schedule,submit,manual}/route.ts`. Migration:
+`drizzle/migrations/0012_crazy_kylun.sql` (+ `meta/0012_snapshot.json`).
+
+### Files modified (8)
+
+`src/db/schema/{enums,index,payment}.ts` (4 new `payment_attempt_status` values, new
+`ach_mandate_status` enum, `payoutInitiatedAt`/`installmentScheduleItemId` columns, export the new
+schema module); `src/lib/payments/paymentService.ts` (additive: `schedulePayment`/`submitPending`,
+`reserveAttempt`/`submitToProvider` extraction, `cancelPayment` now also accepts `"scheduled"`) +
+matching `drizzlePaymentAttemptRepository.ts`/`testFakes.ts` updates (`findOpenByInstallment`,
+`markPayoutInitiated`); `src/lib/payments/paymentWebhookService.ts` (the `returned` naming fix);
+`src/lib/ledger/reconciliationService.ts` (small `missing_provider_transaction` guard for
+`"scheduled"`, `returned` mapping fix) — one existing test's expectation updated to match
+(`paymentLedgerIntegration.test.ts`); `drizzle/migrations/meta/_journal.json`;
+`docs/SPRINT_CONTROL.md`.
+
+### Tests
+
+473/473 passing across 66 files (up from 447/64 at the end of Sprint 10 — 26 net new: precisely, 10
+in `achMandateService.test.ts`, 11 in `achPaymentService.test.ts`, 5 new cases in
+`paymentService.test.ts`). Covers all 8 of the sprint's named required-test categories: pending,
+success, NSF, returned, revoked mandate, duplicate debit prevention, first payment failure, payout
+only after cleared state. Sprints 1–10's own tests all still pass unchanged.
+
+### Verification commands run
+
+`npx tsc --noEmit` — pass, no errors. `npx eslint .` — pass, 0 errors (6 pre-existing-pattern
+warnings, unchanged). `npx vitest run` — pass, 473/473 across 66 files. `npx next build` — pass; all
+6 new `/api/ach/*` routes generated correctly, no change to any existing route's classification.
+`npx drizzle-kit check` — pass, migration history internally consistent, no drift (purely additive:
+one new enum, four `ALTER TYPE ADD VALUE`s, one new table, two new nullable columns, two new FKs).
+RLS + `REVOKE ALL ... FROM anon, authenticated` confirmed present on the one new table
+(`ach_mandate`).
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction ("do NOT commit or push yet unless
+Sprint control explicitly requires it — first report for Product Owner review"), commit/push is
+deferred until after Product Owner review of this status entry. `git status` at the time of this
+report: modified `docs/SPRINT_CONTROL.md`, `drizzle/migrations/meta/_journal.json`,
+`src/db/schema/{enums,index,payment}.ts`, `src/lib/ledger/{paymentLedgerIntegration.test,
+reconciliationService}.ts`, `src/lib/payments/{drizzlePaymentAttemptRepository,paymentService,
+paymentService.test,paymentWebhookService,testFakes}.ts`; untracked
+`drizzle/migrations/0012_crazy_kylun.sql`, `drizzle/migrations/meta/0012_snapshot.json`,
+`src/app/api/ach/`, `src/db/schema/ach.ts`, `src/lib/ach/`. No file outside this list was touched.
+The only prior-sprint files with behavior changes are Sprint 9's `paymentService.ts`/
+`paymentWebhookService.ts` and Sprint 10's `reconciliationService.ts`, all additively — every
+existing Sprint 9/10 test still passes unchanged except the one `paymentLedgerIntegration.test.ts`
+case whose expected status string the naming correction required.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**
