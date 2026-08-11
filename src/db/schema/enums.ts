@@ -146,3 +146,47 @@ export const accountClassificationEnum = pgEnum("account_classification", [
   "demo",
   "automated_test",
 ]);
+
+/**
+ * Sprint 7 (docs/sprints/SPRINT_07_Evidence_Documents_Witnesses.md): the sprint's own required
+ * evidence-category list. Deliberately excludes any identity/banking category — "Sensitive identity
+ * and banking records must not use ordinary agreement evidence access," so this table (and this
+ * enum) simply has no vocabulary for them; those remain Sprint 3's Verification Service's own
+ * restricted path (docs/ARCHITECTURE.md's document-flow diagram already separates the two).
+ */
+export const evidenceDocumentTypeEnum = pgEnum("evidence_document_type", [
+  "invoice",
+  "receipt",
+  "contract",
+  "estimate",
+  "purchase_order",
+  "proof_of_delivery",
+  "proof_of_completed_work",
+  "prior_payment_record",
+  "other",
+]);
+
+/**
+ * Sprint 7: party-to-party visibility ("shared/private classification"). "private" means visible
+ * only to the uploading party, never the counterparty — a distinct concern from
+ * `shared_with_witnesses`, which only ever matters for evidence that is already "shared" (a witness
+ * can never see something even the other agreement party cannot).
+ */
+export const evidenceVisibilityEnum = pgEnum("evidence_visibility", ["shared", "private"]);
+
+/** Sprint 7: "withdrawal state" — withdrawn evidence is never deleted (audit/immutability), only excluded from being treated as active case material going forward. */
+export const evidenceWithdrawalStateEnum = pgEnum("evidence_withdrawal_state", ["active", "withdrawn"]);
+
+/**
+ * Sprint 7: "malware/file validation abstraction." This environment has no real external
+ * virus-scanning provider integrated (docs/ARCHITECTURE.md lists one as an unintegrated external
+ * dependency) — `BasicFileValidator` performs synchronous size/type/magic-byte checks only, so
+ * every stored row is set directly to "clean" or the upload is rejected before storage ever
+ * happens; "pending" is reserved for a future real, asynchronous AV pipeline and is never actually
+ * written by this sprint's code.
+ */
+export const evidenceFileValidationStatusEnum = pgEnum("evidence_file_validation_status", [
+  "pending",
+  "clean",
+  "rejected",
+]);

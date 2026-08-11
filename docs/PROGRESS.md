@@ -937,3 +937,93 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 7 — Evidence, Documents & Witnesses
+
+Source: `docs/sprints/SPRINT_07_Evidence_Documents_Witnesses.md`. Developed on branch
+`sprint-07-evidence-documents-witnesses`. **This branch was stale when this session started** — it
+predated the Sprint 6A merge and had zero unique commits of its own, so it was fast-forwarded to
+`master`'s tip (`4356d24`, the Sprint 6A merge commit) before any Sprint 7 work began (confirmed
+safe: no divergence, branch not yet pushed to origin, so no history was rewritten out from under
+anyone).
+
+### Scope delivered
+
+- **Evidence documents** (`src/db/schema/evidence.ts`'s `evidence_document` table,
+  `src/lib/evidence/evidenceService.ts`): upload with metadata/uploader/timestamp/agreement
+  association, shared/private party-to-party visibility, an independent witness-sharing flag,
+  dispute flag, withdrawal state (never deleted, only excluded from "active" going forward),
+  malware/file-validation abstraction (`BasicFileValidator`), and secure signed-URL access —
+  every item this sprint's "Implement:" list names.
+- **Mandatory post-signing labeling**: `is_post_signing` is frozen at upload time from whether the
+  agreement was already signed at that moment, never recomputed afterward — evidence can never
+  retroactively "become" pre-signing or vice versa.
+- **Witnesses** (`agreement_witness` table, `src/lib/evidence/witnessService.ts`): maximum two per
+  agreement, must be `FULL_VERIFIED`, added only by an actual party, view-only access to the
+  agreement (own authorization gate, entirely separate from `AgreementService`'s party-only
+  authorization), and version-bound attestation ("may attest only to exact version") — a witness has
+  zero standing to amend terms, receive funds, or approve a settlement, proven structurally (no such
+  method exists on the class) and behaviorally (rejected by every `AgreementService` mutating
+  method).
+- **Sensitive identity/banking documents remain structurally excluded** — `EvidenceService` has no
+  dependency capable of touching `identity_verification_record` or any bank-linking table at all.
+- **Evidence storage** reuses Sprint 6's `DocumentStorage` abstraction in a second, separate private
+  bucket (`agreement-evidence`) — required parametrizing `SupabaseDocumentStorage`'s bucket via its
+  constructor (one minimal, compile-time-verified, zero-behavior-change touch to Sprint 6, with its
+  single existing call site updated in the same commit).
+- **No UI was built** — this sprint has no "UI" bullet in its required-work list, matching Sprint
+  4's and Sprint 6's own precedent.
+
+### Files created (18)
+
+Schema: `src/db/schema/evidence.ts`. Domain logic: `src/lib/evidence/{fileValidator,
+evidenceService,witnessService,witnessReaderAdapter,drizzleEvidenceRepository,
+drizzleAgreementWitnessRepository,getEvidenceService,getWitnessService,getEvidenceStorage,
+testFakes}.ts`. Tests: `evidenceService.test.ts` (12 tests), `witnessService.test.ts` (11 tests).
+API routes: `src/app/api/agreements/evidence/{route,withdraw/route,dispute-flag/route,
+signed-url/route}.ts`, `src/app/api/agreements/witnesses/{route,attest/route,view/route}.ts`.
+Migration: `drizzle/migrations/0008_steep_mysterio.sql` (+ `meta/0008_snapshot.json`).
+
+### Files modified (5)
+
+`src/db/schema/{enums,index}.ts` (new enums, export the new schema module),
+`src/lib/documents/{supabaseDocumentStorage,getDocumentStorage}.ts` (bucket-as-constructor-param
+refactor, see "Scope delivered" above — zero behavior change for Sprint 6's own PDF storage, its
+own tests all still pass unchanged), `drizzle/migrations/meta/_journal.json`.
+
+### Tests
+
+326/326 passing across 51 files (up from 303/49 at the end of Sprint 6A — 23 net new: 12 in
+`evidenceService.test.ts`, 11 in `witnessService.test.ts`). Covers all 7 of the sprint's named
+required-test categories: access control, post-signing labeling, witness isolation (structural +
+behavioral), document ownership, file type restrictions, oversized/malicious file handling, and
+version linkage. Sprint 6's own PDF-storage tests and every other prior sprint's tests all still
+pass unchanged.
+
+### Verification commands run
+
+`npm run typecheck` — pass, no errors. `npm run lint` — pass, no errors. `npm run test` — pass,
+326/326. `npm run build` — pass; 8 new `/api/agreements/{evidence,witnesses}/*` routes generated
+correctly, no change to any existing route's classification. `npx drizzle-kit check` — pass,
+migration history internally consistent, no drift. RLS + `REVOKE ALL ... FROM anon, authenticated`
+confirmed present on both new tables (`agreement_witness`, `evidence_document`).
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction, commit/push/PR is deferred until
+after Product Owner review of this status entry. `git status` at the time of this report: modified
+`drizzle/migrations/meta/_journal.json`, `src/db/schema/{enums,index}.ts`,
+`src/lib/documents/{getDocumentStorage,supabaseDocumentStorage}.ts`; untracked
+`drizzle/migrations/0008_steep_mysterio.sql`, `drizzle/migrations/meta/0008_snapshot.json`,
+`src/app/api/agreements/evidence/`, `src/app/api/agreements/witnesses/`,
+`src/db/schema/evidence.ts`, `src/lib/evidence/`. No file outside this list was touched; no prior
+sprint's behavior changed beyond the necessary, additive Sprint 6 storage-bucket touch documented
+above.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

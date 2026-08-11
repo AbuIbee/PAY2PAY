@@ -125,7 +125,76 @@ execution.
 | 5 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_05_Agreement_Engine.md` (P2P/B2C/C2B/B2B agreements, either-party draft initiation, debtor acknowledgment, all 20 required terms fields, integer-minor-unit schedule calculation with deterministic rounding, the full 14-state lifecycle with invalid-transition guards, signed-version immutability, audit events on every transition, creditor accept/reject/counter, and a functional UI) implemented on branch `sprint-05-agreement-engine`. A first pass was audited and found incomplete (missing the creditor-decide and sign API routes, no UI, a dead-code duplication in `validation.ts`); a second pass closed all three gaps — see "Sprint 5 gap-closure record" below. Local `lint`/`typecheck`/`test`/`build` all pass (269/269 tests, up from 243 at the end of Sprint 4). `drizzle-kit check` confirms the new migration (`0005_slim_shadow_king.sql`) is internally consistent. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — per this session's explicit instruction, commit/push is deferred until Product Owner review of this status entry. No payment integration (explicitly out of scope for this sprint) and no prior sprint's behavior was altered. |
 | 6 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md` (full electronic-signature evidence capture, step-up + full-verification + business-signing-authority gates before any signature, immutable per-version PDF generation, Supabase Storage private-bucket abstraction with signed-URL access, tamper-evident hashing, and all 11 required test categories) implemented on branch `sprint-06-ElectronicSignatures_PDFRecords`, branched from `master`'s tip (`55ae530`, the Sprint 5 merge commit — confirmed via `git merge-base --is-ancestor`). Local `lint`/`typecheck`/`test`/`build` all pass (282/282 tests, up from 269 at the end of Sprint 5). `drizzle-kit check` confirms the new migration (`0006_last_otto_octavius.sql`) is internally consistent. Sprint 5's own 26 tests all still pass unchanged, confirming no Sprint 5 behavior was altered beyond the two explicitly-required, purely-additive touches (a shared `computeVersionHash` extraction with identical output, and a new public `resolvePartyRole` wrapper). **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. No payment integration (explicitly out of scope) was added. See "Sprint 6 implementation notes" below for what was and wasn't built, and why. |
 | 6A | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md` (three-tier platform-role model, protected `/admin` control plane with server-side-only authorization, functional dashboard/user-search/user-detail UI backed entirely by real data, suspend/reactivate/revoke-sessions/role-change/classification admin operations, durable test-account classification, full audit logging of every admin action, read-only "View As User" support view, documented break-glass recovery with no in-app bypass, and all 10 required test categories) implemented on branch `sprint-06A-platform-administration`, branched from `master`'s tip (`72ae5b4`, the Sprint 6 merge commit). Local `lint`/`typecheck`/`test`/`build` all pass (303/303 tests, up from 282 at the end of Sprint 6). `drizzle-kit check` confirms the new migration (`0007_short_gauntlet.sql`) is internally consistent. Sprints 1–6's own tests all still pass unchanged, confirming no regression despite three necessary, narrowly-scoped touches to Sprint 2's auth layer (see "Sprint 6A implementation notes" below). **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. No agreement/signature/PDF table was ever imported by any Sprint 6A code — see the implementation notes for how that guarantee is structural, not just tested. |
-| 7–20 | Not started. Sprint plan documents for 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+| 7 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_07_Evidence_Documents_Witnesses.md` (evidence upload/metadata/uploader/timestamp/agreement-association, shared/private classification, witness-sharing, dispute flag, withdrawal state, malware/file-validation abstraction, secure signed-URL access, mandatory post-signing labeling, and the full witness model — max two, verified, view-only, version-bound attestation) implemented on branch `sprint-07-evidence-documents-witnesses`. **This branch was stale when this session started** — it had been created before Sprint 6A was merged and had zero unique commits of its own, so it was fast-forwarded to `master`'s current tip (`4356d24`, the Sprint 6A merge commit) before any Sprint 7 work began; confirmed safe via `git merge-base --is-ancestor` (no divergence, no data loss, branch not yet pushed to origin). Local `lint`/`typecheck`/`test`/`build` all pass (326/326 tests, up from 303 at the end of Sprint 6A). `drizzle-kit check` confirms the new migration (`0008_steep_mysterio.sql`) is internally consistent; RLS + `REVOKE` confirmed present on both new tables. Sprints 1–6A's own tests all still pass unchanged. **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry. No payment-processing functionality was added (not required by this sprint). See "Sprint 7 implementation notes" below for design choices and scope boundaries. |
+| 8–20 | Not started. Sprint plan documents for 9, 15, 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+
+### Sprint 7 implementation notes
+
+**Sensitive identity/banking documents are structurally excluded, not just policy-excluded.**
+`evidence_document_type` has no identity/banking vocabulary at all, and `EvidenceService`
+(`src/lib/evidence/evidenceService.ts`) has no dependency capable of reading or writing
+`identity_verification_record` or any bank-linking table — "Sensitive identity and banking records
+must not use ordinary agreement evidence access" is enforced by what this class *can* touch, not by
+a runtime check that could have a bug in it. Those records remain Sprint 3's Verification Service's
+own restricted path, unchanged.
+
+**Witnesses have zero standing in `AgreementService`, by construction.** A witness is never added
+to `agreement_party` — `WitnessService` (`src/lib/evidence/witnessService.ts`) has no method that
+amends terms, moves funds, or approves a settlement, because those capabilities don't exist
+anywhere in this class at all. Proven both structurally (reflecting the class's own method list)
+and behaviorally (a witness's user id rejected by every one of `AgreementService`'s mutating
+methods) in `witnessService.test.ts`.
+
+**A witness's read access is its own separate authorization gate, not a weakening of
+`AgreementService`.** `WitnessService.getWitnessView` never calls `AgreementService.getAgreement`
+(which only ever authorizes an actual party and would reject a witness) — it reads the same
+underlying `AgreementRepository`/`AgreementVersionRepository`/`InstallmentScheduleItemRepository`
+directly, read-only, gated solely by membership in `agreement_witness`. `AgreementService` itself
+was not modified for Sprint 7.
+
+**Witness eligibility**: must be `FULL_VERIFIED` (Sprint 3's `isFullyVerified`), must not be either
+party's profile owner, must not be the acting party themselves, capped at two per agreement, no
+duplicates. **Known limitation**: eligibility does not check whether the candidate is a *staff
+member* of either business party (only profile-owner overlap is checked) — a business's own staff
+could theoretically be added as a witness for that business's own agreement. Flagged here rather
+than silently assumed handled; narrowing this further is a reasonable follow-up if it matters in
+practice.
+
+**Post-signing labeling is frozen at upload time, never a live-derived value.**
+`evidence_document.is_post_signing` is set once, from whether the agreement's current version was
+already signed at the moment of upload, and is never recomputed afterward — so it can never
+silently drift as the agreement's status changes later (the sprint's "must never appear to have
+existed before signature").
+
+**Malware/file-validation abstraction is exactly that — an abstraction, not a real AV
+integration.** `BasicFileValidator` (`src/lib/evidence/fileValidator.ts`) performs synchronous
+size-cap, extension/content-type-allowlist, and magic-byte checks only; no external virus-scanning
+provider is integrated in this environment (docs/ARCHITECTURE.md already lists one as an
+unintegrated dependency). Every stored row's `file_validation_status` is written as `"clean"`
+directly — `"pending"`/`"rejected"` exist in the enum for a future real, asynchronous AV pipeline
+but are never actually written by this sprint's code (a rejection blocks storage entirely instead).
+
+**Evidence storage reuses Sprint 6's `DocumentStorage` abstraction in a second, separate private
+bucket** (`agreement-evidence`, vs. Sprint 6's `agreement-pdfs`). This required one minimal,
+behavior-preserving touch to Sprint 6's `SupabaseDocumentStorage`: the bucket name moved from a
+hard-coded module constant to a constructor parameter, with the single existing call site
+(`getDocumentStorage.ts`) updated in the same commit to pass the same constant it always used — a
+compile-time-enforced, zero-behavior-change refactor. Like Sprint 6's PDF bucket, evidence storage
+is not exercised against a live Supabase project in this session (no credentials configured); the
+required tests (file type restrictions, oversized/malicious handling, document ownership) are
+satisfied against the shared `InMemoryDocumentStorage` fake.
+
+**No UI was built.** `docs/sprints/SPRINT_07_Evidence_Documents_Witnesses.md` has no "UI" bullet in
+its required-work list, matching Sprint 4's and Sprint 6's own precedent for sprints without one.
+
+**Evidence upload uses `multipart/form-data`** (`request.formData()`, native to Next.js Route
+Handlers) rather than a base64-JSON body — the standard approach for real file uploads, and
+requires no new dependency.
+
+**"Version linkage"** (the sprint's own required-test category) refers to witness attestation being
+bound to the exact `agreement_version` the witness saw — `agreement_witness.attested_version_id` is
+set once, from the agreement's current version at the moment of attestation, and is never updated
+again for that witness row afterward (an attestation, once made, is as immutable as a signature).
 
 ### Sprint 6A implementation notes
 
