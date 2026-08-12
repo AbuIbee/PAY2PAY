@@ -21,6 +21,9 @@ export type PaymentAttemptStatus =
   /** Sprint 11: a late ACH return — the correctly-named counterpart to "reversed" above. */
   | "returned";
 
+/** Sprint 12 (docs/sprints/SPRINT_12_DebitCard_Sandbox.md): which rail a payment attempt used. See src/db/schema/enums.ts's paymentMethodEnum doc comment. */
+export type PaymentMethod = "ach" | "debit_card";
+
 export interface PaymentAttemptRecord {
   id: string;
   idempotencyKey: string;
@@ -41,6 +44,8 @@ export interface PaymentAttemptRecord {
   payoutInitiatedAt: Date | null;
   /** Sprint 11: which installment (Sprint 5) this attempt collects, if any. */
   installmentScheduleItemId: string | null;
+  /** Sprint 12: which rail this attempt used. Null for every pre-Sprint-12 row. */
+  paymentMethod: PaymentMethod | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -67,6 +72,8 @@ export interface PaymentAttemptRepository {
     installmentScheduleItemId?: string | null;
     /** Sprint 11: the initial status a caller wants — defaults to "pending" (Sprint 9 behavior) if omitted; AchPaymentService passes "scheduled". */
     initialStatus?: PaymentAttemptStatus;
+    /** Sprint 12: which rail this attempt used, if the caller is method-specific (AchPaymentService/DebitCardPaymentService); omitted by Sprint 9's own generic tests. */
+    paymentMethod?: PaymentMethod | null;
   }): Promise<PaymentAttemptRecord>;
   updateStatus(
     id: string,
@@ -121,6 +128,7 @@ export class PaymentService {
     actingUserId: string;
     ipAddress: string | null;
     deviceInfo: unknown;
+    paymentMethod?: PaymentMethod | null;
   }): Promise<PaymentAttemptRecord> {
     const reserved = await this.reserveAttempt(input);
     if (reserved.alreadyResolved) return reserved.record;
@@ -145,6 +153,7 @@ export class PaymentService {
       agreementId?: string | null;
       actingUserId: string;
       installmentScheduleItemId?: string | null;
+      paymentMethod?: PaymentMethod | null;
     },
     initialStatus: PaymentAttemptStatus = "scheduled",
   ): Promise<PaymentAttemptRecord> {
@@ -184,6 +193,7 @@ export class PaymentService {
       agreementId?: string | null;
       actingUserId: string;
       installmentScheduleItemId?: string | null;
+      paymentMethod?: PaymentMethod | null;
     },
     initialStatus?: PaymentAttemptStatus,
   ): Promise<{ record: PaymentAttemptRecord; alreadyResolved: boolean }> {
@@ -226,6 +236,7 @@ export class PaymentService {
         providerName: this.deps.provider.providerName,
         installmentScheduleItemId: input.installmentScheduleItemId ?? null,
         initialStatus,
+        paymentMethod: input.paymentMethod ?? null,
       });
       return { record, alreadyResolved: false };
     } catch (error) {

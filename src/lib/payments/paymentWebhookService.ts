@@ -48,6 +48,13 @@ const EVENT_TYPE_TO_STATUS: Record<string, PaymentAttemptStatus> = {
   // docs/PAYMENT_STATE_MACHINE.md's Returned/Reversed distinction was cross-checked (Returned =
   // ACH; Reversed = card chargeback, not applicable here).
   "payment.returned": "returned",
+  // Sprint 12 (docs/sprints/SPRINT_12_DebitCard_Sandbox.md): a card-network chargeback — the
+  // "reversed" status Sprint 10 reserved and Sprint 11 confirmed is not an ACH concept (see
+  // paymentService.ts's PaymentAttemptStatus doc comment). Cardholder-initiated via their issuer,
+  // distinct from "payment.disputed" (an unauthorized-payment claim still under review) — a
+  // chargeback event carries its own resolution, so it maps straight to the terminal-shaped
+  // "reversed" status rather than routing through "disputed" first.
+  "payment.reversed": "reversed",
 };
 
 /** Sprint 10: entry type each status-changing event maps to in the ledger, when that status change should also post a reversal. `payment.succeeded` and `payout.paid` are handled separately below (different LedgerService methods). */
@@ -55,6 +62,11 @@ const EVENT_TYPE_TO_REVERSAL_ENTRY: Record<string, "refund" | "reversal" | "disp
   "payment.refunded": "refund",
   "payment.returned": "reversal",
   "payment.disputed": "dispute_adjustment",
+  // Sprint 12: reuses the same "reversal" ledger entry type ACH's late return uses —
+  // docs/PAYMENT_ARCHITECTURE.md §10: "all three [return, chargeback, refund] converge on the same
+  // ledger operation." LedgerService.reversePayment already auto-selects the correct pre/post-payout
+  // shape; no ledger-side change was needed for this.
+  "payment.reversed": "reversal",
 };
 
 export type ReceiveWebhookResult = { status: "processed" | "duplicate" };

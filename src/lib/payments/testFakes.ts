@@ -3,7 +3,7 @@ import { AuditService, type AuditEventRecord, type AuditEventRepository } from "
 import { createTestLedgerService } from "@/lib/ledger/testFakes";
 import { createTestVerificationService } from "@/lib/profiles/testFakes";
 import { PaymentService } from "./paymentService";
-import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus } from "./paymentService";
+import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus, PaymentMethod } from "./paymentService";
 import { PaymentWebhookService } from "./paymentWebhookService";
 import type { PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
 import { SandboxPaymentProvider } from "./sandboxPaymentProvider";
@@ -26,13 +26,14 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     providerName: string;
     installmentScheduleItemId?: string | null;
     initialStatus?: PaymentAttemptStatus;
+    paymentMethod?: PaymentMethod | null;
   }): Promise<PaymentAttemptRecord> {
     if (this.idempotencyKeys.has(input.idempotencyKey)) {
       throw new Error("duplicate idempotency key");
     }
     this.idempotencyKeys.add(input.idempotencyKey);
     const now = new Date();
-    const { initialStatus, installmentScheduleItemId, ...rest } = input;
+    const { initialStatus, installmentScheduleItemId, paymentMethod, ...rest } = input;
     const record: PaymentAttemptRecord = {
       id: randomUUID(),
       status: initialStatus ?? "pending",
@@ -41,6 +42,7 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
       payoutCompletedAt: null,
       payoutInitiatedAt: null,
       installmentScheduleItemId: installmentScheduleItemId ?? null,
+      paymentMethod: paymentMethod ?? null,
       createdAt: now,
       updatedAt: now,
       ...rest,

@@ -74,6 +74,16 @@ sequenceDiagram
   mapping (Section 6 below) distinguishes these for the non-sensitive notification required by
   FR-FAIL-001.
 
+**Sprint 12 sandbox implementation** (`docs/sprints/SPRINT_12_DebitCard_Sandbox.md`):
+`src/lib/debitCard/` implements this flow in sandbox/test mode only, on top of Sprint 9's unmodified
+`PaymentProvider` abstraction — `DebitCardMethodService` (card-on-file register/replace/expiry) and
+`DebitCardPaymentService` (payment orchestration, never calling `PaymentProvider` directly). The
+FR-PAYMETHOD-003 incremental-cost rule is implemented as `src/lib/debitCard/cardFeeAllocation.ts`,
+reading the agreement's existing `feeAllocation` term (Sprint 5) as the "unless amended" override
+rather than a new field. See `docs/SPRINT_CONTROL.md`'s "Sprint 12 implementation notes" for full
+detail, known limitations, and what remains sandbox-only pending a real processor (open decision #3,
+unchanged).
+
 ## 3. Connected recipient flow
 
 ```mermaid
