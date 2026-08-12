@@ -1,0 +1,383 @@
+import { randomUUID } from "node:crypto";
+import { beforeEach, describe, expect, it } from "vitest";
+import { ForbiddenError, ValidationError } from "@/lib/errors";
+import type { DraftTermsInput } from "@/lib/agreements/agreementService";
+import { createTestAmendmentService } from "./testFakes";
+
+function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
+  return {
+    category: "personal_loan",
+    description: "Loan for car repair",
+    originalAmountMinorUnits: 120_000,
+    previousPaymentsMinorUnits: 0,
+    firstPaymentMinorUnits: 20_000,
+    installmentAmountMinorUnits: 20_000,
+    frequency: "monthly",
+    firstPaymentDate: "2026-02-01",
+    feeAllocation: "debtor_pays",
+    earlyPayoffTerms: "No penalty for early payoff.",
+    hardshipRules: "Borrower may request hardship relief; no interest or penalty added.",
+    partialPaymentRules: "Partial payments require creditor approval.",
+    settlementRules: "Settlement may be proposed by either party.",
+    disputeProcedure: "Disputes are handled per platform policy.",
+    ...overrides,
+  };
+}
+
+describe("AmendmentService", () => {
+  let ctx: ReturnType<typeof createTestAmendmentService>;
+  let creditorUserId: string;
+  let debtorUserId: string;
+  let agreementId: string;
+  let originalVersionId: string;
+
+  beforeEach(async () => {
+    ctx = createTestAmendmentService();
+    creditorUserId = randomUUID();
+    debtorUserId = randomUUID();
+    const creditorProfileId = randomUUID();
+    const debtorProfileId = randomUUID();
+    ctx.agreementCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+    ctx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+
+    const created = await ctx.agreementCtx.agreementService.createDraft({
+      creatorUserId: creditorUserId,
+      creditor: { kind: "personal", id: creditorProfileId },
+      debtor: { kind: "personal", id: debtorProfileId },
+      ...baseTerms(),
+    });
+    agreementId = created.agreement.id;
+    originalVersionId = created.version.id;
+
+    await ctx.agreementCtx.agreementService.submitDraft(agreementId, creditorUserId);
+    await ctx.agreementCtx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
+    await ctx.agreementCtx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" });
+    await ctx.agreementCtx.agreementService.signAgreement(agreementId, creditorUserId);
+    await ctx.agreementCtx.agreementService.signAgreement(agreementId, debtorUserId);
+  });
+
+  it("proposal: the borrower can propose an amendment, capturing reason/relief/effective date/replacement terms", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "reduced_installment",
+      reason: "Lost overtime hours at work",
+      requestedRelief: "Reduce installment to $150/month",
+      proposedEffectiveDate: "2026-03-01",
+      proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      actingUserId: debtorUserId,
+    });
+    expect(amendment.status).toBe("proposed");
+    expect(amendment.proposingPartyRole).toBe("debtor");
+    expect(amendment.reason).toBe("Lost overtime hours at work");
+    expect(amendment.requestedRelief).toBe("Reduce installment to $150/month");
+    expect(amendment.proposedEffectiveDate).toBe("2026-03-01");
+    expect(amendment.terms.installmentAmountMinorUnits).toBe(15_000);
+    // The existing agreement remains controlling — nothing changed on it yet.
+    const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+    expect(agreement?.currentVersionId).toBe(originalVersionId);
+  });
+
+  it("rejection: the creditor can reject a proposed amendment outright, and the agreement is unaffected", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "temporary_pause",
+      reason: "Medical emergency",
+      proposedTerms: baseTerms(),
+      actingUserId: debtorUserId,
+    });
+    const decided = await ctx.amendmentService.decideAmendment({
+      amendmentId: amendment.id,
+      actingUserId: creditorUserId,
+      decision: "reject",
+      reason: "Not enough information provided",
+    });
+    expect(decided.status).toBe("rejected");
+    expect(decided.rejectedReason).toBe("Not enough information provided");
+    const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+    expect(agreement?.status).not.toBe("paused_by_amendment");
+    expect(agreement?.currentVersionId).toBe(originalVersionId);
+  });
+
+  it("counter: the creditor can counter with different terms, mutating the same proposal and flipping whose turn it is", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "reduced_installment",
+      reason: "Lost overtime hours",
+      proposedTerms: baseTerms({ installmentAmountMinorUnits: 10_000 }),
+      actingUserId: debtorUserId,
+    });
+    const countered = await ctx.amendmentService.decideAmendment({
+      amendmentId: amendment.id,
+      actingUserId: creditorUserId,
+      decision: "counter",
+      counterTerms: baseTerms({ installmentAmountMinorUnits: 17_000 }),
+      counterReason: "Can meet partway",
+    });
+    expect(countered.status).toBe("proposed"); // still negotiating, no new state
+    expect(countered.proposingPartyRole).toBe("creditor"); // whoever countered now holds the ball
+    expect(countered.terms.installmentAmountMinorUnits).toBe(17_000);
+    expect(countered.reason).toBe("Can meet partway");
+    expect(countered.id).toBe(amendment.id); // same row, not a new one
+
+    // Now the debtor (the original proposer) is the one who must respond — the creditor cannot decide their own counter.
+    await expect(
+      ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" }),
+    ).rejects.toThrow(ForbiddenError);
+    const accepted = await ctx.amendmentService.decideAmendment({
+      amendmentId: amendment.id,
+      actingUserId: debtorUserId,
+      decision: "accept",
+    });
+    expect(accepted.status).toBe("awaiting_signatures");
+  });
+
+  it("dual acceptance / version creation: once both parties sign, a new immutable version is created and becomes current", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "reduced_installment",
+      reason: "Lost overtime hours",
+      proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+
+    const afterOneSignature = await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+    expect(afterOneSignature.status).toBe("awaiting_signatures"); // only one party has signed so far
+    expect(afterOneSignature.creditorSignedAt).not.toBeNull();
+    expect(afterOneSignature.debtorSignedAt).toBeNull();
+
+    const applied = await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+    expect(applied.status).toBe("applied");
+    expect(applied.resultingVersionId).toBeTruthy();
+    expect(applied.resultingVersionId).not.toBe(originalVersionId);
+
+    const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+    expect(agreement?.currentVersionId).toBe(applied.resultingVersionId);
+
+    const newVersion = await ctx.agreementCtx.versions.findById(applied.resultingVersionId!);
+    expect(newVersion?.versionNumber).toBe(2);
+    expect(newVersion?.parentVersionId).toBe(originalVersionId);
+    expect(newVersion?.isOriginal).toBe(false);
+    expect(newVersion?.terms.installmentAmountMinorUnits).toBe(15_000);
+    expect(newVersion?.signedAt).not.toBeNull();
+    expect(newVersion?.documentHash).toBeTruthy();
+  });
+
+  it("original preserved: the original agreement_version is never mutated by an applied amendment", async () => {
+    const originalBefore = await ctx.agreementCtx.versions.findById(originalVersionId);
+
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "reduced_installment",
+      reason: "Lost overtime hours",
+      proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+
+    const originalAfter = await ctx.agreementCtx.versions.findById(originalVersionId);
+    expect(originalAfter).toEqual(originalBefore);
+    expect(originalAfter?.terms.installmentAmountMinorUnits).toBe(20_000); // unchanged from the original draft
+    expect(originalAfter?.versionNumber).toBe(1);
+  });
+
+  it("unauthorized change blocked: a user who is not a party to the agreement cannot propose, decide, or sign", async () => {
+    const outsiderUserId = randomUUID();
+    await expect(
+      ctx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "general",
+        reason: "x",
+        proposedTerms: baseTerms(),
+        actingUserId: outsiderUserId,
+      }),
+    ).rejects.toThrow(ForbiddenError);
+
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "general",
+      reason: "x",
+      proposedTerms: baseTerms(),
+      actingUserId: debtorUserId,
+    });
+    await expect(
+      ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: outsiderUserId, decision: "accept" }),
+    ).rejects.toThrow(ForbiddenError);
+
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+    await expect(
+      ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: outsiderUserId }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it("unauthorized change blocked: the proposer cannot decide their own proposal", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "general",
+      reason: "x",
+      proposedTerms: baseTerms(),
+      actingUserId: debtorUserId,
+    });
+    await expect(
+      ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId, decision: "accept" }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it("unauthorized change blocked: a business-staff creditor without approve_agreement cannot decide an amendment, but a manager (who has it) can", async () => {
+    const creditorBusinessId = randomUUID();
+    const creditorOwnerId = randomUUID();
+    const debtorProfileId = randomUUID();
+    const debtorUserId2 = randomUUID();
+    const creditorViewerUserId = randomUUID();
+    const creditorManagerUserId = randomUUID();
+    ctx.agreementCtx.profileOwners.set("business", creditorBusinessId, creditorOwnerId);
+    ctx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtorUserId2);
+    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorViewerUserId, role: "accountant_viewer" });
+    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorManagerUserId, role: "manager" });
+
+    const b2c = await ctx.agreementCtx.agreementService.createDraft({
+      creatorUserId: creditorOwnerId,
+      creditor: { kind: "business", id: creditorBusinessId },
+      debtor: { kind: "personal", id: debtorProfileId },
+      ...baseTerms(),
+    });
+    await ctx.agreementCtx.agreementService.submitDraft(b2c.agreement.id, creditorOwnerId);
+    await ctx.agreementCtx.agreementService.acknowledgeDebt(b2c.agreement.id, debtorUserId2);
+    await ctx.agreementCtx.agreementService.creditorDecide({ agreementId: b2c.agreement.id, actingUserId: creditorOwnerId, decision: "accept" });
+    await ctx.agreementCtx.agreementService.signAgreement(b2c.agreement.id, creditorOwnerId);
+    await ctx.agreementCtx.agreementService.signAgreement(b2c.agreement.id, debtorUserId2);
+
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId: b2c.agreement.id,
+      changeType: "general",
+      reason: "x",
+      proposedTerms: baseTerms(),
+      actingUserId: debtorUserId2,
+    });
+
+    // A viewer-role staff member is an active party (resolvePartyRole succeeds) but lacks
+    // approve_agreement — this is exactly the gap the Sprint 14 review pass found and fixed.
+    await expect(
+      ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorViewerUserId, decision: "accept" }),
+    ).rejects.toThrow(ForbiddenError);
+
+    // A manager holds approve_agreement by default and can decide it.
+    const decided = await ctx.amendmentService.decideAmendment({
+      amendmentId: amendment.id,
+      actingUserId: creditorManagerUserId,
+      decision: "accept",
+    });
+    expect(decided.status).toBe("awaiting_signatures");
+  });
+
+  it("temporary pause: an applied pause-type amendment transitions the agreement to paused_by_amendment", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "temporary_pause",
+      reason: "Medical emergency",
+      requestedRelief: "Pause payments for 2 months",
+      proposedTerms: baseTerms(),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+
+    const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+    expect(agreement?.status).toBe("paused_by_amendment");
+  });
+
+  it("a non-pause amendment never changes the agreement's own status", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "reduced_installment",
+      reason: "x",
+      proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+
+    const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+    expect(agreement?.status).toBe("first_payment_pending"); // unchanged from before the amendment
+  });
+
+  it("signature evidence: signAmendment records the caller-supplied ipAddress/deviceInfo on the signing audit entries", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "general",
+      reason: "x",
+      proposedTerms: baseTerms(),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+    await ctx.amendmentService.signAmendment({
+      amendmentId: amendment.id,
+      actingUserId: creditorUserId,
+      ipAddress: "203.0.113.7",
+      deviceInfo: { userAgent: "test-agent" },
+    });
+
+    const signingEvent = ctx.auditRepo.events.find((e) => e.action === "amendment_signed_by_party");
+    expect(signingEvent?.ipAddress).toBe("203.0.113.7");
+    expect(signingEvent?.deviceInfo).toEqual({ userAgent: "test-agent" });
+  });
+
+  it("withdrawal: only the proposer can withdraw their own not-yet-fully-signed amendment", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "general",
+      reason: "x",
+      proposedTerms: baseTerms(),
+      actingUserId: debtorUserId,
+    });
+    await expect(
+      ctx.amendmentService.withdrawAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId }),
+    ).rejects.toThrow(ForbiddenError);
+    const withdrawn = await ctx.amendmentService.withdrawAmendment({
+      amendmentId: amendment.id,
+      actingUserId: debtorUserId,
+      reason: "Situation resolved itself",
+    });
+    expect(withdrawn.status).toBe("withdrawn");
+  });
+
+  it("rejects deciding an amendment that is no longer in the proposed state", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "general",
+      reason: "x",
+      proposedTerms: baseTerms(),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "reject" });
+    await expect(
+      ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" }),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it("audits every step of the lifecycle", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "reduced_installment",
+      reason: "x",
+      proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+
+    expect(ctx.auditRepo.events.map((e) => e.action)).toEqual([
+      "amendment_proposed",
+      "amendment_accepted",
+      "amendment_signed_by_party",
+      "amendment_signed_by_party",
+      "amendment_fully_signed",
+      "amendment_applied",
+    ]);
+  });
+});
