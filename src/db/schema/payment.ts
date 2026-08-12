@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { boolean, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { agreement, installmentScheduleItem } from "./agreement";
-import { paymentAttemptStatusEnum, profileKindEnum } from "./enums";
+import { paymentAttemptStatusEnum, paymentMethodEnum, profileKindEnum } from "./enums";
 
 /**
  * Sprint 9 (docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md) payment-provider
@@ -51,6 +51,10 @@ export const paymentAttempt = pgTable(
     // Sprint 9's abstraction-level tests and any future extra/settlement payment (Sprint 15+) have
     // no specific installment to link to.
     installmentScheduleItemId: uuid("installment_schedule_item_id").references(() => installmentScheduleItem.id),
+    // Sprint 12 (docs/sprints/SPRINT_12_DebitCard_Sandbox.md) addition: which rail this attempt
+    // used. Nullable — every pre-Sprint-12 row never set this. See enums.ts's paymentMethodEnum doc
+    // comment for why this exists as its own column rather than being inferred from status values.
+    paymentMethod: paymentMethodEnum("payment_method"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

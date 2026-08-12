@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { paymentAttempt } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
-import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus } from "./paymentService";
+import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus, PaymentMethod } from "./paymentService";
 
 type Row = typeof paymentAttempt.$inferSelect;
 
@@ -25,6 +25,7 @@ function toRecord(row: Row): PaymentAttemptRecord {
     payoutCompletedAt: row.payoutCompletedAt,
     payoutInitiatedAt: row.payoutInitiatedAt,
     installmentScheduleItemId: row.installmentScheduleItemId,
+    paymentMethod: row.paymentMethod,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -43,6 +44,7 @@ export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository
     providerName: string;
     installmentScheduleItemId?: string | null;
     initialStatus?: PaymentAttemptStatus;
+    paymentMethod?: PaymentMethod | null;
   }): Promise<PaymentAttemptRecord> {
     const db = getDb();
     const { initialStatus, ...rest } = input;

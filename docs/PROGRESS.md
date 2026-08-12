@@ -1427,3 +1427,97 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 12 — Debit Card Sandbox
+
+Source: `docs/sprints/SPRINT_12_DebitCard_Sandbox.md`. Implemented in this session's worktree,
+sequenced immediately after Sprint 11 (ACH) per `docs/SPRINT_CONTROL.md`'s own dependency graph.
+
+### Scope delivered
+
+- **Card on file** (`src/lib/debitCard/debitCardMethodService.ts`): register, replace (append-only —
+  `replaceCard` marks the old `debit_card_method` row `"replaced"` and inserts a new row linked via
+  `supersedes_card_method_id`, mirroring `ach_mandate`'s bank-change pattern), and a lazy expiry
+  check (`isCardExpired`) rather than a stored transition — `registerCard`/`replaceCard` also refuse
+  an expiry already in the past. Structurally incapable of touching ledger/balance/agreement data,
+  same guarantee as `AchMandateService`.
+- **Card payment orchestration** (`src/lib/debitCard/debitCardPaymentService.ts` on top of Sprint 9's
+  unmodified `PaymentProvider` interface and the same `PaymentService.schedulePayment`/`submitPending`
+  gate ACH uses): covers initial payment, recurring installments, and manual payments; requires an
+  active, unexpired card; reuses Sprint 11's duplicate-debit prevention as-is.
+- **Fee-allocation engine** (`src/lib/debitCard/cardFeeAllocation.ts`): implements this sprint's fee
+  rule — the borrower is surcharged the incremental card-vs-ACH processing cost on top of the
+  scheduled amount, unless the agreement's existing `feeAllocation` term is `"creditor_pays"`
+  (already reads as "the agreement states otherwise" — no new agreement field was added). The
+  surcharge is added to what's actually collected, not implemented as a ledger-only split, so
+  creditor net proceeds are structurally preserved rather than merely asserted.
+- **`payment_attempt.paymentMethod`** (new nullable `"ach" | "debit_card"` column, additive across
+  `PaymentAttemptRecord`/`PaymentAttemptRepository`/`PaymentService`): satisfies master spec §6's
+  "must separately track ACH and card payment states" — every pre-Sprint-12 row/test is unaffected
+  (defaults to `null`).
+- **Card chargeback wiring**: `PaymentWebhookService`'s existing event-to-transition maps gained
+  `"payment.reversed"` → `"reversed"` status / `"reversal"` ledger entry — activates the `"reversed"`
+  enum value Sprint 10 reserved and Sprint 11 confirmed is card-only. Zero `LedgerService` changes
+  were needed; its existing pre/post-payout reversal logic already generalizes to this case.
+- Refund and dispute (the non-chargeback `"disputed"` status) needed no new code at all — both are
+  already fully generic in Sprint 9/10's existing `PaymentService.refundPayment` and
+  `PaymentWebhookService`'s `"payment.disputed"` handling.
+
+### Files created (19)
+
+`src/db/schema/debitCard.ts`; `src/lib/debitCard/{agreementFeeAllocationReader,
+drizzleAgreementFeeAllocationReader,cardFeeAllocation,cardFeeAllocation.test,debitCardMethodService,
+debitCardMethodService.test,drizzleDebitCardMethodRepository,getDebitCardMethodService,
+debitCardPaymentService,debitCardPaymentService.test,getDebitCardPaymentService,testFakes}.ts`; API
+routes: `src/app/api/debit-card/{register/route,replace/route,payments/schedule/route,
+payments/submit/route,payments/manual/route}.ts`. Migration: `drizzle/migrations/0013_busy_anthem.sql`
+(+ `meta/0013_snapshot.json`).
+
+### Files modified (6)
+
+`src/db/schema/{enums,index,payment}.ts` (2 new enums — `payment_method`, `debit_card_method_status`
+— + `paymentMethod` column, export the new schema module); `src/lib/payments/paymentService.ts`
+(additive: `PaymentMethod` type, `paymentMethod` field threaded through `PaymentAttemptRecord`/
+`insertPending`/`createPayment`/`schedulePayment`/`reserveAttempt`) + matching
+`drizzlePaymentAttemptRepository.ts`/`testFakes.ts` updates; `src/lib/payments/paymentWebhookService.ts`
+(two new map entries, `"payment.reversed"`); `docs/SPRINT_CONTROL.md`.
+
+### Tests
+
+504/504 passing across 69 files (up from 475 immediately before this sprint — see the test-count
+note in `docs/SPRINT_CONTROL.md`'s Sprint 12 row for why that baseline isn't 473; 29 net new: 6 in
+`cardFeeAllocation.test.ts`, 10 in `debitCardMethodService.test.ts`, 13 in
+`debitCardPaymentService.test.ts`). Covers all 8 of the sprint's named required-test categories:
+approved, decline, expired, dispute, refund, card replacement, fee allocation, duplicate request.
+Sprints 1–11's own tests all still pass unchanged.
+
+### Verification commands run
+
+`npm ci` (this worktree's own `node_modules` was otherwise nearly empty — a session/environment
+artifact of running inside an isolated git worktree, not a code issue) then: `npx tsc --noEmit` —
+pass, no errors. `npx eslint .` — pass, 0 errors (6 pre-existing-pattern warnings in files this
+sprint never touched, unchanged). `npx vitest run` — pass, 504/504 across 69 files. `npx next build`
+(Turbopack) — pass; all 5 new `/api/debit-card/*` routes generated correctly, no change to any
+existing route's classification. `npx drizzle-kit check` — pass, migration history internally
+consistent, no drift (purely additive: two new enums, one new table, one new nullable column, one
+new FK). RLS + `REVOKE ALL ... FROM anon, authenticated` confirmed present on the one new table
+(`debit_card_method`) — added by hand to the generated migration, matching every prior migration in
+this project (`drizzle-kit generate` does not emit `REVOKE` on its own).
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction ("Do not commit, push, merge, deploy,
+or begin the next sprint unless the existing Sprint Control instructions specifically authorize that
+action at this stage"), commit/push is deferred until after Product Owner review of this status
+entry — matching Sprints 5–11's own precedent of deferring until review. No file outside the
+created/modified lists above was touched. The only prior-sprint files with behavior changes are
+Sprint 9's `paymentService.ts` and `paymentWebhookService.ts`, both additively — every existing
+Sprint 9/10/11 test still passes unchanged.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

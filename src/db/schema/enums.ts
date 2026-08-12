@@ -268,6 +268,26 @@ export const paymentAttemptStatusEnum = pgEnum("payment_attempt_status", [
 export const achMandateStatusEnum = pgEnum("ach_mandate_status", ["active", "revoked", "expired"]);
 
 /**
+ * Sprint 12 (docs/sprints/SPRINT_12_DebitCard_Sandbox.md): which rail a `payment_attempt` used.
+ * Nullable on the table — every pre-Sprint-12 row (Sprint 9's abstraction-level tests, Sprint 10's
+ * ledger tests) has no method recorded and stays that way; only ACH (Sprint 11) and debit card
+ * (this sprint) attempts set it. Exists specifically so ACH and card payment states can be queried
+ * and reasoned about separately (master spec §6: "The system must separately track ACH and card
+ * payment states") and so the fee-allocation engine below knows which processor-fee rate applied.
+ */
+export const paymentMethodEnum = pgEnum("payment_method", ["ach", "debit_card"]);
+
+/**
+ * Sprint 12: a debit card on file for an agreement, mirroring `ach_mandate_status`'s shape and the
+ * same "expired reserved, never set directly" precedent — this sprint detects an expired card
+ * lazily at payment-attempt time (comparing `expires_at_year`/`expires_at_month` to the current
+ * date), it does not run a background job that flips this column. "replaced" is set the moment a
+ * new card supersedes this one (mirrors `ach_mandate`'s bank-change hook), matching "replaced card"
+ * from this sprint's required test list.
+ */
+export const debitCardMethodStatusEnum = pgEnum("debit_card_method_status", ["active", "replaced", "expired"]);
+
+/**
  * Sprint 10 (docs/sprints/SPRINT_10_InternalFinancialLedger.md): the shadow-ledger chart of
  * accounts, matching docs/PAYMENT_ARCHITECTURE.md §14's illustrative accounts exactly (minus
  * `payout_in_transit`, since this sprint models payout as a single direct posting rather than a
