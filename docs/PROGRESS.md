@@ -1619,3 +1619,84 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 14 — Amendments & Hardship
+
+Source: `docs/sprints/SPRINT_14_Amendments_Hardship.md`. Implemented in a fresh worktree branched
+from `origin/master`'s tip (`fed954c`, the Sprint 13 merge commit).
+
+### Scope delivered
+
+- **Amendment lifecycle** (`src/lib/amendments/amendmentService.ts`), matching
+  `docs/STATE_MACHINES.md` §3 exactly: `Proposed → AwaitingSignatures → Signed → Applied`, with
+  `Proposed → Rejected`/`Withdrawn` and `AwaitingSignatures → Withdrawn` also supported. Either party
+  may propose (new date, temporary pause, reduced installment, revised schedule, or general
+  contractual change); only the counterparty may accept/reject/counter; counter mutates the same
+  proposal in place (mirrors `AgreementService.creditorDecide`'s identical pre-signature mechanic)
+  and flips whose turn it is to respond.
+- **Dual signature → new immutable version**: once both parties sign, a new `agreement_version` is
+  created (via the exact same `AgreementVersionRepository`/`InstallmentScheduleItemRepository` Sprint
+  5 itself uses), becomes the agreement's current version, and — for `temporary_pause` amendments
+  only — transitions the agreement to `paused_by_amendment`. The original version is never touched.
+- **"No interest, no penalty growth" enforced by construction**: `AgreementTerms` has no
+  interest/penalty field anywhere in this codebase, so there's no field an amendment could populate
+  even if it tried.
+- **Single-table `amendment` model**, a deliberate scope decision vs. `docs/DATA_MODEL.md`'s
+  illustrative two-table `amendment`/`hardship_request` split — see `docs/SPRINT_CONTROL.md`'s
+  "Sprint 14 implementation notes" for the full rationale.
+- `buildTerms` was exported from `agreementService.ts` (previously module-private) so amendments
+  validate/compute proposed terms through the exact same path the original draft uses.
+
+### Files created (12)
+
+`src/db/schema/amendment.ts`; `src/lib/amendments/{amendmentService,amendmentService.test,
+drizzleAmendmentRepository,getAmendmentService,testFakes}.ts`; routes:
+`src/app/api/agreements/amendments/{propose,decide,sign,withdraw}/route.ts`. Migration:
+`drizzle/migrations/0015_damp_young_avengers.sql` (+ `meta/0015_snapshot.json`).
+
+### Files modified (6)
+
+`src/db/schema/{enums,index}.ts` (2 new enums, export the new schema module);
+`src/lib/agreements/agreementService.ts` (`buildTerms` exported, otherwise byte-identical — every
+existing Sprint 5 test still passes unchanged); `drizzle/migrations/meta/_journal.json`;
+`docs/SPRINT_CONTROL.md`, `docs/PROGRESS.md`.
+
+### Tests
+
+538/538 passing across 74 files (up from 524 at the end of Sprint 13 — 14 net new, all in
+`amendmentService.test.ts`, including 2 added during the Product Owner review pass — see
+`docs/SPRINT_CONTROL.md`). Covers all 7 of the sprint's named required-test categories: proposal,
+rejection, counter, dual acceptance, version creation, original preserved, unauthorized change
+blocked — plus additional coverage for the `temporary_pause` status transition, non-pause amendments
+leaving agreement status untouched, withdrawal, the full audit trail, the `approve_agreement`
+capability gate on creditor-side decisions, and signature-evidence context (ipAddress/deviceInfo)
+recording on the signing action. Sprints 1–13's own tests all still pass unchanged, including every
+Sprint 5 `agreementService.test.ts` case.
+
+### Verification commands run
+
+`npm ci` (this worktree's own `node_modules` was otherwise nearly empty — a worktree-isolation
+artifact, not a code issue, same as Sprints 12–13's own notes) then: `npx tsc --noEmit` — pass, no
+errors. `npx eslint .` — pass, 0 errors (6 pre-existing-pattern warnings in files this sprint never
+touched, unchanged). `npx vitest run` — pass, 538/538 across 74 files. `npx next build` (Turbopack)
+— pass; all 4 new `/api/agreements/amendments/*` routes generated correctly, no change to any
+existing route's classification. `npx drizzle-kit check` — pass, migration history internally
+consistent, no drift (purely additive: 2 new enums, 1 new table, 0 altered/dropped columns). RLS +
+`REVOKE ALL ... FROM anon, authenticated` confirmed present on the one new table (`amendment`).
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction ("Do not commit, push, merge, deploy,
+or begin Sprint 15 unless docs/SPRINT_CONTROL.md specifically authorizes that action at this stage"),
+commit/push is deferred until after Product Owner review of this status entry — matching Sprints
+5–13's own precedent. No file outside the created/modified lists above was touched. Sprint 5's
+`agreementService.ts` is the only prior-sprint file with a behavior change, and it's purely additive
+(one new export, no logic changed) — every existing Sprint 5 test still passes unchanged.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

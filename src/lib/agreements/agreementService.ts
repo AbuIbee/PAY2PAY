@@ -176,7 +176,13 @@ function requireNonEmpty(value: string, fieldName: string): void {
   if (!value.trim()) throw new ValidationError(`${fieldName} is required.`);
 }
 
-function buildTerms(input: DraftTermsInput): { terms: AgreementTerms; schedule: ScheduleItem[] } {
+/**
+ * Sprint 14 (docs/sprints/SPRINT_14_Amendments_Hardship.md): exported so `AmendmentService` can
+ * validate/compute a proposed amendment's terms through the exact same path the original draft and
+ * Sprint 5's own creditor-counter flow already use, rather than duplicating this validation. Purely
+ * additive — no existing caller or behavior changes.
+ */
+export function buildTerms(input: DraftTermsInput): { terms: AgreementTerms; schedule: ScheduleItem[] } {
   requireNonEmpty(input.category, "category");
   requireNonEmpty(input.description, "description");
   requireNonEmpty(input.earlyPayoffTerms, "earlyPayoffTerms");
@@ -449,6 +455,21 @@ export class AgreementService {
   async resolvePartyRole(agreementId: string, actingUserId: string): Promise<PartyRole> {
     const agreement = await this.requireAgreement(agreementId);
     return this.authorizeEitherParty(agreement, actingUserId, null);
+  }
+
+  /**
+   * Sprint 14 (docs/sprints/SPRINT_14_Amendments_Hardship.md): public wrapper around the existing
+   * private authorizeAsRole, so `AmendmentService` can require the *same* `approve_agreement`
+   * capability gate `creditorDecide` already enforces for the original agreement's accept/reject/
+   * counter — for a business-staff creditor deciding an amendment, not just "any active staff
+   * member" (which `resolvePartyRole` alone would allow). A no-op capability check for a personal
+   * creditor or the business's own owner (both already bypass capability checks in
+   * `authorizeParty`), matching `creditorDecide`'s own behavior exactly. Purely additive; does not
+   * change any existing Sprint 5 behavior.
+   */
+  async requireCreditorCapability(agreementId: string, actingUserId: string, capability: Capability): Promise<void> {
+    const agreement = await this.requireAgreement(agreementId);
+    await this.authorizeAsRole(agreement, "creditor", actingUserId, capability);
   }
 
   relationshipShape(agreement: Pick<AgreementRecord, "creditorProfileKind" | "debtorProfileKind">): "P2P" | "B2C" | "C2B" | "B2B" {

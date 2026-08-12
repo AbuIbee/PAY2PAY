@@ -381,3 +381,39 @@ export const rescheduleRequestStatusEnum = pgEnum("reschedule_request_status", [
  * new notification type, which is exactly the kind of forward-coupling this project's sprints
  * otherwise avoid (e.g. `payment_attempt.failure_reason` is also free text for the same reason).
  */
+
+/**
+ * Sprint 14 (docs/sprints/SPRINT_14_Amendments_Hardship.md): mirrors `docs/STATE_MACHINES.md` §3's
+ * Amendment lifecycle exactly — `Proposed → AwaitingSignatures → Signed → Applied` (happy path),
+ * `Proposed → Rejected` (counterparty rejects outright), `{Proposed,AwaitingSignatures} → Withdrawn`
+ * (proposer withdraws). A counteroffer does not introduce a new state: it mutates the same row's
+ * proposed terms in place and stays `proposed`, mirroring `AgreementService.creditorDecide`'s own
+ * counter mechanic for the original (pre-signature) agreement exactly — see `amendmentService.ts`.
+ * `Applied` is terminal and immutable, matching FR-AGR-006: the `agreement_version` it produces is
+ * never edited in place, only ever superseded by a further amendment.
+ */
+export const amendmentStatusEnum = pgEnum("amendment_status", [
+  "proposed",
+  "awaiting_signatures",
+  "signed",
+  "applied",
+  "rejected",
+  "withdrawn",
+]);
+
+/**
+ * Sprint 14: what kind of change a proposal represents, per this sprint's own required list ("new
+ * date, temporary pause, reduced installment, revised schedule") plus `general` for any other
+ * §3-listed contractual change (fee allocation, total balance, etc.) not covered by the other four.
+ * `temporary_pause` is the one value with its own side effect on `Applied`: it transitions the
+ * agreement to `paused_by_amendment` (`docs/STATE_MACHINES.md` §1: "Active → PausedByAmendment:
+ * signed amendment applies an explicit pause term") — every other change type only ever creates a
+ * new version, never touching `agreement.status` itself.
+ */
+export const amendmentChangeTypeEnum = pgEnum("amendment_change_type", [
+  "new_date",
+  "temporary_pause",
+  "reduced_installment",
+  "revised_schedule",
+  "general",
+]);
