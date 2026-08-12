@@ -1811,3 +1811,99 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 16 — Disputes
+
+Source: `docs/sprints/SPRINT_16_Disputes.md`. Implemented in a fresh worktree branched from
+`origin/master`'s tip (`a4f6507`, the Sprint 15 merge commit).
+
+### Scope delivered
+
+- **Two distinct dispute systems, never conflated** (this sprint's own instruction, verbatim):
+  `AgreementDisputeService` (`src/lib/disputes/agreementDisputeService.ts`) for master spec §13's
+  agreement-level dispute, and `PaymentDisputeService` (`src/lib/disputes/paymentDisputeService.ts`)
+  for FR-UPAY's payment-level unauthorized-payment claim — separate tables, separate services,
+  separate routes, separate category vocabularies.
+- **Agreement dispute lifecycle** matching `docs/STATE_MACHINES.md` §7 (collapsed — see
+  `docs/SPRINT_CONTROL.md`'s implementation notes): `opened → under_review →
+  resolved_no_change/resolved_with_amendment/restricted → closed`. Either party may open; only the
+  counterparty may respond; evidence is attached by flagging existing evidence documents via Sprint
+  7's own `EvidenceService.setDisputeFlag`, never a second evidence store.
+  `resolveWithAmendment` hands off to Sprint 14's `AmendmentService`; the dispute closes once that
+  amendment reaches `Applied`. `restrictDispute`/`liftRestriction` are Platform Admin/Owner only.
+  `exportEvidencePackage` bundles the dispute record with its flagged evidence.
+- **Payment dispute (unauthorized-payment claim)**: `claimUnauthorizedPayment` preserves the
+  mandate/signature/identity-verification reference plus IP/device/timestamp at claim time, then
+  reuses the exact same `LedgerService.reversePayment`("dispute_adjustment")/status-update calls the
+  `payment.disputed` webhook (Sprint 9/10) already makes. `recordProcessorOutcome` is Platform-Admin-
+  only and records what the processor determined — `"upheld"` reuses the `"refund"` ledger entry
+  type; `"denied"` reinstates the payment's status (with a documented ledger-correction limitation —
+  see implementation notes).
+- **"The platform must not adjudicate legal liability"** enforced by construction: neither table has
+  a fault/liability column; every resolution field is free-text.
+- **Reversal impact / balance update** verified end-to-end against Sprint 10's existing, unmodified
+  `BalanceService`/`LedgerService` — no new balance logic was written for this sprint.
+
+### Files created (22)
+
+`src/db/schema/{agreementDispute,paymentDispute}.ts`;
+`src/lib/disputes/{agreementDisputeService,agreementDisputeService.test,paymentDisputeService,
+paymentDisputeService.test,drizzleAgreementDisputeRepository,drizzlePaymentDisputeRepository,
+drizzleDisputeEvidenceReaders,getAgreementDisputeService,getPaymentDisputeService,testFakes}.ts`;
+routes: `src/app/api/agreements/disputes/{open,respond,resolve-no-change,resolve-with-amendment,
+close,sync-amendment-progress,restrict,lift-restriction,export}/route.ts`,
+`src/app/api/payments/disputes/{claim,record-outcome}/route.ts`. Migration:
+`drizzle/migrations/0017_careless_captain_marvel.sql` (+ `meta/0017_snapshot.json`).
+
+### Files modified (3)
+
+`src/db/schema/{enums,index}.ts` (4 new enums, export the two new schema modules);
+`drizzle/migrations/meta/_journal.json`.
+
+### Tests
+
+599/599 passing across 80 files (up from 576 at the end of Sprint 15 — 23 net new: 12 in
+`agreementDisputeService.test.ts`, 11 in `paymentDisputeService.test.ts`). Covers every category this
+sprint's own instruction names: **agreement dispute** (opening/responding/resolve-no-change-then-
+close/resolve-with-amendment-then-auto-close/FR-DISP-004's no-fault-field check), **payment dispute**
+(claiming with full preservation of all four fields, category/payment-method mismatch rejection,
+not-yet-succeeded rejection, upheld → refunded, denied → reinstated succeeded), **permissions**
+(outsiders blocked from opening/responding; restrict/lift-restriction/record-outcome all
+Platform-Admin-only, never a party), **evidence** (dispute-flagging on open and respond;
+`exportEvidencePackage` returning only flagged evidence), **reversal impact** (a claim immediately
+excludes the disputed payment from the agreement's paid balance and counts it as reversed; an upheld
+claim keeps it excluded; unrelated payments on the same agreement are unaffected), and **balance
+update** (before/after assertions on `BalanceService.getAgreementBalance`'s
+`amountPaidMinorUnits`/`reversedMinorUnits`/`remainingBalanceMinorUnits`). Sprints 1–15's own tests
+all still pass unchanged.
+
+### Verification commands run
+
+`npm ci` (this worktree's own `node_modules` was otherwise nearly empty — a worktree-isolation
+artifact, not a code issue, same as every prior worktree sprint's own note) then: `npm run typecheck`
+(`tsc --noEmit`, this project's own authoritative gate) — pass, 0 errors. `npx eslint .` — pass, 0
+errors (7 warnings: 6 pre-existing in files this sprint never touched, 1 new in
+`src/lib/disputes/testFakes.ts` following this codebase's own established `_paramName` convention for
+an intentionally-unused test-double parameter). `npx vitest run` — pass, 599/599 across 80 files.
+`npx next build` (Turbopack) — pass, including its own TypeScript pass (0 errors); all 11 new routes
+generated correctly, no change to any existing route's classification. `npx drizzle-kit check` —
+pass, migration history internally consistent, no drift (purely additive: 4 new enums, 2 new tables,
+0 altered/dropped columns). RLS + `REVOKE ALL ... FROM anon, authenticated` confirmed present on both
+new tables (`agreement_dispute`, `payment_dispute`).
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction ("Do not commit, push, merge, deploy,
+or begin Sprint 17 unless docs/SPRINT_CONTROL.md specifically authorizes that action at this stage"),
+commit/push is deferred until after Product Owner review of this status entry — matching Sprints
+5–15's own precedent. No file outside the created/modified lists above was touched. No prior-sprint
+production file was modified — this sprint is purely additive at the file level (only `enums.ts` and
+`schema/index.ts` gained new entries; no existing function body changed).
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**
