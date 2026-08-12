@@ -21,3 +21,5 @@ export * from "./paymentRetry";
 export * from "./amendment";
 export * from "./partialPayment";
 export * from "./settlement";
+export * from "./agreementDispute";
+export * from "./paymentDispute";

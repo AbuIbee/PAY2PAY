@@ -465,3 +465,50 @@ export const settlementFailureConsequenceEnum = pgEnum("settlement_failure_conse
   "forgive_permanently",
   "prior_agreement_controls",
 ]);
+
+/**
+ * Sprint 16 (docs/sprints/SPRINT_16_Disputes.md): master spec §13's agreement-level dispute
+ * lifecycle, matching `docs/STATE_MACHINES.md` §7 exactly except two adjacent states are collapsed
+ * into one — `ResolvedWithAmendment` and `AmendmentInProgress` become `resolved_with_amendment`
+ * (there is no separate action between "resolution requires a signed amendment" and "hands off to
+ * the Amendment lifecycle"; `AgreementDisputeService.resolveWithAmendment` does both in one call) —
+ * mirroring Sprint 14/15's own identical collapsing precedent for illustrative sub-states with no
+ * distinct action of their own.
+ */
+export const agreementDisputeStatusEnum = pgEnum("agreement_dispute_status", [
+  "opened",
+  "under_review",
+  "resolved_no_change",
+  "resolved_with_amendment",
+  "restricted",
+  "closed",
+]);
+
+/** Sprint 16: this sprint's own example categories for "debt does not exist / incorrect amount / evidence challenged / administration challenged," plus `other` for anything else master spec §13's "existence, amount, evidence, or agreement administration" wording doesn't name explicitly. */
+export const agreementDisputeCategoryEnum = pgEnum("agreement_dispute_category", [
+  "debt_does_not_exist",
+  "incorrect_amount",
+  "evidence_challenged",
+  "administration_challenged",
+  "other",
+]);
+
+/**
+ * Sprint 16: this sprint's own example categories for a payment-level unauthorized-payment claim
+ * (FR-UPAY-001) — deliberately a separate, smaller vocabulary from `agreementDisputeCategoryEnum`,
+ * matching "Do not conflate them" (this sprint's own instruction, verbatim) and
+ * `docs/DATA_MODEL.md`'s "separate from agreement_dispute (FR-UPAY-006)" note on `payment_dispute`.
+ */
+export const paymentDisputeCategoryEnum = pgEnum("payment_dispute_category", [
+  "unauthorized_ach",
+  "unauthorized_debit_card",
+  "processor_dispute",
+]);
+
+/**
+ * Sprint 16: "the processor handles payment dispute outcome" (this sprint's own instruction,
+ * verbatim) — `claimed` is the only status `PaymentDisputeService` itself ever sets from a party
+ * action; `upheld`/`denied` are only ever set by `recordProcessorOutcome`, an admin-only method that
+ * *records* the processor's own determination rather than the platform adjudicating it.
+ */
+export const paymentDisputeStatusEnum = pgEnum("payment_dispute_status", ["claimed", "upheld", "denied"]);
