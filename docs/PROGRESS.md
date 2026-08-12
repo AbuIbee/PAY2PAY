@@ -1521,3 +1521,101 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 13 — Failed Payments & Retry Workflow
+
+Source: `docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md`. Implemented in a fresh worktree
+branched from `origin/master`'s tip (`1785466`, the Sprint 12 merge commit).
+
+### Scope delivered
+
+- **Retry scheduling/firing** (`src/lib/failedPayments/paymentRetryService.ts`): schedules exactly
+  one retry (configurable delay, default ~3 business days, `addBusinessDays` skipping weekends) per
+  failed installment payment; fires via a cron-triggered route, never a persistent worker (Vercel has
+  none); cancels if a manual payment clears the installment first; structurally cannot schedule a
+  second retry for a retry's own failure (two independent checks — see implementation notes in
+  `docs/SPRINT_CONTROL.md`).
+- **Installment status** (`src/lib/failedPayments/installmentStatusRepository.ts`): the first code in
+  this project to ever write `installment_schedule_item.status` — past_due on failure, paid on
+  success. A real pre-existing gap since Sprint 5, closed here.
+- **Notifications** (`src/lib/notify/notificationService.ts`): durable `notification_event` record +
+  best-effort delivery through the existing `EmailSender`/`ConsoleEmailSender` (Sprint 2), per
+  `docs/SPRINT_CONTROL.md`'s own "Sequencing risk 1" resolution — Sprint 17 wires real channels on
+  top of these same rows later.
+- **Reschedule request/approval** (`src/lib/failedPayments/rescheduleRequestService.ts`): borrower
+  requests a new due date; the installment's `due_date` is written only inside the creditor's
+  approval branch, never on request alone.
+- **Two pre-existing bugs found and fixed by this sprint's own tests** (not just described): (1)
+  `PaymentWebhookService` never captured `failureCategory` from a `payment.failed` webhook into
+  `failureReason` — silently discarded since Sprint 9; (2) `AchPaymentService` never tagged
+  `payment_attempt.payment_method`, only debit card (Sprint 12) did, breaking master spec §6's
+  "track ACH and card payment states separately" and this sprint's own retry-firing (which needs the
+  method to pick the right service to retry through).
+- **Background-job/scheduler abstraction compatible with Vercel architecture**: `POST
+  /api/scheduler/retry-failed-payments`, `CRON_SECRET`-gated (`Authorization: Bearer`, matching
+  Vercel Cron Jobs' own convention), configured in a new `vercel.json`. No queue infrastructure was
+  built — Vercel has no persistent process to run one on.
+
+### Files created (29)
+
+`src/db/schema/paymentRetry.ts`; `src/lib/notify/{notificationService,notificationService.test,
+drizzleNotificationEventRepository,drizzleUserContactReader,getNotificationService,testFakes}.ts`;
+`src/lib/failedPayments/{businessDays,businessDays.test,installmentStatusRepository,
+drizzleInstallmentStatusRepository,paymentRetryService,paymentRetryService.test,
+drizzlePaymentRetryRepository,getPaymentRetryService,failedPaymentWorkflowService,
+getFailedPaymentWorkflowService,rescheduleRequestService,rescheduleRequestService.test,
+drizzleRescheduleRequestRepository,drizzleAgreementPartiesReader,getRescheduleRequestService,
+testFakes}.ts`; routes: `src/app/api/scheduler/retry-failed-payments/route.ts`,
+`src/app/api/installments/reschedule/{request,decide}/route.ts`; `vercel.json`. Migration:
+`drizzle/migrations/0014_chubby_argent.sql` (+ `meta/0014_snapshot.json`).
+
+### Files modified (12, plus the routine `drizzle/migrations/meta/_journal.json` companion)
+
+`src/db/schema/{enums,index}.ts` (3 new enums, export the new schema module); `src/config/env.ts`
+(`CRON_SECRET`, optional); `.env.example`, `docs/ENVIRONMENT_VARIABLES.md` (`CRON_SECRET`
+documented); `src/lib/payments/paymentWebhookService.ts` (failureCategory capture fix + one new
+optional `failedPaymentWorkflow` dependency) + matching `testFakes.ts` update;
+`src/lib/payments/getPaymentWebhookService.ts` (wires the new dependency in production);
+`src/lib/ach/achPaymentService.ts` (payment_method tagging fix + optional
+`installmentScheduleItemId` on `createManualPayment`); `src/lib/debitCard/debitCardPaymentService.ts`
+(matching optional `installmentScheduleItemId` on `createManualPayment`); `docs/SPRINT_CONTROL.md`,
+`docs/PROGRESS.md`.
+
+### Tests
+
+524/524 passing across 73 files (up from 504 at the end of Sprint 12 — 20 net new: 3 in
+`businessDays.test.ts`, 2 in `notificationService.test.ts`, 7 in `paymentRetryService.test.ts`, 8 in
+`rescheduleRequestService.test.ts`, the 8th added during the Product Owner review pass — see
+`docs/SPRINT_CONTROL.md`). Covers all 6 of the sprint's named required-test categories: initial
+failure, retry, manual success cancels retry, retry failure, no third automatic retry, reschedule
+request. Sprints 1–12's own tests all still pass unchanged.
+
+### Verification commands run
+
+`npm ci` (this worktree's own `node_modules` was otherwise nearly empty — a worktree-isolation
+artifact, not a code issue, same as Sprint 12's own note) then: `npx tsc --noEmit` — pass, no errors.
+`npx eslint .` — pass, 0 errors (6 pre-existing-pattern warnings in files this sprint never touched,
+unchanged). `npx vitest run` — pass, 524/524 across 73 files. `npx next build` (Turbopack) — pass;
+all 3 new routes (`/api/scheduler/retry-failed-payments`,
+`/api/installments/reschedule/{request,decide}`) generated correctly, no change to any existing
+route's classification. `npx drizzle-kit check` — pass, migration history internally consistent, no
+drift (purely additive: 2 new enums, 3 new tables, 0 altered/dropped columns). RLS +
+`REVOKE ALL ... FROM anon, authenticated` confirmed present on all three new tables.
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction ("Do not commit, push, merge, deploy,
+or begin Sprint 14 unless docs/SPRINT_CONTROL.md specifically authorizes that action at this stage"),
+commit/push is deferred until after Product Owner review of this status entry — matching Sprints
+5–12's own precedent. No file outside the created/modified lists above was touched. Sprint 9's
+`paymentWebhookService.ts` and Sprint 11/12's `achPaymentService.ts`/`debitCardPaymentService.ts` are
+the only prior-sprint files with behavior changes, all additively — every existing Sprint 9–12 test
+still passes unchanged.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

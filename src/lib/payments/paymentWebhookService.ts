@@ -72,6 +72,17 @@ const EVENT_TYPE_TO_REVERSAL_ENTRY: Record<string, "refund" | "reversal" | "disp
 export type ReceiveWebhookResult = { status: "processed" | "duplicate" };
 
 /**
+ * Sprint 13 (docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md) seam — deliberately just these
+ * two methods, matching every other narrow, consumer-defined interface in this codebase (e.g.
+ * `AgreementTermsReader`). Optional on `PaymentWebhookService` so Sprints 1–12's own tests, which
+ * construct the service without it, are completely unaffected.
+ */
+export interface FailedPaymentWorkflow {
+  handlePaymentFailed(payment: PaymentAttemptRecord, failureCategory: string | null): Promise<void>;
+  handlePaymentSucceeded(payment: PaymentAttemptRecord): Promise<void>;
+}
+
+/**
  * Sprint 9 webhook handling: signature verification -> replay/duplicate-event protection ->
  * (asynchronous, relative to the originating provider call) processing -> state transition +
  * audit. A webhook event that does not map to a known transition (docs/PAYMENT_ARCHITECTURE.md
@@ -95,6 +106,8 @@ export class PaymentWebhookService {
       payments: PaymentAttemptRepository;
       ledger: LedgerService;
       audit: AuditService;
+      /** Sprint 13: installment past_due/paid marking, notification, and retry scheduling — optional, see FailedPaymentWorkflow's doc comment. */
+      failedPaymentWorkflow?: FailedPaymentWorkflow;
     },
   ) {}
 
@@ -138,7 +151,20 @@ export class PaymentWebhookService {
     const newStatus = EVENT_TYPE_TO_STATUS[eventType];
     if (!newStatus) return;
 
-    const updated = await this.deps.payments.updateStatus(payment.id, newStatus, {});
+    // Sprint 13 fix: this previously always passed `{}` here, silently discarding
+    // `data.failureCategory` on every "payment.failed" webhook since Sprint 9 — no
+    // non-sensitive failure category was ever actually stored, only ever asserted on `status` in
+    // existing tests (see docs/SPRINT_CONTROL.md's "Sprint 13 implementation notes"). Per
+    // docs/PAYMENT_ARCHITECTURE.md §6, the category here is already the non-sensitive, mapped
+    // value the caller/processor-adapter is expected to send — the raw internal processor code
+    // never reaches this layer, matching Sprint 9–11's "caller-supplied" webhook-payload precedent.
+    const failureCategory =
+      newStatus === "failed" && typeof data.failureCategory === "string" ? data.failureCategory : undefined;
+    const updated = await this.deps.payments.updateStatus(
+      payment.id,
+      newStatus,
+      failureCategory !== undefined ? { failureReason: failureCategory } : {},
+    );
     await this.deps.audit.record({
       actorUserId: null,
       actorRole: "payment_provider",
@@ -160,6 +186,36 @@ export class PaymentWebhookService {
     });
 
     await this.postLedgerEntry(eventType, updated, data);
+    await this.runFailedPaymentWorkflow(newStatus, updated, failureCategory ?? null);
+  }
+
+  /**
+   * Sprint 13: mirrors postLedgerEntry's own "never fail the webhook" contract — a workflow error
+   * (installment update, notification, retry scheduling) is caught and logged, never thrown, so a
+   * bug in this newer code path can't regress the webhook's own idempotent-processing guarantee for
+   * Sprints 1–12. Only fires for installment-linked payments — an abstraction-level test payment
+   * with no `installmentScheduleItemId` (Sprint 9's own tests) has nothing for this sprint's
+   * retry/reschedule workflow to act on.
+   */
+  private async runFailedPaymentWorkflow(
+    status: PaymentAttemptStatus,
+    payment: PaymentAttemptRecord,
+    failureCategory: string | null,
+  ): Promise<void> {
+    if (!this.deps.failedPaymentWorkflow || !payment.installmentScheduleItemId) return;
+    try {
+      if (status === "failed") {
+        await this.deps.failedPaymentWorkflow.handlePaymentFailed(payment, failureCategory);
+      } else if (status === "succeeded") {
+        await this.deps.failedPaymentWorkflow.handlePaymentSucceeded(payment);
+      }
+    } catch (error) {
+      logger.error("payment_webhook_failed_payment_workflow_failed", {
+        paymentAttemptId: payment.id,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async postLedgerEntry(eventType: string, payment: PaymentAttemptRecord, data: Record<string, unknown>): Promise<void> {

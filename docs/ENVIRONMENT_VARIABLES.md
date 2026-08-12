@@ -32,6 +32,7 @@ was added), not an oversight; flagged here for explicit visibility since the spr
 | `NEXT_PUBLIC_APP_NAME` | Client-safe | local dev, preview, staging, production (optional — defaults to `PAY2PAY`) | Inlined into the browser bundle at build time. Contains no secret. |
 | `NEXT_PUBLIC_APP_ENV` | Client-safe | local dev, preview, staging, production (optional — defaults to `development`) | Inlined into the browser bundle at build time. Contains no secret. |
 | `FEATURE_<FLAG_NAME_SCREAMING_SNAKE_CASE>` | Server-only, optional | any environment, as needed | Per-environment override for a flag in `src/lib/feature-flags.ts` (e.g. `FEATURE_EXAMPLE_FOUNDATION_FLAG=false`). Never sent to the browser. |
+| `CRON_SECRET` | Server-only, **secret**, optional | staging, production — only wherever `vercel.json`'s `crons` entry is actually active (Vercel Cron Jobs are a paid-plan/deployed-environment feature; not exercised in local dev) | Sprint 13 (`docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md`): shared secret `POST /api/scheduler/retry-failed-payments` checks against the `Authorization: Bearer <CRON_SECRET>` header Vercel Cron Jobs send automatically. The route throws a clear `ConfigurationError` if invoked without this set — never silently no-ops. |
 
 No new environment variable was introduced by Sprint 1 — the early-access feature reuses
 `DATABASE_URL`, which already existed.

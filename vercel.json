@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/scheduler/retry-failed-payments",
+      "schedule": "0 13 * * *"
+    }
+  ]
+}

@@ -105,6 +105,12 @@ export class DebitCardPaymentService {
    * later installment, same as ACH's manual-payment precedent). Still requires an active,
    * unexpired card; still goes through the same verification/idempotency gate.
    */
+  /**
+   * `installmentScheduleItemId` is optional, mirroring `AchPaymentService.createManualPayment`'s
+   * Sprint 13 addition — omitted, this is a general ad-hoc payment; provided, it links the payment
+   * to the installment it covers so a manual payment clearing a previously-failed installment can
+   * cancel that installment's still-pending automatic retry.
+   */
   async createManualPayment(input: {
     idempotencyKey: string;
     agreementId: string;
@@ -113,6 +119,7 @@ export class DebitCardPaymentService {
     amountMinorUnits: number;
     currency: string;
     actingUserId: string;
+    installmentScheduleItemId?: string;
   }): Promise<PaymentAttemptRecord & { charge: DebitCardChargeBreakdown }> {
     await this.requireActiveUnexpiredCard(input.agreementId);
     const charge = await this.computeChargeBreakdown(input.agreementId, input.amountMinorUnits);
@@ -125,6 +132,7 @@ export class DebitCardPaymentService {
         currency: input.currency,
         agreementId: input.agreementId,
         actingUserId: input.actingUserId,
+        installmentScheduleItemId: input.installmentScheduleItemId,
         paymentMethod: "debit_card",
       },
       "scheduled",

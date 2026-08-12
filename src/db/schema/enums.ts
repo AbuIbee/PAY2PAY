@@ -348,3 +348,36 @@ export const reconciliationExceptionTypeEnum = pgEnum("reconciliation_exception_
 
 /** Sprint 10: an exception stays "open" until an administrator (or a future automated repair) explicitly resolves it — reconciliation itself never auto-resolves anything, matching the sprint's "must not silently ignore mismatches." */
 export const reconciliationExceptionStatusEnum = pgEnum("reconciliation_exception_status", ["open", "resolved"]);
+
+/**
+ * Sprint 13 (docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md): the lifecycle of a single
+ * scheduled automatic retry. "scheduled" is the only state a retry starts in; it becomes "fired"
+ * once the cron-triggered scheduler route actually creates the retry's `payment_attempt` (see
+ * `payment_retry.resulting_payment_attempt_id`), or "canceled" if a manual payment clears the same
+ * installment first (this sprint's requirement #7). Exactly one `payment_retry` row is ever created
+ * per original failed `payment_attempt` — enforced in `PaymentRetryService`, not by a DB constraint
+ * alone — which is the concrete mechanism behind "never implement uncontrolled retries" /
+ * "if retry fails, stop automatic retries": a retry's own resulting payment_attempt is never itself
+ * treated as eligible for a further `payment_retry` row.
+ */
+export const paymentRetryStatusEnum = pgEnum("payment_retry_status", ["scheduled", "fired", "canceled"]);
+
+/**
+ * Sprint 13: a borrower-requested new due date for a past-due (or any) installment — requirement #9
+ * ("Borrower may request new payment date") plus #10 ("Creditor approval required to formally
+ * reschedule"). "pending" is the only state a request starts in; the installment's own `due_date`
+ * is updated only once a creditor (or authorized business staff) explicitly approves — never on
+ * request alone, which is the concrete mechanism behind "creditor approval required."
+ */
+export const rescheduleRequestStatusEnum = pgEnum("reschedule_request_status", ["pending", "approved", "rejected"]);
+
+/**
+ * Sprint 13: minimal internal notification-event ledger, per `docs/SPRINT_CONTROL.md`'s
+ * "Sequencing risk 1" resolution — earlier sprints (this one first) write a durable event record;
+ * Sprint 17 later wires real delivery channels (email/SMS/in-app) on top of these same rows without
+ * requiring this sprint to be rebuilt. `notification_type` is a free-vocabulary text column, not an
+ * enum, matching this sprint's own uncertainty about the full future vocabulary Sprint 17 will need
+ * (docs/sprints/SPRINT_17_Notifications.md) — an enum would need editing by every sprint that adds a
+ * new notification type, which is exactly the kind of forward-coupling this project's sprints
+ * otherwise avoid (e.g. `payment_attempt.failure_reason` is also free text for the same reason).
+ */

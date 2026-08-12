@@ -55,6 +55,14 @@ const serverEnvSchema = z.object({
   // when a payment or KYC operation is actually attempted without one.
   PAYMENT_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
   KYC_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
+  // Sprint 13 (docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md): shared secret protecting
+  // POST /api/scheduler/retry-failed-payments — Vercel Cron Jobs automatically send
+  // `Authorization: Bearer <CRON_SECRET>` to the route(s) configured in vercel.json when this
+  // environment variable is set, which is the idiomatic "background job" mechanism on a platform
+  // with no persistent worker process (this sprint's own "compatible with Vercel architecture"
+  // requirement). Optional at the schema level, mirroring PAYMENT_SANDBOX_WEBHOOK_SECRET above — the
+  // route itself throws a clear ConfigurationError only when actually invoked without it configured.
+  CRON_SECRET: z.string().min(16).optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

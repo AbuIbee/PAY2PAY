@@ -5,7 +5,7 @@ import { createTestVerificationService } from "@/lib/profiles/testFakes";
 import { PaymentService } from "./paymentService";
 import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus, PaymentMethod } from "./paymentService";
 import { PaymentWebhookService } from "./paymentWebhookService";
-import type { PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
+import type { FailedPaymentWorkflow, PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
 import { SandboxPaymentProvider } from "./sandboxPaymentProvider";
 
 /** Test-only in-memory doubles for PaymentService, mirroring src/lib/csvImport/testFakes.ts's pattern. */
@@ -188,6 +188,8 @@ export class InMemoryPaymentWebhookEventRepository implements PaymentWebhookEven
 export function createTestPaymentWebhookService(
   paymentCtx: ReturnType<typeof createTestPaymentService>,
   ledgerCtx: ReturnType<typeof createTestLedgerService> = createTestLedgerService(),
+  /** Sprint 13: optional, so every Sprint 9–12 call site passing only 2 args is unaffected. */
+  failedPaymentWorkflow?: FailedPaymentWorkflow,
 ) {
   const events = new InMemoryPaymentWebhookEventRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForPayments();
@@ -197,6 +199,7 @@ export function createTestPaymentWebhookService(
     payments: paymentCtx.payments,
     ledger: ledgerCtx.ledgerService,
     audit: new AuditService(auditRepo),
+    failedPaymentWorkflow,
   });
   return { events, auditRepo, ledgerCtx, paymentWebhookService };
 }

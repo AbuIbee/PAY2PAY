@@ -58,6 +58,11 @@ export class AchPaymentService {
         agreementId: input.agreementId,
         actingUserId: input.actingUserId,
         installmentScheduleItemId: input.installmentScheduleItemId,
+        // Sprint 13 fix: this was never set for ACH, only debit card (Sprint 12) — every
+        // payment_attempt this method creates was silently missing the method tag master spec §6
+        // requires ("must separately track ACH and card payment states"), and Sprint 13's own retry
+        // firing needs it to know which method-specific service to retry through.
+        paymentMethod: "ach",
       },
       "scheduled",
     );
@@ -69,9 +74,13 @@ export class AchPaymentService {
   }
 
   /**
-   * A debtor- or staff-initiated ad-hoc payment, not tied to a specific due installment — schedules
-   * and submits in one call (there is no future due date to wait for). Still requires an active
-   * mandate; still goes through the same verification/idempotency gate.
+   * A debtor- or staff-initiated ad-hoc payment — schedules and submits in one call (there is no
+   * future due date to wait for). Still requires an active mandate; still goes through the same
+   * verification/idempotency gate. `installmentScheduleItemId` is optional: omitted, this is a
+   * general ad-hoc payment not tied to any specific due installment (Sprint 11's original design);
+   * provided, it links the payment to the installment it covers — Sprint 13 (docs/sprints/
+   * SPRINT_13_FailedPayments_RetryWorkflow.md) needs this so a manual payment that clears a
+   * previously-failed installment can cancel that installment's still-pending automatic retry.
    */
   async createManualPayment(input: {
     idempotencyKey: string;
@@ -81,6 +90,7 @@ export class AchPaymentService {
     amountMinorUnits: number;
     currency: string;
     actingUserId: string;
+    installmentScheduleItemId?: string;
   }): Promise<PaymentAttemptRecord> {
     await this.requireActiveMandate(input.agreementId);
     const scheduled = await this.deps.payments.schedulePayment(
@@ -92,6 +102,8 @@ export class AchPaymentService {
         currency: input.currency,
         agreementId: input.agreementId,
         actingUserId: input.actingUserId,
+        installmentScheduleItemId: input.installmentScheduleItemId,
+        paymentMethod: "ach",
       },
       "scheduled",
     );
