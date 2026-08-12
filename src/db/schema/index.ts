@@ -19,3 +19,5 @@ export * from "./ach";
 export * from "./debitCard";
 export * from "./paymentRetry";
 export * from "./amendment";
+export * from "./partialPayment";
+export * from "./settlement";

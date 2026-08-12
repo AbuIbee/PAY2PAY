@@ -417,3 +417,51 @@ export const amendmentChangeTypeEnum = pgEnum("amendment_change_type", [
   "revised_schedule",
   "general",
 ]);
+
+/**
+ * Sprint 15 (docs/sprints/SPRINT_15_ PartialPayments_Settlement.md): `docs/STATE_MACHINES.md` §5's
+ * Partial-payment request lifecycle, collapsed the same way Sprint 14 collapsed the illustrative
+ * Hardship/Amendment split — `Submitted`/`UnderCreditorReview` are one status (`proposed`) and
+ * `Approved`/`AwaitingPayment` are one status (`awaiting_payment`), since this sprint's own text
+ * never describes a separate "approved but not yet awaiting payment" moment. `applied` matches
+ * §5's own "does not itself change agreement status beyond recording the partial payment against
+ * the installment" — no agreement_version is ever created for a partial payment.
+ */
+export const partialPaymentRequestStatusEnum = pgEnum("partial_payment_request_status", [
+  "proposed",
+  "awaiting_payment",
+  "applied",
+  "rejected",
+  "expired",
+]);
+
+/**
+ * Sprint 15: `docs/STATE_MACHINES.md` §6's Settlement lifecycle, with the same collapsing rationale
+ * as `partialPaymentRequestStatusEnum` above — this sprint's instruction text never mentions a
+ * signature step or a distinct `AmendmentInProgress` sub-phase for settlement (unlike Sprint 14's
+ * amendments, which explicitly requires dual signatures), so `accepted` moves directly to
+ * `awaiting_payment` rather than modeling a hand-off to the Amendment lifecycle. See
+ * `docs/SPRINT_CONTROL.md`'s Sprint 15 implementation notes for the full rationale.
+ */
+export const settlementProposalStatusEnum = pgEnum("settlement_proposal_status", [
+  "proposed",
+  "awaiting_payment",
+  "rejected",
+  "completed",
+  "failure_consequence_applied",
+]);
+
+/** Sprint 15: master spec §12's "whether payment is one-time or scheduled." */
+export const settlementPaymentModeEnum = pgEnum("settlement_payment_mode", ["one_time", "scheduled"]);
+
+/**
+ * Sprint 15: master spec §12's four explicit failed-settlement consequence options, verbatim.
+ * `restore_stated`/`forgive_permanently` each require their own stated amount, captured at proposal
+ * time on `settlement_proposal.failure_consequence_stated_amount_minor_units` — see settlement.ts.
+ */
+export const settlementFailureConsequenceEnum = pgEnum("settlement_failure_consequence", [
+  "restore_original",
+  "restore_stated",
+  "forgive_permanently",
+  "prior_agreement_controls",
+]);
