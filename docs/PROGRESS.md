@@ -1700,3 +1700,114 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 15 — Partial Payments & Settlement
+
+Source: `docs/sprints/SPRINT_15_ PartialPayments_Settlement.md`. Implemented in a fresh worktree
+branched from `origin/master`'s tip (`9f8dc9e`, the Sprint 14 merge commit).
+
+### Scope delivered
+
+- **Partial-payment lifecycle** (`src/lib/partialPayments/partialPaymentService.ts`), matching
+  `docs/STATE_MACHINES.md` §5 (collapsed — see `docs/SPRINT_CONTROL.md`'s "Sprint 15 implementation
+  notes"): `proposed → awaiting_payment → applied`, with `proposed → rejected` and
+  `awaiting_payment → expired` also supported. Only the borrower may propose (master spec §11);
+  only the counterparty may accept/reject/counter; counter mutates the same request in place and
+  flips whose turn it is to respond, mirroring `AmendmentService`'s identical mechanic. Acceptance
+  never touches `agreement.status` or creates a new version — the remaining balance stays due unless
+  a separate Settlement covers it.
+- **Settlement lifecycle** (`src/lib/settlements/settlementService.ts`), matching
+  `docs/STATE_MACHINES.md` §6 (collapsed): `proposed → awaiting_payment → completed` or
+  `→ failure_consequence_applied`. Either party may propose, capturing every §12-required field
+  (pre-settlement balance, settlement amount, forgiven amount, deadline, one-time-vs-scheduled, and
+  one of the four explicit failure-consequence options). Every creditor action capable of fixing
+  binding-capable settlement terms — proposing, countering, or finalizing acceptance — requires both
+  the `approve_settlement` capability and Sprint 2's `MfaService.requireStepUp(user,
+  "approve_settlement")`; widened from "creditor accepts" alone during this sprint's own Product Owner
+  review pass, which found and closed a real gap (see `docs/SPRINT_CONTROL.md`'s "Sprint 15 Product
+  Owner review pass").
+- **Settlement payment collection and completion**: `recordSettlementPayment` links an
+  already-succeeded `payment_attempt` (collected through the existing Sprint 9–13 payment gate, never
+  a separate money-movement path) to a settlement via a new `settlement_payment` join table, summing
+  every linked cleared payment to support both one-time and scheduled modes. Once the full settlement
+  amount clears, the agreement is marked `settled_in_full` — this class has no code path capable of
+  writing `paid_in_full`.
+- **All four failed-settlement consequences**, resolved by `expireOverdueSettlements` (a Sprint
+  13-precedent cron entry point) and recorded declaratively on `settlement_proposal.resolved_*`
+  columns: `restore_original` (pre-settlement balance minus whatever partial payments already
+  cleared), `restore_stated` (the exact amount stated at proposal time), `forgive_permanently` (the
+  exact amount stated at proposal time), `prior_agreement_controls` (declarative only — nothing
+  numeric to resolve).
+- Both cron-firing expirations (`PartialPaymentService.expireOverdue`,
+  `SettlementService.expireOverdueSettlements`) share one new route,
+  `POST /api/scheduler/expire-negotiations`, mirroring Sprint 13's `retry-failed-payments` route
+  exactly (`CRON_SECRET` Bearer auth, constant-time comparison, one new daily `vercel.json` entry).
+
+### Files created (21)
+
+`src/db/schema/{partialPayment,settlement}.ts`;
+`src/lib/partialPayments/{partialPaymentService,partialPaymentService.test,
+drizzlePartialPaymentRepository,getPartialPaymentService,testFakes}.ts`;
+`src/lib/settlements/{settlementService,settlementService.test,drizzleSettlementRepository,
+getSettlementService,testFakes,validation}.ts`; routes:
+`src/app/api/agreements/partial-payments/{propose,decide,record-payment}/route.ts`,
+`src/app/api/agreements/settlements/{propose,decide,record-payment}/route.ts`,
+`src/app/api/scheduler/expire-negotiations/route.ts`. Migration:
+`drizzle/migrations/0016_blushing_adam_destine.sql` (+ `meta/0016_snapshot.json`).
+
+### Files modified (4)
+
+`src/db/schema/{enums,index}.ts` (4 new enums, export the two new schema modules);
+`vercel.json` (one new daily cron entry); `drizzle/migrations/meta/_journal.json`.
+(`docs/SPRINT_CONTROL.md`/`docs/PROGRESS.md` also modified, as with every prior sprint's
+documentation update — not counted above, matching Sprint 14's own convention.)
+
+### Tests
+
+576/576 passing across 78 files (up from 538 at the end of Sprint 14 — 38 net new: 13 in
+`partialPaymentService.test.ts`, 25 in `settlementService.test.ts`, including 4 added during the
+Product Owner review pass). Covers: proposal (borrower-only for partial payment, either-party for
+settlement), rejection, counter (with the turn-flip and "proposer cannot decide their own proposal"
+guard), the `approve_partial_payment`/`approve_settlement` capability gates on every creditor action
+(decide *and* propose/counter, per the review-pass widening), the creditor step-up gate on every
+creditor action capable of fixing binding-capable terms (propose, counter, accept — each blocked
+without a fresh step-up, allowed once granted, confirmed *not* required for any debtor action, and
+confirmed not to leak forward from one gated action to a later one), payment recording
+(amount-mismatch and not-yet-succeeded rejections), "acceptance does not forgive the remainder"
+(agreement status/version asserted unchanged), settlement completion marking `settled_in_full` and
+explicitly asserting `not.toBe("paid_in_full")`, scheduled-mode multi-payment summing, expiry of
+overdue negotiations, and all four failure consequences individually (including that the resolved
+consequence always matches the one chosen at proposal time). Sprints 1–14's own tests all still pass
+unchanged.
+
+### Verification commands run
+
+`npm ci` (this worktree's own `node_modules` was otherwise nearly empty — a worktree-isolation
+artifact, not a code issue, same as every prior worktree sprint's own note) then: `npm run typecheck`
+(`tsc --noEmit`, this project's own authoritative gate) — pass, 0 errors (see `docs/SPRINT_CONTROL.md`'s
+"Sprint 15 Product Owner review pass" for why a bare `tsc --noEmit` run before any build/dev pass in a
+fresh worktree reports a false-positive `LayoutProps` error that disappears once `.next/types` exists —
+confirmed not a Sprint 15 regression). `npx eslint .` — pass, 0 errors (6 pre-existing-pattern warnings
+in files this sprint never touched, unchanged). `npx vitest run` — pass, 576/576 across 78 files. `npx
+next build` (Turbopack) — pass, including its own TypeScript pass (0 errors); all 7 new routes generated
+correctly, no change to any existing route's classification. `npx drizzle-kit check` — pass, migration
+history internally consistent, no drift (purely additive: 4 new enums, 3 new tables, 0 altered/
+dropped columns). RLS + `REVOKE ALL ... FROM anon, authenticated` confirmed present on all three new
+tables (`partial_payment_request`, `settlement_proposal`, `settlement_payment`).
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction ("Do not commit, push, merge, deploy,
+or begin Sprint 16 unless docs/SPRINT_CONTROL.md specifically authorizes that action at this stage"),
+commit/push is deferred until after Product Owner review of this status entry — matching Sprints
+5–14's own precedent. No file outside the created/modified lists above was touched. No prior-sprint
+production file was modified — this sprint is purely additive at the file level (only `enums.ts`,
+`schema/index.ts`, and `vercel.json` gained new entries; no existing function body changed).
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

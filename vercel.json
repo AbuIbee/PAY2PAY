@@ -3,6 +3,10 @@
     {
       "path": "/api/scheduler/retry-failed-payments",
       "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/scheduler/expire-negotiations",
+      "schedule": "0 14 * * *"
     }
   ]
 }
