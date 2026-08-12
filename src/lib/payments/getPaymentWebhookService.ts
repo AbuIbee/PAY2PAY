@@ -1,6 +1,7 @@
 import "server-only";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
+import { getFailedPaymentWorkflowService } from "@/lib/failedPayments/getFailedPaymentWorkflowService";
 import { getLedgerService } from "@/lib/ledger/getLedgerService";
 import { DrizzlePaymentAttemptRepository } from "./drizzlePaymentAttemptRepository";
 import { DrizzlePaymentWebhookEventRepository } from "./drizzlePaymentWebhookEventRepository";
@@ -17,6 +18,7 @@ export function getPaymentWebhookService(): PaymentWebhookService {
       payments: new DrizzlePaymentAttemptRepository(),
       ledger: getLedgerService(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
+      failedPaymentWorkflow: getFailedPaymentWorkflowService(),
     });
   }
   return cached;
