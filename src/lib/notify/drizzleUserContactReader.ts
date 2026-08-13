@@ -10,4 +10,10 @@ export class DrizzleUserContactReader implements UserContactReader {
     const rows = await db.select({ email: userAccount.email }).from(userAccount).where(eq(userAccount.id, userId)).limit(1);
     return rows[0]?.email ?? null;
   }
+
+  async getPhone(userId: string): Promise<string | null> {
+    const db = getDb();
+    const rows = await db.select({ phone: userAccount.phone }).from(userAccount).where(eq(userAccount.id, userId)).limit(1);
+    return rows[0]?.phone ?? null;
+  }
 }

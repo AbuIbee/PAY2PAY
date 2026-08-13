@@ -512,3 +512,18 @@ export const paymentDisputeCategoryEnum = pgEnum("payment_dispute_category", [
  * *records* the processor's own determination rather than the platform adjudicating it.
  */
 export const paymentDisputeStatusEnum = pgEnum("payment_dispute_status", ["claimed", "upheld", "denied"]);
+
+/** Sprint 17 (docs/sprints/SPRINT_17_Notifications.md): this sprint's own required channel list, verbatim. "in_app" delivers by existing — a `notification_event` row is itself the in-app notification, so that channel's own send step is a no-op that marks straight to `delivered` (see notificationService.ts). */
+export const notificationChannelEnum = pgEnum("notification_channel", ["email", "sms", "in_app"]);
+
+/**
+ * Sprint 17: per-(recipient, notification_event row) delivery status — one row per channel per
+ * logical event (see notificationEvent's own updated doc comment in paymentRetry.ts for why this
+ * sprint fans a single `notify()` call out into multiple `notification_event` rows rather than
+ * adding a channel-list column to one row). `sent` (handed to the provider) is kept distinct from
+ * `delivered` (provider confirmed receipt) for email/SMS, even though this sandbox's providers
+ * conflate the two today (no real delivery-receipt webhook exists yet, matching every prior sprint's
+ * "sandbox/mock only" precedent) — `in_app` skips `sent` and goes straight from `pending` to
+ * `delivered` on insert.
+ */
+export const notificationStatusEnum = pgEnum("notification_status", ["pending", "sent", "delivered", "failed"]);

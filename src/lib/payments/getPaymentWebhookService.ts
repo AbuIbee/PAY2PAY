@@ -3,6 +3,8 @@ import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getFailedPaymentWorkflowService } from "@/lib/failedPayments/getFailedPaymentWorkflowService";
 import { getLedgerService } from "@/lib/ledger/getLedgerService";
+import { getNotificationService } from "@/lib/notify/getNotificationService";
+import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { DrizzlePaymentAttemptRepository } from "./drizzlePaymentAttemptRepository";
 import { DrizzlePaymentWebhookEventRepository } from "./drizzlePaymentWebhookEventRepository";
 import { getPaymentProvider } from "./getPaymentProvider";
@@ -19,6 +21,8 @@ export function getPaymentWebhookService(): PaymentWebhookService {
       ledger: getLedgerService(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
       failedPaymentWorkflow: getFailedPaymentWorkflowService(),
+      notifications: getNotificationService(),
+      profileOwners: new DrizzleProfileOwnerReader(),
     });
   }
   return cached;

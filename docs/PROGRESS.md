@@ -1907,3 +1907,115 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 17 — Notifications
+
+Source: `docs/sprints/SPRINT_17_Notifications.md`. Implemented in a fresh worktree branched from
+`origin/master`'s tip (`02fb5cf`, the Sprint 16 merge commit).
+
+### Scope delivered
+
+- **Multi-channel delivery** (email/SMS/in-app) built on Sprint 13's own `notification_event` table
+  and `NotificationService` primitive, extended per that sprint's own doc comment ("this is the part
+  Sprint 17 will read from and build real multi-channel delivery on top of"). One `notify()` call
+  fans out into one row per applicable channel (`src/lib/notify/eventTypes.ts`'s per-type default
+  channel set), each independently tracking its own delivery status.
+- **All 18 named events** implemented as a closed `NotificationEventType` union with a code-based
+  template registry (`src/lib/notify/templates.ts`) rendering subject/email-body/SMS-body/in-app-body
+  per type — no DB-stored/CMS template system (no admin UI was requested). **Product Owner review
+  pass finding**: only `payment_failed` (Sprint 13), plus `payment_cleared`/`payment_disputed` (wired
+  in this review pass, via `PaymentWebhookService`) have a real trigger anywhere in the codebase; the
+  other 15 event types have templates/classifications ready but no domain service calls `notify()`
+  for them yet — an explicitly documented, prioritized gap for a dedicated follow-up (see
+  `docs/SPRINT_CONTROL.md`'s "Sprint 17 Product Owner review pass").
+- **Delivery status + retry strategy**: `notification_event.status` (pending/sent/delivered/failed)
+  plus `attempt_count`/`next_retry_at`; a failed delivery retries in place (not a new row, deliberately
+  diverging from `payment_retry`'s Sprint 13 "new row per attempt" model — no money movement here) via
+  a new cron route, `POST /api/scheduler/retry-notifications`.
+- **Preference model**: `notification_preference` (new table) — per (user, type, channel) opt-out,
+  absence of a row meaning enabled. **Critical notifications cannot be disabled**, enforced
+  structurally: `resolveChannels` never even queries the preference table for a critical type, and
+  `setPreference` silently no-ops an attempted opt-out of one.
+- **Delivery dedup**: a caller-supplied `dedupeKey` (combined with channel) mirrors
+  `payment_attempt.idempotency_key`'s identical Sprint 9 precedent — a second `notify()` call for the
+  same logical event returns the existing rows instead of sending again.
+- **Failure logging**: on `notification_event.failure_reason`/`attempt_count` directly, no separate
+  log table.
+- **No unrestricted chat**: enforced by construction — `NotificationService` has no method accepting
+  caller-supplied free-text subject/body; only a fixed, closed set of event types can be rendered.
+
+### Files created (8)
+
+`src/db/schema/notify.ts`; `src/lib/notify/{eventTypes,templates,
+drizzleNotificationPreferenceRepository}.ts`; routes:
+`src/app/api/notifications/route.ts`, `src/app/api/notifications/preferences/route.ts`,
+`src/app/api/scheduler/retry-notifications/route.ts`. Migration:
+`drizzle/migrations/0018_flawless_morlocks.sql` (+ `meta/0018_snapshot.json`).
+
+### Files modified (16)
+
+`src/db/schema/{enums,index,paymentRetry}.ts` (2 new enums, export the new schema module, extend the
+existing `notification_event` table with 7 new columns); `src/lib/notify/{notificationService,
+notificationService.test,testFakes,drizzleNotificationEventRepository,drizzleUserContactReader,
+getNotificationService}.ts` (multi-channel/preference/dedupe/retry rewrite — see implementation
+notes for the one behavioral signature change); `src/lib/failedPayments/failedPaymentWorkflowService.ts`
+(updated for the new `notify()` signature, byte-identical resulting email content);
+`src/lib/payments/{paymentWebhookService,paymentWebhookService.test,getPaymentWebhookService,
+testFakes}.ts` (Product Owner review pass: wires `payment_cleared`/`payment_disputed` to a real
+trigger via two new optional constructor deps); `vercel.json` (one new daily cron entry);
+`drizzle/migrations/meta/_journal.json`.
+
+### Tests
+
+611/611 passing across 78 files (up from 599 at the end of Sprint 16 — 12 net new: `notificationService.test.ts`
+was rewritten with 11 tests replacing 2 superseded ones, plus one review-pass "settlement is critical"
+test and two `paymentWebhookService.test.ts` notification-wiring tests). Covers every category this
+sprint's own instruction names: **critical preference override** (a critical type is sent regardless
+of an attempted opt-out, which is never even stored; a non-critical type's opt-out and later
+opt-back-in are both honored; `settlement`'s own critical-override case added in the review pass),
+**delivery dedupe** (a repeated `notify()` call with the same key returns the existing rows and does
+not re-send; independent recipients get independent keys), **authorization**
+(`listForUser`/`getPreferences` never return another user's data), and **retry** (a failed delivery
+is retried once due, not before; succeeds and marks delivered; stops retrying once `maxAttempts` is
+exhausted and is excluded from further retry scans). Plus the two original Sprint 13 scenarios
+(record always created even with no contact info on file; delivery attempted and marked delivered
+when contact info is present), adapted for the multi-channel shape, and two new
+`paymentWebhookService.test.ts` cases confirming `payment.succeeded`/`payment.disputed` now notify
+both parties, and that the webhook still succeeds when notifications aren't wired at all. Sprints
+1–16's own tests all still pass unchanged, including `paymentRetryService.test.ts`'s pre-existing
+email-content assertions against the rewritten template-driven delivery path.
+
+### Verification commands run
+
+`npm ci` (this worktree's own `node_modules` was otherwise nearly empty — a worktree-isolation
+artifact, not a code issue, same as every prior worktree sprint's own note) then, re-run after the
+Product Owner review pass's fixes: `npm run typecheck` (`tsc --noEmit`, this project's own
+authoritative gate) — pass, 0 errors. `npx eslint .` — pass, 0 errors (7 warnings: 6 pre-existing in
+files this sprint never touched, 1 pre-existing-pattern warning in `src/lib/disputes/testFakes.ts`
+from Sprint 16, unchanged). `npx vitest run` — pass, 611/611 across 78 files. `npx next build`
+(Turbopack) — pass, including its own TypeScript pass (0 errors); all 3 new routes generated
+correctly, no change to any existing route's classification. `npx drizzle-kit check` — pass, migration
+history internally consistent, no drift — no new migration was needed for the review pass's fixes
+(logic-only). RLS + `REVOKE ALL ... FROM anon, authenticated` confirmed present on the new table
+(`notification_preference`); `notification_event`'s own `REVOKE` already existed from its original
+Sprint 13 migration.
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction ("Do not commit, push, merge, deploy,
+or begin Sprint 18 unless docs/SPRINT_CONTROL.md specifically authorizes that action at this stage"),
+commit/push is deferred until after Product Owner review of this status entry — matching Sprints
+5–16's own precedent. No file outside the created/modified lists above was touched.
+`FailedPaymentWorkflowService`/`PaymentWebhookService` are the only prior-sprint production files
+with a behavior change: the former's resulting email content is byte-identical to before (verified by
+its own pre-existing test still passing unmodified), and the latter's change is purely additive (two
+new optional constructor deps, defaulting to a no-op when omitted — every pre-Sprint-17 test
+constructing it without them is unaffected).
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

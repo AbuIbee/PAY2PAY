@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { createTestLedgerService } from "@/lib/ledger/testFakes";
+import type { NotificationService } from "@/lib/notify/notificationService";
 import { createTestVerificationService } from "@/lib/profiles/testFakes";
+import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import { PaymentService } from "./paymentService";
 import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus, PaymentMethod } from "./paymentService";
 import { PaymentWebhookService } from "./paymentWebhookService";
@@ -190,6 +192,9 @@ export function createTestPaymentWebhookService(
   ledgerCtx: ReturnType<typeof createTestLedgerService> = createTestLedgerService(),
   /** Sprint 13: optional, so every Sprint 9–12 call site passing only 2 args is unaffected. */
   failedPaymentWorkflow?: FailedPaymentWorkflow,
+  /** Sprint 17 review-pass addition: optional, so every pre-Sprint-17 call site is unaffected. */
+  notifications?: NotificationService,
+  profileOwners?: ProfileOwnerReader,
 ) {
   const events = new InMemoryPaymentWebhookEventRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForPayments();
@@ -200,6 +205,8 @@ export function createTestPaymentWebhookService(
     ledger: ledgerCtx.ledgerService,
     audit: new AuditService(auditRepo),
     failedPaymentWorkflow,
+    notifications,
+    profileOwners,
   });
   return { events, auditRepo, ledgerCtx, paymentWebhookService };
 }

@@ -1,7 +1,13 @@
 import { sql } from "drizzle-orm";
-import { date, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { agreement, installmentScheduleItem } from "./agreement";
-import { paymentRetryStatusEnum, profileKindEnum, rescheduleRequestStatusEnum } from "./enums";
+import {
+  notificationChannelEnum,
+  notificationStatusEnum,
+  paymentRetryStatusEnum,
+  profileKindEnum,
+  rescheduleRequestStatusEnum,
+} from "./enums";
 import { paymentAttempt } from "./payment";
 import { userAccount } from "./identity";
 
@@ -71,22 +77,53 @@ export const rescheduleRequest = pgTable("reschedule_request", {
 }).enableRLS();
 
 /**
- * Sprint 13: minimal internal notification-event ledger — see enums.ts's doc comment on why
- * `notification_type` is free text. `recipient_user_id` (not a profile ref) since every recipient of
- * a payment-workflow notification is always resolved from a `payment_attempt`'s payer/recipient
- * profile back to that profile's owning user (`ProfileOwnerReader`, the same resolution every other
- * authorization check in this codebase already uses), matching how a user actually receives a
- * notification (their account), not a profile abstraction.
+ * Sprint 13 (extended by Sprint 17, docs/sprints/SPRINT_17_Notifications.md): the notification
+ * ledger. `recipient_user_id` (not a profile ref) since every recipient of a payment-workflow
+ * notification is always resolved from a `payment_attempt`'s payer/recipient profile back to that
+ * profile's owning user (`ProfileOwnerReader`, the same resolution every other authorization check
+ * in this codebase already uses), matching how a user actually receives a notification (their
+ * account), not a profile abstraction. See enums.ts's doc comment on why `notification_type` stays
+ * free text.
+ *
+ * Sprint 17 addition: one row per *channel* per logical event, not one row with a channel list —
+ * `NotificationService.notify()` fans a single call out into up to three rows (email/sms/in_app, per
+ * that event type's default channel set, filtered by preference unless critical), each independently
+ * tracking its own `status`/`failure_reason`/`attempt_count`/`next_retry_at`. This keeps "delivery
+ * status" and "retry strategy" per-channel-accurate (an email can fail while SMS succeeds) without a
+ * second table, and reuses this same row Sprint 13 already built for the in-app case — `channel =
+ * 'in_app'` rows need no separate delivery step at all, since the row's own existence *is* the in-app
+ * notification (`listForUser`, already built).
+ *
+ * `dedupe_key` (nullable, unique when present) is a caller-supplied deterministic key — e.g.
+ * `payment_failed:{paymentAttemptId}:{recipientUserId}:{channel}` — so a webhook or workflow retry
+ * that calls `notify()` again for the same logical event never sends (or even records) a duplicate,
+ * mirroring `payment_attempt.idempotency_key`'s identical Sprint 9 precedent.
+ *
+ * `critical` is set once, at insert time, from the event type's own fixed classification
+ * (`src/lib/notify/eventTypes.ts`) — never read from user preference — so "critical notifications
+ * cannot be disabled" is a property of the row itself, not a runtime check that could be bypassed by
+ * a future caller forgetting to re-check it.
  */
-export const notificationEvent = pgTable("notification_event", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  recipientUserId: uuid("recipient_user_id")
-    .notNull()
-    .references(() => userAccount.id),
-  notificationType: text("notification_type").notNull(),
-  relatedPaymentAttemptId: uuid("related_payment_attempt_id").references(() => paymentAttempt.id),
-  relatedAgreementId: uuid("related_agreement_id").references(() => agreement.id),
-  payload: jsonb("payload").notNull(),
-  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}).enableRLS();
+export const notificationEvent = pgTable(
+  "notification_event",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    recipientUserId: uuid("recipient_user_id")
+      .notNull()
+      .references(() => userAccount.id),
+    notificationType: text("notification_type").notNull(),
+    channel: notificationChannelEnum("channel").notNull().default("email"),
+    status: notificationStatusEnum("status").notNull().default("pending"),
+    critical: boolean("critical").notNull().default(false),
+    dedupeKey: text("dedupe_key"),
+    relatedPaymentAttemptId: uuid("related_payment_attempt_id").references(() => paymentAttempt.id),
+    relatedAgreementId: uuid("related_agreement_id").references(() => agreement.id),
+    payload: jsonb("payload").notNull(),
+    failureReason: text("failure_reason"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    nextRetryAt: timestamp("next_retry_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("notification_event_dedupe_key_unique").on(table.dedupeKey)],
+).enableRLS();
