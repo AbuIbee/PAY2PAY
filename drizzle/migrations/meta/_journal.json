@@ -134,6 +134,20 @@
       "when": 1786579483195,
       "tag": "0018_flawless_morlocks",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786646825736,
+      "tag": "0019_kind_thanos",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786651405701,
+      "tag": "0020_jittery_may_parker",
+      "breakpoints": true
     }
   ]
 }

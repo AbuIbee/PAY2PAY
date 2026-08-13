@@ -9,6 +9,7 @@ import {
   profileKindEnum,
 } from "./enums";
 import { userAccount } from "./identity";
+import { relationship } from "./relationship";
 
 /**
  * Sprint 5 (docs/sprints/SPRINT_05_Agreement_Engine.md) agreement engine.
@@ -35,6 +36,13 @@ export const agreement = pgTable("agreement", {
   createdByUserId: uuid("created_by_user_id")
     .notNull()
     .references(() => userAccount.id),
+  // Sprint 18A (docs/sprints/Sprint_18A_CooperativeAccountPairing_FinancialAccountLinking_
+  // RelationshipArchitecture.md) addition: additive, nullable — every pre-Sprint-18A agreement has no
+  // relationship and is untouched; this sprint's own "for existing records, determine a migration/
+  // backfill strategy suitable for development/test data... do not create invalid production
+  // assumptions" is satisfied by leaving pre-existing rows null rather than fabricating a backfilled
+  // relationship history that never actually happened.
+  relationshipId: uuid("relationship_id").references(() => relationship.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   closedAt: timestamp("closed_at", { withTimezone: true }),
 }).enableRLS();

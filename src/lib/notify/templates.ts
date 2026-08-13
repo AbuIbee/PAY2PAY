@@ -164,4 +164,49 @@ export const NOTIFICATION_TEMPLATES: Record<NotificationEventType, NotificationT
       inAppBody: `A restriction has been placed on your account (${reason}).`,
     };
   },
+  relationship_invitation: () => ({
+    subject: "You have a pending relationship invitation",
+    emailBody: "You've been invited to a cooperative payment relationship on PAY2PAY. Log in to review and respond.",
+    smsBody: "You have a pending PAY2PAY relationship invitation. Log in to review.",
+    inAppBody: "You have a pending relationship invitation.",
+  }),
+  relationship_accepted: () => ({
+    subject: "Your relationship invitation was accepted",
+    emailBody: "The invitation you sent has been accepted. The relationship can now proceed to setup.",
+    smsBody: "Your PAY2PAY relationship invitation was accepted.",
+    inAppBody: "Your relationship invitation was accepted.",
+  }),
+  relationship_declined: () => ({
+    subject: "Your relationship invitation was declined",
+    emailBody: "The invitation you sent has been declined.",
+    smsBody: "Your PAY2PAY relationship invitation was declined.",
+    inAppBody: "Your relationship invitation was declined.",
+  }),
+  relationship_activated: () => ({
+    subject: "Your relationship is now active",
+    emailBody: "Your cooperative payment relationship is fully set up and now active.",
+    smsBody: "Your PAY2PAY relationship is now active.",
+    inAppBody: "This relationship is now active.",
+  }),
+  relationship_restricted: (p) => {
+    const reason = str(p, "reason", "a policy or compliance review");
+    return {
+      subject: "A restriction has been placed on your relationship",
+      emailBody: `A restriction has been placed on this relationship (${reason}).`,
+      smsBody: `A restriction was placed on your PAY2PAY relationship (${reason}).`,
+      inAppBody: `A restriction has been placed on this relationship (${reason}).`,
+    };
+  },
+  relationship_funding_account_replaced: () => ({
+    subject: "The funding account for your relationship has changed",
+    emailBody: "The account funds are pulled from for this relationship has changed. If you did not expect this, contact support immediately.",
+    smsBody: "Your PAY2PAY relationship funding account changed. If this wasn't expected, contact support.",
+    inAppBody: "The funding account for this relationship has changed.",
+  }),
+  relationship_payout_account_replaced: () => ({
+    subject: "The payout account for your relationship has changed",
+    emailBody: "The account receiving payouts for this relationship has changed. If you did not expect this, contact support immediately.",
+    smsBody: "Your PAY2PAY relationship payout account changed. If this wasn't expected, contact support.",
+    inAppBody: "The payout account for this relationship has changed.",
+  }),
 };

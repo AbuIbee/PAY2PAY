@@ -527,3 +527,67 @@ export const notificationChannelEnum = pgEnum("notification_channel", ["email", 
  * `delivered` on insert.
  */
 export const notificationStatusEnum = pgEnum("notification_status", ["pending", "sent", "delivered", "failed"]);
+
+/**
+ * Sprint 18A (docs/sprints/Sprint_18A_CooperativeAccountPairing_FinancialAccountLinking_
+ * RelationshipArchitecture.md): the relationship lifecycle, matching that spec's §13 canonical
+ * progression. Two states from the spec's own "additional states may include" list —
+ * `disputed`/`archived` — are deliberately not included: dispute state already lives on
+ * `agreement_dispute`/`payment_dispute` (Sprint 16) and is read from there rather than duplicated
+ * here (a relationship whose governing agreement has an open dispute is queried, not flagged twice);
+ * "archived" has no retention/purge workflow anywhere in this codebase yet (a Sprint 18/20 concern),
+ * so adding the status now with no code path that ever sets it would be exactly the kind of
+ * speculative, never-exercised state this project's sprints consistently avoid.
+ */
+export const relationshipStatusEnum = pgEnum("relationship_status", [
+  "invited",
+  "counterparty_linked",
+  "identities_confirmed",
+  "financial_setup_pending",
+  "financial_accounts_ready",
+  "agreement_pending",
+  "agreement_ready",
+  "signature_pending",
+  "signed",
+  "active",
+  "restricted",
+  "suspended",
+  "closed",
+  "cancelled",
+]);
+
+/** Sprint 18A: a relationship_participant's own membership status, independent of the relationship's own lifecycle status. */
+export const relationshipParticipantStatusEnum = pgEnum("relationship_participant_status", ["invited", "linked", "active", "removed"]);
+
+/**
+ * Sprint 18A §6's invitation lifecycle. `draft`/`delivered`/`superseded` from the spec's own
+ * illustrative state list are deliberately not included — invitations are created-and-sent
+ * atomically (no separate draft-save step is in scope), no email-delivery-receipt webhook exists
+ * anywhere in this codebase (Sprint 17's `ConsoleEmailSender` is log-only, so "delivered" could never
+ * be genuinely distinguished from "sent"), and re-inviting after cancellation creates a fresh
+ * invitation row rather than a `superseded` back-reference — simpler, and consistent with this
+ * sprint's own "only include states that are justified by the existing architecture."
+ */
+export const relationshipInvitationStatusEnum = pgEnum("relationship_invitation_status", [
+  "sent",
+  "viewed",
+  "accepted",
+  "declined",
+  "expired",
+  "cancelled",
+]);
+
+/** Sprint 18A §15: which kind of financial account a party has on file. */
+export const financialAccountTypeEnum = pgEnum("financial_account_type", ["bank_account", "debit_card"]);
+
+/** Sprint 18A §17: the relationship layer's own authoritative verification vocabulary, consumed from (never re-implemented on top of) Sprint 11/12's existing ACH mandate / debit-card verification concepts — see relationshipFinancialAccountService.ts's doc comment. */
+export const financialAccountStatusEnum = pgEnum("financial_account_status", ["pending_verification", "verified", "failed", "disabled"]);
+
+/** Sprint 18A §19: "where money is pulled from" vs. "where money is delivered" — deliberately always distinct (no `both` value): every payment rail this codebase supports (ACH, debit card) is either a funding-only or payout-only rail today, so a single account claiming both roles at once has no real code path to exercise, per this sprint's own "use BOTH only if technically supported." */
+export const financialAccountUsageEnum = pgEnum("financial_account_usage", ["funding", "payout"]);
+
+/** Sprint 18A §19: an assignment's own lifecycle — `active` is the current, in-effect assignment for its (relationship, usage) slot; `superseded` is immutable history, never deleted (this sprint's own "do not overwrite history"). */
+export const relationshipFinancialAccountAssignmentStatusEnum = pgEnum("relationship_financial_account_assignment_status", [
+  "active",
+  "superseded",
+]);

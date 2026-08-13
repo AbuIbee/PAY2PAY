@@ -24,3 +24,5 @@ export * from "./settlement";
 export * from "./agreementDispute";
 export * from "./paymentDispute";
 export * from "./notify";
+export * from "./relationship";
+export * from "./financialAccount";

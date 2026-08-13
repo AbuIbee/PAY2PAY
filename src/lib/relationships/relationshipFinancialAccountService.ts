@@ -1,0 +1,478 @@
+import "server-only";
+import type { AuditService } from "@/lib/audit/auditService";
+import { ForbiddenError, ValidationError, ConflictError } from "@/lib/errors";
+import type { Capability } from "@/lib/staff/capabilities";
+import type { StaffService } from "@/lib/staff/staffService";
+import type { NotificationService } from "@/lib/notify/notificationService";
+import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
+import type { PlatformRole } from "@/lib/auth/authService";
+import { isAdminRole } from "@/lib/admin/capabilities";
+import type { PartyRef } from "./relationshipInvitationService";
+import type { RelationshipRepository, RelationshipParticipantRecord, RelationshipParticipantRepository } from "./relationshipService";
+
+export type FinancialAccountType = "bank_account" | "debit_card";
+export type FinancialAccountStatus = "pending_verification" | "verified" | "failed" | "disabled";
+export type FinancialAccountUsage = "funding" | "payout";
+export type RelationshipFinancialAccountAssignmentStatus = "active" | "superseded";
+
+export interface FinancialAccountRecord {
+  id: string;
+  individualProfileId: string | null;
+  organizationId: string | null;
+  accountType: FinancialAccountType;
+  providerName: string;
+  providerAccountRef: string;
+  maskedLast4: string | null;
+  institutionDisplayName: string | null;
+  cardExpiryMonth: number | null;
+  cardExpiryYear: number | null;
+  cardBrand: string | null;
+  status: FinancialAccountStatus;
+  addedByUserId: string;
+  createdAt: Date;
+  verifiedAt: Date | null;
+  disabledAt: Date | null;
+  updatedAt: Date;
+}
+
+export interface RelationshipFinancialAccountAssignmentRecord {
+  id: string;
+  relationshipId: string;
+  relationshipParticipantId: string;
+  financialAccountId: string;
+  usage: FinancialAccountUsage;
+  status: RelationshipFinancialAccountAssignmentStatus;
+  selectedByUserId: string;
+  effectiveFrom: Date;
+  effectiveTo: Date | null;
+  supersededBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface RelationshipFinancialAccountAssignmentWithAccount extends RelationshipFinancialAccountAssignmentRecord {
+  financialAccount: FinancialAccountRecord;
+}
+
+/**
+ * Admin connector (Phase 37) view: deliberately omits `providerAccountRef` entirely (a reusable
+ * provider token — "do not expose... provider secret") even though it is never a raw account/routing
+ * number or PAN. Everything else here is exactly what Phase 37 names as permitted: financial-account
+ * status and masked account information.
+ */
+export interface AdminFinancialAccountAssignmentView {
+  assignmentId: string;
+  usage: FinancialAccountUsage;
+  assignmentStatus: RelationshipFinancialAccountAssignmentStatus;
+  accountType: FinancialAccountType;
+  accountStatus: FinancialAccountStatus;
+  maskedLast4: string | null;
+  institutionDisplayName: string | null;
+  effectiveFrom: Date;
+  effectiveTo: Date | null;
+}
+
+/** Real implementation: DrizzleFinancialAccountRepository. Owns only the party-scoped `financial_account` table — never the assignment table (see RelationshipFinancialAccountRepository below). */
+export interface FinancialAccountRepository {
+  insert(input: {
+    individualProfileId: string | null;
+    organizationId: string | null;
+    accountType: FinancialAccountType;
+    providerName: string;
+    providerAccountRef: string;
+    maskedLast4: string | null;
+    institutionDisplayName: string | null;
+    cardExpiryMonth: number | null;
+    cardExpiryYear: number | null;
+    cardBrand: string | null;
+    addedByUserId: string;
+  }): Promise<FinancialAccountRecord>;
+  findById(id: string): Promise<FinancialAccountRecord | null>;
+  listForParty(individualProfileId: string | null, organizationId: string | null): Promise<FinancialAccountRecord[]>;
+  markVerified(id: string, verifiedAt: Date): Promise<FinancialAccountRecord>;
+  markFailed(id: string): Promise<FinancialAccountRecord>;
+  markDisabled(id: string, disabledAt: Date): Promise<FinancialAccountRecord>;
+}
+
+/** Real implementation: DrizzleRelationshipFinancialAccountRepository. Owns only the `relationship_financial_account` assignment table. */
+export interface RelationshipFinancialAccountRepository {
+  insertAssignment(input: {
+    relationshipId: string;
+    relationshipParticipantId: string;
+    financialAccountId: string;
+    usage: FinancialAccountUsage;
+    selectedByUserId: string;
+  }): Promise<RelationshipFinancialAccountAssignmentRecord>;
+  findActiveAssignment(relationshipId: string, usage: FinancialAccountUsage): Promise<RelationshipFinancialAccountAssignmentWithAccount | null>;
+  markSuperseded(id: string, supersededBy: string): Promise<RelationshipFinancialAccountAssignmentRecord>;
+  listForRelationship(relationshipId: string): Promise<RelationshipFinancialAccountAssignmentWithAccount[]>;
+}
+
+/** Narrow interface onto RelationshipService's own read-time-sync method — avoids depending on that class's entire surface (this codebase's established interface-segregation precedent, e.g. MandateReader). RelationshipService itself satisfies this structurally. */
+export interface RelationshipStatusSyncer {
+  syncFromFinancialAccounts(relationshipId: string): Promise<void>;
+}
+
+export interface RelationshipFinancialAccountServiceDeps {
+  financialAccounts: FinancialAccountRepository;
+  assignments: RelationshipFinancialAccountRepository;
+  relationships: RelationshipRepository;
+  participants: RelationshipParticipantRepository;
+  relationshipSync: RelationshipStatusSyncer;
+  profileOwners: ProfileOwnerReader;
+  staffService: StaffService;
+  notifications: NotificationService;
+  audit: AuditService;
+}
+
+/**
+ * `change_payout_configuration` (Sprint 4's own fixed 13-capability list) is the closest existing
+ * capability to "manage this organization's financial accounts" — there is no dedicated
+ * "manage_financial_accounts" capability in that fixed list, and this sprint's own instruction is to
+ * reuse existing capabilities rather than invent competing ones. Used for every business-party action
+ * in this class (add/assign/replace), for both funding and payout accounts alike — the fixed list does
+ * not distinguish the two.
+ */
+const FINANCIAL_ACCOUNT_CAPABILITY: Capability = "change_payout_configuration";
+
+/**
+ * Sprint 18A §14–§19: the party-owned financial account layer and its relationship-scoped assignment.
+ * Deliberately does not re-implement Sprint 11 (ACH mandate) or Sprint 12 (debit card) verification —
+ * `applyVerificationResult` is the one seam those connectors call into once *their own* provider/
+ * sandbox verification completes, matching Phase 16's "reuse the existing verification mechanism, do
+ * not invent another verification framework."
+ *
+ * Debit-card connector (Phase 21) — remediation pass: `financial_account` now carries optional
+ * `cardExpiryMonth`/`cardExpiryYear`/`cardBrand` columns (required by `addAccount` when `accountType`
+ * is `debit_card`, see that method's own doc comment), so `RelationshipService.linkAgreement` can
+ * auto-register a real Sprint 12 `debit_card_method` row the same way it auto-authorizes an ACH
+ * mandate — via `CardMethodReader.registerFromFinancialAccount`, which delegates entirely to
+ * `DebitCardMethodService.registerCard` (no card logic reimplemented here). This relationship layer
+ * never stores a raw PAN/CVV — only the same opaque `providerAccountRef` token every other account
+ * type uses, plus non-sensitive last4/expiry/brand display metadata.
+ *
+ * Account replacement (`replaceAccount`) never overwrites the prior assignment row — it inserts a new
+ * `active` row and marks the previous one `superseded` via `supersededBy`, preserving full history
+ * ("do not overwrite history", Phase 18). Mutual/counterparty approval is deliberately NOT required to
+ * replace a funding or payout account: this mirrors Sprint 11's `AchMandateService.handleBankChange`
+ * and Sprint 12's debit-card replacement, neither of which requires counterparty sign-off to change a
+ * payer's or payee's own payment method — only the assigned participant (or their authorized staff)
+ * may act, exactly as enforced below.
+ */
+export class RelationshipFinancialAccountService {
+  constructor(private readonly deps: RelationshipFinancialAccountServiceDeps) {}
+
+  /**
+   * Debit-card connector (Phase 21) remediation: when `accountType` is `debit_card`,
+   * `maskedLast4`/`cardExpiryMonth`/`cardExpiryYear` are required (mirroring `debit_card_method`'s own
+   * NOT NULL columns exactly) — a relationship-driven card registration must supply real values, never
+   * a placeholder, so this validation happens here rather than deferring to a downstream failure at
+   * `linkAgreement` time. `cardBrand` stays optional, matching `debit_card_method.card_brand`'s own
+   * nullable column.
+   */
+  async addAccount(input: {
+    actingUserId: string;
+    actingParty: PartyRef;
+    accountType: FinancialAccountType;
+    providerName: string;
+    providerAccountRef: string;
+    maskedLast4: string | null;
+    institutionDisplayName: string | null;
+    cardExpiryMonth?: number | null;
+    cardExpiryYear?: number | null;
+    cardBrand?: string | null;
+  }): Promise<FinancialAccountRecord> {
+    await this.authorizeParty(input.actingUserId, input.actingParty);
+    if (!input.providerAccountRef.trim()) {
+      throw new ValidationError("A provider account reference is required.");
+    }
+    if (input.accountType === "debit_card") {
+      if (!input.maskedLast4 || !input.cardExpiryMonth || !input.cardExpiryYear) {
+        throw new ValidationError("A debit card account requires maskedLast4, cardExpiryMonth, and cardExpiryYear.");
+      }
+      if (!Number.isInteger(input.cardExpiryMonth) || input.cardExpiryMonth < 1 || input.cardExpiryMonth > 12) {
+        throw new ValidationError("cardExpiryMonth must be an integer between 1 and 12.");
+      }
+      if (!Number.isInteger(input.cardExpiryYear) || input.cardExpiryYear < 2000) {
+        throw new ValidationError("cardExpiryYear must be a valid 4-digit year.");
+      }
+    }
+    const account = await this.deps.financialAccounts.insert({
+      individualProfileId: input.actingParty.kind === "personal" ? input.actingParty.id : null,
+      organizationId: input.actingParty.kind === "business" ? input.actingParty.id : null,
+      accountType: input.accountType,
+      providerName: input.providerName,
+      providerAccountRef: input.providerAccountRef,
+      maskedLast4: input.maskedLast4,
+      institutionDisplayName: input.institutionDisplayName,
+      cardExpiryMonth: input.cardExpiryMonth ?? null,
+      cardExpiryYear: input.cardExpiryYear ?? null,
+      cardBrand: input.cardBrand ?? null,
+      addedByUserId: input.actingUserId,
+    });
+    await this.recordAccountAudit(account, "FINANCIAL_ACCOUNT_ADDED", input.actingUserId, null);
+    return account;
+  }
+
+  async listAccountsForParty(actingUserId: string, party: PartyRef): Promise<FinancialAccountRecord[]> {
+    await this.authorizeParty(actingUserId, party);
+    return this.deps.financialAccounts.listForParty(
+      party.kind === "personal" ? party.id : null,
+      party.kind === "business" ? party.id : null,
+    );
+  }
+
+  /** Called by the ACH/debit-card verification connector once the underlying provider/sandbox verification concludes — never invoked directly by a route handler. */
+  async applyVerificationResult(financialAccountId: string, outcome: "verified" | "failed"): Promise<FinancialAccountRecord> {
+    const account = await this.requireAccount(financialAccountId);
+    if (account.status !== "pending_verification") {
+      throw new ValidationError(`Only a pending-verification account can receive a verification result (current status "${account.status}").`);
+    }
+    const updated =
+      outcome === "verified"
+        ? await this.deps.financialAccounts.markVerified(account.id, new Date())
+        : await this.deps.financialAccounts.markFailed(account.id);
+    await this.recordAccountAudit(updated, outcome === "verified" ? "FINANCIAL_ACCOUNT_VERIFIED" : "FINANCIAL_ACCOUNT_VERIFICATION_FAILED", account.addedByUserId, null);
+    return updated;
+  }
+
+  async disableAccount(input: { financialAccountId: string; actingUserId: string; actingParty: PartyRef; reason: string }): Promise<FinancialAccountRecord> {
+    await this.authorizeParty(input.actingUserId, input.actingParty);
+    const account = await this.requireAccount(input.financialAccountId);
+    this.requireAccountOwnedBy(account, input.actingParty);
+    if (account.status === "disabled") return account;
+    const updated = await this.deps.financialAccounts.markDisabled(account.id, new Date());
+    await this.recordAccountAudit(updated, "FINANCIAL_ACCOUNT_DISABLED", input.actingUserId, input.reason);
+    return updated;
+  }
+
+  async getRelationshipAccounts(relationshipId: string, actingUserId: string): Promise<RelationshipFinancialAccountAssignmentWithAccount[]> {
+    await this.requireRelationship(relationshipId);
+    await this.resolveActingParticipant(relationshipId, actingUserId);
+    return this.deps.assignments.listForRelationship(relationshipId);
+  }
+
+  /** Admin connector (Phase 37): read-only, masked support view — see AdminFinancialAccountAssignmentView's own doc comment for exactly what is/isn't exposed. Itself audited, matching RelationshipService.getRelationshipForAdmin's identical precedent. */
+  async getRelationshipAccountsForAdmin(
+    relationshipId: string,
+    actingUserId: string,
+    actingRole: PlatformRole,
+  ): Promise<AdminFinancialAccountAssignmentView[]> {
+    if (!isAdminRole(actingRole)) {
+      throw new ForbiddenError("Administrative access is required.");
+    }
+    const assignments = await this.deps.assignments.listForRelationship(relationshipId);
+    await this.recordAssignmentAudit(relationshipId, actingUserId, "ADMIN_RELATIONSHIP_FINANCIAL_ACCOUNTS_VIEWED", null);
+    return assignments.map((a) => ({
+      assignmentId: a.id,
+      usage: a.usage,
+      assignmentStatus: a.status,
+      accountType: a.financialAccount.accountType,
+      accountStatus: a.financialAccount.status,
+      maskedLast4: a.financialAccount.maskedLast4,
+      institutionDisplayName: a.financialAccount.institutionDisplayName,
+      effectiveFrom: a.effectiveFrom,
+      effectiveTo: a.effectiveTo,
+    }));
+  }
+
+  async assignAccount(input: {
+    relationshipId: string;
+    actingUserId: string;
+    financialAccountId: string;
+    usage: FinancialAccountUsage;
+  }): Promise<RelationshipFinancialAccountAssignmentRecord> {
+    await this.requireRelationship(input.relationshipId);
+    const participant = await this.resolveActingParticipant(input.relationshipId, input.actingUserId);
+    const account = await this.requireAccount(input.financialAccountId);
+    this.requireAccountBelongsToParticipant(account, participant);
+    if (account.status !== "verified") {
+      throw new ValidationError("Only a verified financial account may be assigned to a relationship.");
+    }
+
+    const existing = await this.deps.assignments.findActiveAssignment(input.relationshipId, input.usage);
+    if (existing) {
+      throw new ConflictError(`This relationship already has an active ${input.usage} account assigned. Use replaceAccount to change it.`);
+    }
+
+    const assignment = await this.deps.assignments.insertAssignment({
+      relationshipId: input.relationshipId,
+      relationshipParticipantId: participant.id,
+      financialAccountId: account.id,
+      usage: input.usage,
+      selectedByUserId: input.actingUserId,
+    });
+    await this.recordAssignmentAudit(input.relationshipId, input.actingUserId, "FINANCIAL_ACCOUNT_ASSIGNMENT_CREATED", {
+      assignmentId: assignment.id,
+      financialAccountId: account.id,
+      usage: input.usage,
+    });
+    await this.deps.relationshipSync.syncFromFinancialAccounts(input.relationshipId);
+    return assignment;
+  }
+
+  /** See this class's own doc comment for why counterparty approval is deliberately not required here. */
+  async replaceAccount(input: {
+    relationshipId: string;
+    actingUserId: string;
+    financialAccountId: string;
+    usage: FinancialAccountUsage;
+  }): Promise<RelationshipFinancialAccountAssignmentRecord> {
+    await this.requireRelationship(input.relationshipId);
+    const participant = await this.resolveActingParticipant(input.relationshipId, input.actingUserId);
+    const account = await this.requireAccount(input.financialAccountId);
+    this.requireAccountBelongsToParticipant(account, participant);
+    if (account.status !== "verified") {
+      throw new ValidationError("Only a verified financial account may be assigned to a relationship.");
+    }
+
+    const existing = await this.deps.assignments.findActiveAssignment(input.relationshipId, input.usage);
+    if (existing && existing.relationshipParticipantId !== participant.id) {
+      throw new ForbiddenError("You may only replace the account assigned by your own participation in this relationship.");
+    }
+    if (existing && existing.financialAccountId === account.id) {
+      return existing; // idempotent — replacing with the same account is a no-op
+    }
+
+    const assignment = await this.deps.assignments.insertAssignment({
+      relationshipId: input.relationshipId,
+      relationshipParticipantId: participant.id,
+      financialAccountId: account.id,
+      usage: input.usage,
+      selectedByUserId: input.actingUserId,
+    });
+    if (existing) {
+      await this.deps.assignments.markSuperseded(existing.id, assignment.id);
+    }
+    await this.recordAssignmentAudit(input.relationshipId, input.actingUserId, "FINANCIAL_ACCOUNT_ASSIGNMENT_REPLACED", {
+      assignmentId: assignment.id,
+      previousAssignmentId: existing?.id ?? null,
+      financialAccountId: account.id,
+      usage: input.usage,
+    });
+    await this.deps.relationshipSync.syncFromFinancialAccounts(input.relationshipId);
+
+    if (existing && participant.representedByUserId) {
+      const participants = await this.deps.participants.listForRelationship(input.relationshipId);
+      const counterparty = participants.find((p) => p.id !== participant.id && p.representedByUserId);
+      if (counterparty?.representedByUserId) {
+        await this.deps.notifications.notify({
+          recipientUserId: counterparty.representedByUserId,
+          notificationType: input.usage === "funding" ? "relationship_funding_account_replaced" : "relationship_payout_account_replaced",
+          relatedAgreementId: null,
+          payload: { relationshipId: input.relationshipId, usage: input.usage },
+          dedupeKey: `relationship_account_replaced:${assignment.id}`,
+        });
+      }
+    }
+    return assignment;
+  }
+
+  private requireAccountBelongsToParticipant(account: FinancialAccountRecord, participant: RelationshipParticipantRecord): void {
+    const sameParty =
+      (account.individualProfileId !== null && account.individualProfileId === participant.individualProfileId) ||
+      (account.organizationId !== null && account.organizationId === participant.organizationId);
+    if (!sameParty) {
+      throw new ForbiddenError("This financial account does not belong to your participation in this relationship.");
+    }
+  }
+
+  private requireAccountOwnedBy(account: FinancialAccountRecord, party: PartyRef): void {
+    const sameParty =
+      (party.kind === "personal" && account.individualProfileId === party.id) ||
+      (party.kind === "business" && account.organizationId === party.id);
+    if (!sameParty) {
+      throw new ForbiddenError("This financial account does not belong to the specified party.");
+    }
+  }
+
+  private async resolveActingParticipant(relationshipId: string, actingUserId: string): Promise<RelationshipParticipantRecord> {
+    const participants = await this.deps.participants.listForRelationship(relationshipId);
+    for (const participant of participants) {
+      if (participant.individualProfileId) {
+        const ownerUserId = await this.deps.profileOwners.getOwnerUserId("personal", participant.individualProfileId);
+        if (ownerUserId === actingUserId) return participant;
+      } else if (participant.organizationId) {
+        const ownerUserId = await this.deps.profileOwners.getOwnerUserId("business", participant.organizationId);
+        if (ownerUserId === actingUserId) return participant;
+        const isStaff = await this.deps.staffService
+          .requireActiveStaff(participant.organizationId, actingUserId)
+          .then(() => true)
+          .catch(() => false);
+        if (isStaff) return participant;
+      }
+    }
+    throw new ForbiddenError("You are not a participant in this relationship.");
+  }
+
+  private async requireRelationship(id: string): Promise<void> {
+    const relationship = await this.deps.relationships.findById(id);
+    if (!relationship) throw new ValidationError("Relationship not found.");
+    if (["closed", "cancelled"].includes(relationship.status)) {
+      throw new ValidationError(`This relationship is ${relationship.status} and no longer accepts financial account changes.`);
+    }
+  }
+
+  private async requireAccount(id: string): Promise<FinancialAccountRecord> {
+    const account = await this.deps.financialAccounts.findById(id);
+    if (!account) throw new ValidationError("Financial account not found.");
+    return account;
+  }
+
+  private async authorizeParty(actingUserId: string, party: PartyRef): Promise<void> {
+    if (party.kind === "personal") {
+      const ownerUserId = await this.deps.profileOwners.getOwnerUserId("personal", party.id);
+      if (ownerUserId !== actingUserId) {
+        throw new ForbiddenError("You do not have access to this profile.");
+      }
+      return;
+    }
+    const ownerUserId = await this.deps.profileOwners.getOwnerUserId("business", party.id);
+    if (ownerUserId === actingUserId) return;
+    await this.deps.staffService.requireCapability(party.id, actingUserId, FINANCIAL_ACCOUNT_CAPABILITY);
+  }
+
+  private async recordAccountAudit(account: FinancialAccountRecord, action: string, actorUserId: string, reason: string | null): Promise<void> {
+    await this.deps.audit.record({
+      actorUserId,
+      actorRole: "agreement_party",
+      profileKind: account.individualProfileId ? "personal" : "business",
+      profileId: account.individualProfileId ?? account.organizationId,
+      agreementId: null,
+      action,
+      occurredAt: new Date().toISOString(),
+      ipAddress: null,
+      deviceInfo: null,
+      previousValue: null,
+      newValue: account.status,
+      reason,
+      authStrength: null,
+      relatedDocumentId: null,
+      relatedCaseId: null,
+      targetResourceType: "financial_account",
+      targetResourceId: account.id,
+    });
+  }
+
+  private async recordAssignmentAudit(relationshipId: string, actorUserId: string, action: string, newValue: unknown): Promise<void> {
+    await this.deps.audit.record({
+      actorUserId,
+      actorRole: "agreement_party",
+      profileKind: null,
+      profileId: null,
+      agreementId: null,
+      action,
+      occurredAt: new Date().toISOString(),
+      ipAddress: null,
+      deviceInfo: null,
+      previousValue: null,
+      newValue,
+      reason: null,
+      authStrength: null,
+      relatedDocumentId: null,
+      relatedCaseId: relationshipId,
+      targetResourceType: "relationship",
+      targetResourceId: relationshipId,
+    });
+  }
+}

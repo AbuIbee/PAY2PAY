@@ -2019,3 +2019,258 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 18A — Cooperative Account Pairing, Financial Account Linking & Relationship Architecture
+
+Source: `docs/sprints/Sprint-Instruction_18A_Claude_Implementation_Prompt.md` and
+`docs/sprints/Sprint_18A_CooperativeAccountPairing_FinancialAccountLinking_RelationshipArchitecture.md`
+(both converge on the same architecture, no conflicts found between them). Implemented in an isolated
+worktree (`sprint-18a-relationship-architecture`), inserted into the roadmap immediately before the
+already-queued Sprint 18 — this sprint does not begin or replace Sprint 18.
+
+### Scope delivered
+
+- **Party/relationship model**: `relationship` (status, context, `initiator_user_id`, cached
+  `current_agreement_id`), `relationship_participant` (a party's role — creditor/debtor — within one
+  specific relationship, with a real `CHECK` constraint enforcing exactly one of
+  `individual_profile_id`/`organization_id`), `relationship_invitation` (the cooperative handshake,
+  never persisting a plaintext token).
+- **Financial account ownership model**: `financial_account` (party-owned, reusable across
+  relationships, same exactly-one-party `CHECK` pattern) and `relationship_financial_account` (the
+  relationship-scoped funding/payout assignment, with a partial unique index enforcing at most one
+  *active* assignment per (relationship, usage) slot, and append-only history via `superseded_by`).
+- **Cooperative handshake**: existing-user and not-yet-registered-user invitation paths, both requiring
+  proof of receipt (session identity match or raw token) before a participant row is ever created;
+  idempotent replayed acceptance; automatic cancellation of an orphaned relationship when its only
+  invitation is declined/cancelled before any counterparty links.
+- **Relationship lifecycle + activation gate**: 14-state machine synced from agreement/signature/
+  financial-account state via three read-time-sync methods (mirroring Sprint 16's
+  `syncAmendmentProgress` precedent); `checkActivationPrerequisites` returns explicit, machine-readable
+  blocking reasons, never a bare boolean.
+- **ACH/debit-card/agreement/notification/audit/admin connectors** to Sprints 2–17, detailed in full
+  in `docs/SPRINT_CONTROL.md`'s Sprint 18A connector matrix — most materially, `linkAgreement`
+  auto-authorizes a Sprint 11 ACH mandate the moment a governing agreement becomes known for an
+  already-verified bank-account funding assignment, and 7 new `NotificationEventType` members extend
+  Sprint 17's closed event union with real templates and critical/non-critical classification.
+- **B2B ownership rules**: a business's financial account belongs to the organization
+  (`organization_id`), never a staff member's personal profile; a staff member of one organization
+  cannot assign an account into a slot belonging to a different organization's participation, verified
+  directly in the B2B scenario test.
+
+### Files created (24)
+
+Schema: `src/db/schema/{relationship,financialAccount}.ts`. Services:
+`src/lib/relationships/{relationshipService,relationshipInvitationService,
+relationshipFinancialAccountService}.ts`. Repositories/adapters:
+`src/lib/relationships/{drizzleRelationshipRepository,drizzleRelationshipParticipantRepository,
+drizzleRelationshipInvitationRepository,drizzleFinancialAccountRepository,
+drizzleRelationshipFinancialAccountRepository,drizzleUserLookupReader,
+drizzleAgreementRelationshipLinker,achMandateFinancialAccountAdapter}.ts`. DI wiring:
+`src/lib/relationships/{getRelationshipService,getRelationshipInvitationService,
+getRelationshipFinancialAccountService}.ts`. Test fakes + tests:
+`src/lib/relationships/{testFakes,relationshipService.test,relationshipInvitationService.test,
+relationshipFinancialAccountService.test,relationshipScenarios.test}.ts`. Routes (15):
+`src/app/api/relationships/{route,detail/route,invite/route,invite/cancel/route,
+invite/resolve/route,accept/route,decline/route,activate/route,activate/check/route,close/route,
+accounts/route,accounts/party/route,accounts/add/route,accounts/assign/route,
+accounts/replace/route}.ts`, `src/app/api/admin/relationships/{detail/route,accounts/route,
+restrict/route}.ts`. Migration: `drizzle/migrations/0019_kind_thanos.sql` (+
+`meta/0019_snapshot.json`).
+
+### Files modified (7)
+
+`src/db/schema/{enums,index,agreement,ach,debitCard}.ts` (7 new enums; export the two new schema
+modules; additive nullable `agreement.relationship_id` / `ach_mandate.financial_account_id` /
+`debit_card_method.financial_account_id` FK columns — zero existing columns touched);
+`src/lib/notify/{eventTypes,templates}.ts` (7 new `NotificationEventType` members, each classified
+and templated).
+
+### Tests
+
+654/654 passing across 82 files (up from 611/78 at the end of Sprint 17 — 43 net new across the 4 new
+files above, including a follow-up remediation pass — see "Sprint 18A remediation pass" below). Covers: invitation token security (existing-user session-only acceptance; new-user
+raw-token requirement; tampered-token rejection; expired-invitation rejection; idempotent replayed
+acceptance; orphaned-relationship auto-cancellation), business capability gating (`send_invitation`
+for invitations, `change_payout_configuration` for financial accounts — both the default-role-lacks-it
+rejection and a custom-role-with-it success, plus the owner-always-bypasses case), the full activation
+gate (every blocking reason individually asserted, then cleared one at a time, ending in a passing
+`activate()` and an idempotent re-activation), the ACH connector (mandate auto-authorized at
+`linkAgreement` time, `financial_account_id` correctly attached), financial-account ownership/
+verification/assignment/replacement (wrong-party rejection, unverified-account rejection, double-active-
+assignment conflict, history-preserving replacement with counterparty notification, same-account
+replacement idempotency, cross-participant replacement rejection), admin connector views (non-admin
+rejection, masked output never containing the raw `providerAccountRef`, audited access), a full P2P
+end-to-end scenario (invite → accept → financial setup → agreement → signatures → activation), a B2B
+scenario (two organizations via authorized staff, organization-owned accounts, cross-organization
+assignment rejected), a B2C scenario (Phase 52 — an authorized business employee, not merely a manager
+by title, creates the relationship; a viewer-only staff member is rejected from doing so; the
+individual customer funds from her own personal account while the business receives into its
+organization account; the staff member's own personal account is rejected as a substitute payout
+account), a direct `mandate_missing` activation-gate case (a verified bank-account funding source with
+no active mandate — simulating the mandate having been revoked out-of-band after `linkAgreement`'s own
+auto-authorization), a same-user-different-roles case (one user is creditor in one relationship and
+debtor in another, via two different owned personal profiles), and an isolation scenario (an unrelated
+third party cannot view/act on/assign into a relationship they don't participate in; two concurrent
+relationships for the same party never cross-contaminate each other's participant/account lists).
+Sprints 1–17's own tests all still pass unchanged — no prior sprint's file was modified beyond the
+additive schema/notify touches listed above.
+
+**Coverage against the sprint's own suggested 65-scenario checklist** (`docs/sprints/
+Sprint-Instruction_18A_Claude_Implementation_Prompt.md` Phase 54): the great majority are covered,
+directly or as a structural guarantee exercised by a broader test (e.g. "invitation cannot directly
+activate relationship" is shown by `acceptInvitation` only ever reaching `financial_setup_pending`,
+never `active`, across every scenario test). Explicitly **not** covered in this pass: "signup does not
+auto-accept invitation" (no signup flow exists in this codebase's own scope for this sprint to hook
+into — acceptance is always its own explicit call, which is the structural guarantee, but no dedicated
+signup-flow test exists); "legitimate multiple relationships between the same two parties" (only
+multiple relationships across *different* party pairs are tested); most of the "Cross-Sprint" checklist
+items 46, 48–54, 56 (document/evidence, debit-card, payment, retry, amendment, partial-payment,
+settlement, dispute, ledger connectors) — each is a documented Known Limitation above, not silently
+assumed complete; "inactive staff denied" and "viewer-only staff denied a *specific already-covered*
+action" beyond the ones directly tested (send_invitation/change_payout_configuration); and the
+database-level exactly-one-party `CHECK` constraints (items under "invalid participant combination
+rejected") are hand-verified present in the generated migration SQL rather than exercised against a
+live Postgres instance, matching this project's own established RLS-testing precedent (no live-database
+test infrastructure exists for any prior sprint either).
+
+### Verification commands run (first pass)
+
+`npx tsc --noEmit` — pass, 0 errors (the sole remaining `LayoutProps` finding is the same pre-existing
+`.next/types` artifact every prior worktree sprint has independently documented). `npx eslint
+src/lib/relationships src/app/api/relationships src/app/api/admin/relationships
+src/db/schema/relationship.ts src/db/schema/financialAccount.ts src/lib/notify/eventTypes.ts
+src/lib/notify/templates.ts` — pass, 0 errors, 0 warnings. `npx vitest run` (full repository suite) —
+pass, 649/649 across 82 files. `npm run build` (`next build`, Turbopack) — pass; all 18 new routes
+generated correctly as dynamic (`ƒ`) routes, no change to any existing route's classification. `npx
+drizzle-kit generate` — produced exactly one new migration, then re-run after the hand-added `REVOKE`
+statements confirmed "No schema changes, nothing to migrate." `npx drizzle-kit check` — pass, migration
+history internally consistent, no drift. RLS + `REVOKE ALL ... FROM anon, authenticated` confirmed
+present on all 5 new tables; both exactly-one-party `CHECK` constraints and the partial unique index
+hand-verified present in the generated SQL (drizzle-kit's `CHECK`-constraint generation reliability was
+explicitly not trusted blind, per this sprint's own instruction).
+
+### Sprint 18A remediation pass — Document/evidence and Debit-card connectors closed
+
+Requested directly, before Product Owner review: the completion report scored two acceptance criteria
+below PASS — Document/evidence connector = FAIL, Debit-card connector = PARTIAL. Both are closed in
+this pass with real production code and new passing tests, not by relabeling. Full narrative in
+`docs/SPRINT_CONTROL.md`'s "Sprint 18A remediation pass" section; summary here.
+
+**Files created (3):** `src/lib/relationships/debitCardFinancialAccountAdapter.ts`;
+`src/app/api/relationships/evidence/{route,signed-url/route}.ts`.
+
+**Files modified (12):** `src/db/schema/financialAccount.ts` (3 new nullable columns —
+`card_expiry_month`, `card_expiry_year`, `card_brand`); `src/lib/relationships/relationshipService.ts`
+(new `CardMethodReader`/`EvidenceReader` interfaces, `cards`/`evidence` deps, a `debit_card` branch in
+`linkAgreement` symmetric with the existing `bank_account` branch, a new `card_missing` activation-gate
+reason, `getRelationshipEvidence`/`getRelationshipEvidenceSignedUrl`);
+`src/lib/relationships/relationshipFinancialAccountService.ts` (`addAccount` validates
+`maskedLast4`/`cardExpiryMonth`/`cardExpiryYear` when `accountType` is `debit_card`);
+`src/lib/relationships/{drizzleFinancialAccountRepository,drizzleRelationshipFinancialAccountRepository,
+getRelationshipService,testFakes}.ts` (card-field plumbing + new `InMemoryCardMethodReader` + a real,
+harness-shared `EvidenceService` instance); `src/app/api/relationships/accounts/add/route.ts` (3 new
+optional zod fields); `src/lib/relationships/{relationshipService.test,
+relationshipFinancialAccountService.test}.ts` (5 new tests). Migration:
+`drizzle/migrations/0020_jittery_may_parker.sql` (+ `meta/0020_snapshot.json`) — 3 `ALTER TABLE
+"financial_account" ADD COLUMN` statements, all nullable, no `REVOKE` needed (column additions to an
+already-`REVOKE`d table require no new statement).
+
+**Tests added (5):** debit-card `addAccount` field validation (missing required fields rejected,
+invalid expiry month rejected, valid input accepted with fields round-tripping correctly); debit-card
+auto-registration at `linkAgreement` time (mirrors the existing ACH connector test); a `card_missing`
+activation-gate edge case (card revoked out-of-band after auto-registration, mirroring the existing
+`mandate_missing` edge-case test); a document/evidence no-agreement-yet rejection; a full
+document/evidence visibility scenario (creditor sees a shared item but not the debtor's private
+upload, debtor sees both, an unrelated third party is rejected at the relationship-participation gate
+before Sprint 7's own agreement-party check ever runs, signed-URL passthrough works and is equally
+gated).
+
+**No adapter class was needed for the evidence connector** — `EvidenceService.listEvidence`/
+`getSignedEvidenceUrl` already structurally match the new `EvidenceReader` interface exactly, so
+production DI passes `getEvidenceService()` through directly (the same "pass the real service where
+its shape already matches" pattern already used for `RelationshipStatusSyncer`).
+
+### Verification commands run (after remediation pass, final state)
+
+`npx tsc --noEmit` — pass, 0 errors. `npx eslint src/lib/relationships src/app/api/relationships
+src/app/api/admin/relationships src/db/schema/financialAccount.ts` — pass, 0 errors, 0 warnings. `npx
+vitest run` (full repository suite) — pass, 654/654 across 82 files, zero regressions against the
+649/649 baseline. `npm run build` (`next build`, Turbopack) — pass; all 22 relationship-domain routes
+present, including the 2 new evidence routes, no change to any existing route's classification. `npx
+drizzle-kit generate` — produced exactly one new migration (`0020_jittery_may_parker.sql`), then re-run
+confirmed "No schema changes, nothing to migrate." `npx drizzle-kit check` — pass, "Everything's fine,"
+migration history internally consistent, no drift.
+
+**Result: every Sprint 18A acceptance criterion is now PASS** — see the updated
+`docs/sprints/SPRINT_18A_COMPLETION_REPORT.md`.
+
+### Sprint 18A closure fix — invitation-expiration scheduler wired
+
+Requested directly, after the remediation pass above: `RelationshipInvitationService.expireDueInvitations`
+existed and was tested, but nothing in production ever called it. This closure fix wires the smallest
+production-safe integration using the scheduler architecture Sprints 13/15/17 already established.
+
+**Files created (2):** `src/app/api/scheduler/expire-relationship-invitations/route.ts` (mirrors
+`retry-notifications`/`expire-negotiations` byte-for-byte — same `timingSafeStringEqual` constant-time
+comparison, same `CRON_SECRET` auth split via `ConfigurationError`/`ForbiddenError`, same
+`runtime`/`dynamic`/`maxDuration` exports; the route body is a single call to
+`expireDueInvitations(new Date())`, no expiration logic duplicated); `route.test.ts` (7 tests).
+
+**Files modified (2):** `vercel.json` (+1 cron entry, `"0 16 * * *"`, the next free hourly slot after
+Sprint 17's `retry-notifications`); `src/lib/relationships/relationshipInvitationService.ts` —
+`expireDueInvitations` now also calls `cancelRelationshipIfNeverLinked(invitation.relationshipId, null)`
+per expired invitation, and that method's `actingUserId` parameter was widened from `string` to
+`string | null` to support the null system/scheduler actor (mirrors this same method's own pre-existing
+`recordAudit(..., null, ...)` call — no other signature changed). Plus 2 new tests in
+`relationshipInvitationService.test.ts`.
+
+**Why the relationship-cancellation fix was needed:** `expireDueInvitations` marked an invitation
+`expired` but never applied the same "relationship has no path forward, don't leave it orphaned in
+`invited` forever" cleanup that `declineInvitation`/`cancelInvitation` already apply. This was
+effectively dead code while nothing called the method in production; wiring the cron route means it will
+now actually fire, so the gap needed closing at the same time — a genuine correctness fix, not scope
+creep, since leaving it unfixed would have reintroduced the exact orphaned-relationship bug the original
+remediation pass already fixed for decline/cancel.
+
+**State-machine correctness (verified, not assumed):** `findDueForExpiry`'s `WHERE status IN
+('sent','viewed')` filter makes `accepted`/`declined`/`cancelled`/already-`expired` invitations
+structurally unreachable from this route, even if their `expires_at` happens to be in the past — tested
+directly by manually backdating an accepted, a declined, and a cancelled invitation's `expires_at` and
+confirming a scheduler run leaves each status untouched.
+
+**Tests added (9):** 2 in `relationshipInvitationService.test.ts` (relationship-cancellation-on-expiry
+consistency; idempotent repeated `expireDueInvitations` calls) + 7 in the new route test file (valid
+auth accepted; missing auth rejected; wrong-token auth rejected; a due invitation transitions to
+`expired` while a not-yet-due one stays `sent`; an accepted invitation is untouched despite a
+backdated `expires_at`; declined and cancelled invitations are both untouched the same way; repeated
+execution is idempotent — second call reports `expired: 0` and does not re-cancel an already-cancelled
+relationship).
+
+**Verification commands run:** `npx tsc --noEmit` — pass, 0 errors. `npx eslint` (scoped to every
+touched file) — pass, 0 errors, 0 warnings. `npx vitest run` (full repository suite) — pass, 663/663
+across 83 files (up from 654/82), zero regressions. `npm run build` — pass, the new
+`/api/scheduler/expire-relationship-invitations` route present, no change to any existing route's
+classification. `npx drizzle-kit check` — pass, "Everything's fine." `npx drizzle-kit generate` — "No
+schema changes, nothing to migrate" (this fix touches only application/route code, no schema — no new
+migration).
+
+**Result: the invitation-expiration scheduler gap is closed.** Remaining Sprint 18A Known Limitations
+are now only: dispute-driven restriction not auto-wired, CSV bulk-invite integration not built, and no
+UI built — see the updated `docs/sprints/SPRINT_18A_COMPLETION_REPORT.md`.
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction ("Execute Sprint 18A only. Do not begin
+Sprint 18. Stop at the Product Owner review gate") and both spec files' own "Do not commit. Do not
+push. Do not merge. Do not deploy," commit/push is deferred until after Product Owner review of this
+status entry — matching Sprints 5–17's own precedent. No file outside the created/modified lists above
+was touched; no pre-existing table's existing columns, no existing service method's existing behavior,
+and no existing route was altered.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

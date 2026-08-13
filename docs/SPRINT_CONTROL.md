@@ -142,7 +142,166 @@ execution.
 | 15 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_15_ PartialPayments_Settlement.md` (borrower-proposed partial payment with creditor accept/reject/counter, acceptance never automatically forgiving the remainder; settlement recording pre-settlement balance/settlement amount/forgiven amount/deadline/one-time-vs-scheduled/failed-settlement consequence with all four explicit failure-consequence options; successful settlement marked `SETTLED_IN_FULL`, never `PAID_IN_FULL`; creditor's finalizing acceptance of a settlement gated by Sprint 2's `requireStepUp(user, "approve_settlement")`) implemented in a fresh worktree branched from `origin/master`'s tip (`9f8dc9e`, the Sprint 14 merge commit). Local `lint` (0 errors), `typecheck` (0 errors via `npm run typecheck`, this project's own authoritative gate — see "Sprint 15 Product Owner review pass" below for why a bare `tsc --noEmit` run before any build/dev pass in a fresh worktree reports one false-positive `LayoutProps` error that disappears once `.next/types` exists), `test` (576/576, up from 538 at the end of Sprint 14 — 38 net new), and `build` (`next build`, Turbopack) all pass, after a required `npm ci` in this worktree (its own `node_modules` was otherwise nearly empty — a worktree-isolation artifact, not a code issue, same as every prior worktree sprint's own note). `drizzle-kit check` confirms the new migration (`0016_blushing_adam_destine.sql`) is internally consistent; RLS + `REVOKE` confirmed present on all three new tables (`partial_payment_request`, `settlement_proposal`, `settlement_payment`) — the `REVOKE` lines were added by hand, matching every prior migration's pattern. Migration is purely additive: 4 new enums, 3 new tables, zero altered/dropped columns (`agreement_status`'s `settled_in_full`/`paid_in_full` values already existed from Sprint 5). Sprints 1–14's own tests all still pass unchanged. **No live processor integration — settlement/partial payments are recorded against already-succeeded `payment_attempt` rows collected through the existing Sprint 9–13 payment gate, never a separate money-movement path.** **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. See "Sprint 15 implementation notes" below for the negotiation-collapsing scope decision and the failure-consequence resolution design, and "Sprint 15 Product Owner review pass" for a real settlement step-up/capability authorization gap this review pass found and fixed. |
 | 16 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_16_Disputes.md` (two distinct dispute systems, never conflated: agreement-level disputes with explanation/category/evidence/response/status/audit trail, and payment-level unauthorized-payment claims preserving mandate/signatures/identity-verification reference/IP/device/timestamp; "the platform must not adjudicate legal liability"; "the processor handles payment dispute outcome"; evidence-package export) implemented in a fresh worktree branched from `origin/master`'s tip (`a4f6507`, the Sprint 15 merge commit). Local `lint` (0 errors), `typecheck` (0 errors via `npm run typecheck`), `test` (599/599, up from 576 at the end of Sprint 15 — 23 net new), and `build` (`next build`, Turbopack) all pass, after a required `npm ci` in this worktree. `drizzle-kit check` confirms the new migration (`0017_careless_captain_marvel.sql`) is internally consistent; RLS + `REVOKE` confirmed present on both new tables (`agreement_dispute`, `payment_dispute`) — the `REVOKE` lines were added by hand, matching every prior migration's pattern. Migration is purely additive: 4 new enums, 2 new tables, zero altered/dropped columns. Sprints 1–15's own tests all still pass unchanged. **No live processor integration — a payment dispute's actual resolution reuses the exact same `LedgerService`/`payment_attempt` status mechanics the Sprint 9/10 `payment.disputed`/`payment.refunded` webhooks already use.** **Reviewed: both documented limitations (denied-claim ledger correction; restriction not enforced by payment scheduling) independently re-examined against the authoritative spec and confirmed correctly out of scope — see "Sprint 16 Product Owner review pass" below; no code changes were required.** See "Sprint 16 implementation notes" below for how heavily this sprint reused Sprint 7 (evidence dispute-flag), Sprint 9/10 (webhook-driven disputed/refunded status + ledger `dispute_adjustment`/`refund` entries + `BalanceService`'s existing reversal handling), Sprint 11/12 (mandate/card-on-file preservation), and Sprint 14 (amendment hand-off) rather than building new mechanics. |
 | 17 | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/SPRINT_17_Notifications.md` (email/SMS/in-app channel abstraction; all 18 named events; notification table, templates, delivery status, retry strategy, preference model, failure logging; critical notifications cannot be disabled; no unrestricted chat) implemented in a fresh worktree branched from `origin/master`'s tip (`02fb5cf`, the Sprint 16 merge commit). Local `lint` (0 errors), `typecheck` (0 errors via `npm run typecheck`), `test` (611/611, up from 599 at the end of Sprint 16 — 12 net new after the review pass below), and `build` (`next build`, Turbopack) all pass, after a required `npm ci` in this worktree. `drizzle-kit check` confirms the new migration (`0018_flawless_morlocks.sql`) is internally consistent; RLS + `REVOKE` confirmed present on the one new table (`notification_preference`) — `notification_event`'s own `REVOKE` already exists from its original Sprint 13 migration and needs no re-statement for its 7 new columns. Migration is purely additive: 2 new enums, 1 new table, 7 new nullable/defaulted columns on the existing `notification_event`, zero dropped columns. Sprints 1–16's own tests all still pass unchanged, including `paymentRetryService.test.ts`'s pre-existing email-content assertions, verified to still pass against the rewritten template-driven delivery path. **No live provider integration — email/SMS still go through Sprint 2's `ConsoleEmailSender`/`ConsoleSmsSender` (log-only), matching every prior sprint's identical "no production transport" precedent.** **Reviewed: two real gaps found and fixed (settlement reclassified critical; `payment_cleared`/`payment_disputed` wired to a real trigger for the first time) — see "Sprint 17 Product Owner review pass" below, including the one gap found but deliberately not fully closed in this pass (15 of 18 event types still have no real trigger anywhere in the codebase).** See "Sprint 17 implementation notes" below for the one behavioral change to Sprint 13's own `NotificationService.notify` signature (subject/body replaced by template-driven rendering) and the Vercel Hobby-plan cron-frequency limitation this sprint's retry cadence inherits from Sprint 13's own precedent. |
-| 18–20 | Not started. Sprint plan documents for 18, 20 were revised in the earlier repair pass; no application code has been implemented for any of them. |
+| 18A | **COMPLETE — uncommitted, awaiting Product Owner review.** All required-functionality items from `docs/sprints/Sprint-Instruction_18A_Claude_Implementation_Prompt.md` and `docs/sprints/Sprint_18A_CooperativeAccountPairing_FinancialAccountLinking_RelationshipArchitecture.md` (first-class `relationship`/`relationship_participant` party model with a strong exactly-one-party CHECK constraint, the full cooperative invitation handshake for both existing and not-yet-registered invitees with a never-persisted-plaintext token, a party-owned `financial_account` layer reusable across relationships with a relationship-scoped assignment/replacement history table, the relationship lifecycle state machine including an explicit machine-readable activation gate, ACH/debit-card/agreement/notification/audit/admin connectors to every relevant prior sprint, and B2B ownership rules preventing a staff member's personal account from ever funding/receiving on a business's behalf) implemented in an isolated worktree (`sprint-18a-relationship-architecture`), inserted into the roadmap immediately before the already-queued Sprint 18. Local `lint` (0 errors), `typecheck` (0 errors — the sole remaining `LayoutProps` finding is the same pre-existing `.next/types` artifact every prior worktree sprint has independently documented), `test` (663/663, up from 611 at the end of Sprint 17 — 52 net new across 5 new files, including two follow-up remediation/closure passes), and `build` (`next build`, Turbopack) all pass. `drizzle-kit check` confirms both migrations (`0019_kind_thanos.sql`, `0020_jittery_may_parker.sql`) are internally consistent; RLS + `REVOKE` confirmed present on all 5 new tables (`relationship`, `relationship_invitation`, `relationship_participant`, `financial_account`, `relationship_financial_account`) — the `REVOKE` lines were added by hand, matching every prior migration's pattern; both exactly-one-party `CHECK` constraints and the partial unique index (`relationship_financial_account_active_slot_unique`, active-only) are hand-verified present in the generated SQL. Migrations are purely additive: 7 new enums, 5 new tables, 3 new nullable FK columns on existing tables (`agreement.relationship_id`, `ach_mandate.financial_account_id`, `debit_card_method.financial_account_id`), plus a remediation-pass migration adding 3 nullable card-metadata columns to `financial_account`, zero altered/dropped columns anywhere. Sprints 1–17's own tests all still pass unchanged — no prior sprint's table, column, or service method was modified, only additively extended (see "Sprint 18A implementation notes" and "Sprint 18A remediation pass" below for the full connector matrix and every touched prior-sprint file). **No live payment-provider/KYC integration — reuses Sprint 11/12's existing sandbox mandate/card mechanics unchanged.** **Not yet committed, not pushed, no PR opened, no CI run, no Vercel preview** — deferred until Product Owner review of this status entry, per this session's explicit instruction. Sprint 18 (AdminSupport_Appeals) was **not** started. **A remediation pass (requested directly, before Product Owner review) closed the Document/evidence connector and Debit-card connector gaps — every Sprint 18A acceptance criterion is now PASS.** See "Sprint 18A implementation notes" and "Sprint 18A remediation pass" below for the connector matrix, design decisions, and remaining honestly-scoped known limitations. |
+| 18 | Not started. Sequenced immediately after Sprint 18A now that Sprint 18A has been inserted ahead of it in the roadmap; no application code has been implemented. |
+| 19–20 | Not started. Sprint plan documents for 20 were revised in the earlier repair pass; no application code has been implemented for either. |
+
+### Sprint 18A implementation notes
+
+**Core architectural principle — accounts belong to people/organizations, payment roles belong to relationships.** Two brand-new, first-class tables carry this: `relationship_participant` (a party's membership + `creditor`/`debtor` role *within one specific relationship*, reusing `agreementPartyRoleEnum` rather than inventing competing obligor/obligee terminology) and `financial_account` (a party-owned, reusable bank/card record, independent of any single relationship or agreement). Both use a *stronger* exactly-one-party pattern (`individual_profile_id`/`organization_id` nullable pair + a real database `CHECK` constraint) than every prior sprint's weaker `profileKind + profileId` pair — a deliberate, reasoned deviation on new tables only, per the spec's own explicit preference for real relational integrity where nothing already-shipped needs to be retrofitted.
+
+**Cooperative handshake security model.** `relationship_invitation.token_hash` is the only persisted form of the invitation secret (`generateOpaqueToken`/`hashOpaqueToken`, Sprint 2's own reusable primitive — no second token scheme invented). An invitation resolved to an existing platform user is accepted using only that user's own session; a not-yet-registered invitee must present the raw token once, proving receipt of the one email it was ever sent in. `acceptInvitation`/`declineInvitation` both accept an optional `rawToken` for exactly this reason. A replayed, identical acceptance is idempotent (returns the existing state) rather than erroring or duplicating a participant row.
+
+**Relationship lifecycle** (`invited → counterparty_linked → identities_confirmed → financial_setup_pending → financial_accounts_ready → agreement_pending → agreement_ready → signature_pending → signed → active → restricted/suspended/closed/cancelled`) is driven by three read-time-sync methods mirroring Sprint 16's `syncAmendmentProgress` precedent — `RelationshipInvitationService.acceptInvitation` (advances through `counterparty_linked`/`identities_confirmed`/`financial_setup_pending` in one beat, since this codebase's only identity-confirmation mechanism is the profile-ownership verification `authorizeParty` already required to reach acceptance at all — there is no separate in-relationship identity step to gate on), `RelationshipService.syncFromFinancialAccounts` (→ `financial_accounts_ready` once both funding and payout are active+verified), and `RelationshipService.syncFromAgreement` (→ `signature_pending`/`signed`/`agreement_ready`, reading Sprint 5/6's own unmodified agreement/signature state). An invitation declined or cancelled before any counterparty ever links now correctly cancels its orphaned `relationship` row (a real gap the implementation caught via its own test suite) rather than leaving it stuck in `invited` forever.
+
+**Activation gate** (`RelationshipService.checkActivationPrerequisites`) returns every blocking reason as an explicit string code — `relationship_status_blocking`, `counterparty_missing`, `agreement_missing`, `signature_missing`, `funding_account_missing`/`unverified`, `mandate_missing`, `payout_account_missing`/`unverified` — never a bare boolean, per the spec's own "do not make this a UI-only checklist."
+
+**Connector matrix (Sprint 1–20 cross-reference):**
+
+| Sprint | Connector | What changed / how it's reused |
+|---|---|---|
+| 1 Public Preview | — | No relevant surface; untouched. |
+| 2 Authentication | Actor identity | `relationship.initiator_user_id`, every `represented_by_user_id`/`inviter_user_id`/`acting_user_id` resolve through Sprint 2's `user_account`/session/`PlatformRole` — no second identity model. `generateOpaqueToken`/`hashOpaqueToken` (Sprint 2) reused verbatim for invitation tokens. |
+| 3 Personal/Business Profiles | Party ownership | `ProfileOwnerReader`/`authorizeParty` pattern (mirrors `AgreementService`'s private method, duplicated because this code runs before any agreement exists) is the sole authorization primitive for every party-scoped action. `relationship_participant`/`financial_account` FKs target `personal_profile`/`business_profile` directly. |
+| 4 Business Staff Permissions | Capability gating | `send_invitation` (existing capability) gates invitation create/accept on a business's behalf; `change_payout_configuration` (existing capability, not newly invented) gates every financial-account action. Owner always bypasses, exactly as Sprint 4 established. |
+| 5 Agreement Engine | Agreement linkage | Additive `agreement.relationship_id` (real FK, written once via a narrow `AgreementRelationshipLinker` that touches no other agreement logic) + `relationship.current_agreement_id` (cache, mirrors `agreement.currentVersionId`'s own precedent). `RelationshipService.linkAgreement`/`syncFromAgreement` read Sprint 5's unmodified `AgreementService.getAgreement`. |
+| 6 Signatures/PDF | Signature completion | `syncFromAgreement` reads `agreement_version.signed_at` (Sprint 6) as the sole signature-completion signal — no duplicate relationship-level signature invented. |
+| 6A Platform Admin | Admin connector | `RelationshipService.restrict`/`getRelationshipForAdmin` and `RelationshipFinancialAccountService.getRelationshipAccountsForAdmin` all gate on `isAdminRole` (Sprint 6A's own helper), and every admin view is itself audited. |
+| 7 Evidence/Documents/Witnesses | Document connector | **Remediated.** `RelationshipService.getRelationshipEvidence`/`getRelationshipEvidenceSignedUrl` resolve the relationship's governing agreement and delegate entirely to Sprint 7's unmodified `EvidenceService.listEvidence`/`getSignedEvidenceUrl` — full shared/private/witness visibility rules reused, never re-derived. A relationship-participation gate runs first (`resolveActingParticipant`), then Sprint 7's own agreement-party check. Two new routes: `GET /api/relationships/evidence`, `GET /api/relationships/evidence/signed-url`. |
+| 8 B2B/CSV | B2B connector | Business↔business handshake (two organizations, each acting through an authorized staff member) is directly tested (`relationshipScenarios.test.ts`). CSV bulk-invite integration is a documented known limitation, not built this pass. |
+| 9 Payment Provider Abstraction | Provider boundary | `financial_account.provider_account_ref` mirrors this sprint's own opaque-token-only precedent; the relationship layer never imports `PaymentProvider` directly (Phase 22's boundary preserved by construction — no such import exists in any Sprint 18A file). |
+| 10 Ledger/Reconciliation | Traceability | Not modified. `payment → agreement → relationship` is fully traceable via `agreement.relationship_id` alone; no `relationship_id` added to the ledger tables (documented reasoning: would be redundant, derivable state). |
+| 11 ACH Sandbox | Mandate connector | Additive nullable `ach_mandate.financial_account_id`. `RelationshipService.linkAgreement` auto-authorizes a mandate (via `AchMandateFinancialAccountAdapter`, which calls Sprint 11's own unmodified `AchMandateService.authorize` — no mandate logic reimplemented) the moment a governing agreement becomes known for an already-verified bank-account funding assignment. |
+| 12 Debit Card Sandbox | Card connector | **Remediated.** `financial_account` gained three additive nullable columns (`card_expiry_month`, `card_expiry_year`, `card_brand`) required by `addAccount` when `accountType` is `debit_card`, closing the original field gap. `RelationshipService.linkAgreement` now auto-registers a real `debit_card_method` row (via `DebitCardFinancialAccountAdapter`, calling Sprint 12's own unmodified `DebitCardMethodService.registerCard` — no card logic reimplemented) the moment a governing agreement becomes known for an already-verified debit-card funding assignment, mirroring the ACH connector exactly. `checkActivationPrerequisites` gained a `card_missing` reason, symmetric with `mandate_missing`. |
+| 13 Failed Payments/Retry | Scan pattern | `RelationshipInvitationService.expireDueInvitations` mirrors `PaymentRetryRepository.findDueForFiring`'s cron-scan precedent structurally; no cron route was wired to it in this pass (known limitation — a `vercel.json` entry + scheduler route would need adding, same shape as Sprint 13/17's). |
+| 14 Amendments/Hardship | Version continuity | Not directly wired. `relationship.current_agreement_id` stays valid across amendments unchanged — amendments create new agreement *versions*, never new agreements, so no relationship-side update is needed (Phase 31's "prefer derivation"). |
+| 15 Partial Payments/Settlement | Obligation resolution | Not directly wired this pass; resolves via the same agreement linkage as amendments. |
+| 16 Disputes | Restriction connector | Deliberately **not** auto-wired — `AgreementDisputeService.restrictDispute` does not call `RelationshipService.restrict` automatically, the same class of documented gap Sprint 16 itself left for payment-scheduling enforcement. Flagged as a real, load-bearing gap for a future sprint, not silently assumed complete. |
+| 17 Notifications | Event/template connector | 7 new `NotificationEventType` members added (`relationship_invitation`, `relationship_accepted`, `relationship_declined`, `relationship_activated`, `relationship_restricted`, `relationship_funding_account_replaced`, `relationship_payout_account_replaced`), each classified critical/non-critical (mirroring the closest existing analog — `account_restriction`/`bank_change`/`payout_account_change` respectively for the three critical ones) and templated. The one new-user enrollment email bypasses `NotificationService.notify()` (whose contract requires a known `recipientUserId`, which a pre-signup invitee has none of) and calls `EmailSender.send()` directly — the same underlying primitive `NotificationService` itself uses, not a second notification system. |
+| 18 AdminSupport/Appeals | — | Not started; explicitly not begun by this sprint, per instruction. |
+| 19 Fraud/Risk | Security event surfaces | No fraud engine built (none is owned by a completed sprint yet). Every material event this sprint's Phase 38 names as needing future detectability (invitation flooding, repeated token failures, relationship-creation velocity, repeated verification failure, rapid account replacement) is already captured in the existing `AuditService` append-only trail with actor/timestamp/target, sufficient for a later sprint to build detection on top of without this sprint inventing analysis logic prematurely. |
+| 20 Closed Beta Readiness | — | Not started; will need to include Sprint 18A's own test suite in its final gate, same as every prior sprint. |
+
+**Known limitations (each with an owner):**
+1. ~~Document/evidence connector (Phase 25) not wired.~~ **RESOLVED in the Sprint 18A remediation pass** — see "Sprint 18A remediation pass" below and connector matrix row 7.
+2. ~~Debit-card auto-registration (Phase 21) not implemented.~~ **RESOLVED in the Sprint 18A remediation pass** — see "Sprint 18A remediation pass" below and connector matrix row 12.
+3. **Dispute-driven restriction (Phase 34) not auto-wired** — see connector matrix row 16. Owner: a future sprint touching `AgreementDisputeService.restrictDispute`.
+4. **CSV bulk-invite integration (Phase 26) not built.** Owner: a future sprint extending Sprint 8's CSV import pipeline to optionally create relationship invitations per validated row (never auto-activating, per Phase 26's own explicit instruction).
+5. ~~No cron/scheduler route wired for `expireDueInvitations`.~~ **RESOLVED in the Sprint 18A closure fix** — see "Sprint 18A closure fix" below.
+6. **No UI was built** (neither spec file's own "UI/workflow" phase names this as a hard requirement for a Claude-only pass, and every prior worktree sprint from 5 onward has the same precedent aside from Sprint 1's marketing site). Owner: a future sprint or a dedicated UI pass once the API surface is reviewed.
+
+**No UI was built**, consistent with the note above. 23 new API routes (20 from the original pass + 2 evidence routes from the remediation pass + 1 scheduler route from the closure fix below), all `requireSession` + zod + `withErrorHandling` (except `GET /api/relationships/invite/resolve`, deliberately unauthenticated — the one pre-signup deep link — and `POST /api/scheduler/expire-relationship-invitations`, deliberately unauthenticated by session and instead `CRON_SECRET`-gated, matching Sprint 13/15/17's identical scheduler-route precedent): `POST /api/relationships/invite`, `POST /api/relationships/invite/cancel`, `GET /api/relationships/invite/resolve`, `POST /api/relationships/{accept,decline,activate,close}`, `GET /api/relationships/activate/check`, `GET /api/relationships`, `GET /api/relationships/detail`, `GET /api/relationships/accounts`, `GET /api/relationships/accounts/party`, `POST /api/relationships/accounts/{add,assign,replace}`, `GET /api/relationships/evidence`, `GET /api/relationships/evidence/signed-url`, `GET /api/admin/relationships/{detail,accounts}`, `POST /api/admin/relationships/restrict`, `POST /api/scheduler/expire-relationship-invitations`.
+
+### Sprint 18A closure fix — invitation-expiration scheduler wired
+
+Requested directly: the remediation report confirmed `RelationshipInvitationService.expireDueInvitations`
+exists and is tested, but nothing in production ever called it — no cron route, no `vercel.json` entry.
+This closure fix wires the smallest production-safe integration using the scheduler architecture
+Sprints 13/15/17 already established, and fixes one real consistency gap it exposed.
+
+**Scheduler route:** `src/app/api/scheduler/expire-relationship-invitations/route.ts` (`POST`). Structure
+is a byte-for-byte mirror of `src/app/api/scheduler/retry-notifications/route.ts` and
+`expire-negotiations/route.ts`: same `timingSafeStringEqual` constant-time comparison helper (duplicated
+per-file, matching every existing scheduler route's own precedent — none of them share a common auth
+helper module), same `getServerEnv().CRON_SECRET` read, same `ConfigurationError` (500, secret not
+configured) / `ForbiddenError` (403, missing or wrong bearer token) split, same `runtime = "nodejs"` /
+`dynamic = "force-dynamic"` / `maxDuration = 60` exports. The route body is a single call to
+`RelationshipInvitationService.expireDueInvitations(new Date())` — no expiration logic duplicated here,
+exactly as required.
+
+**`vercel.json`:** one new cron entry, `"0 16 * * *"` (the next free hourly slot after Sprint 17's
+`retry-notifications` at `15 * * *`), matching the existing staggered-hourly convention exactly — no
+second scheduler framework introduced.
+
+**Idempotency:** `expireDueInvitations` was already idempotent by construction —
+`findDueForExpiry` only ever selects invitations still in `sent`/`viewed` status past their `expires_at`,
+so a repeated call (this route firing twice, an overlapping cron invocation) finds nothing left to do.
+Verified directly by a dedicated test (two consecutive calls: `expired: 1` then `expired: 0`).
+
+**Real consistency gap found and fixed while wiring this:** `expireDueInvitations` marked an invitation
+`expired` but never applied `cancelRelationshipIfNeverLinked` — the same "this relationship's only path
+forward just closed, don't leave it orphaned in `invited` forever" cleanup that `declineInvitation`/
+`cancelInvitation` already apply. This was effectively dead code while nothing called the method in
+production; wiring the cron route means it will now actually fire, so the same fix was applied here:
+`expireDueInvitations` now calls `cancelRelationshipIfNeverLinked(invitation.relationshipId, null)` for
+each expired invitation (null actor — a system/scheduler action, mirroring this method's own pre-existing
+`recordAudit(..., null, ...)` call). `cancelRelationshipIfNeverLinked`'s `actingUserId` parameter was
+widened from `string` to `string | null` to support this, matching `recordAudit`'s own existing nullable
+pattern — no other signature or behavior changed. Covered by a dedicated test (an expiring invitation
+that was its relationship's only one, with no counterparty ever linked, cancels that relationship) plus
+the idempotency test above (relationship is not re-cancelled or errored on repeated firing).
+
+**State-machine correctness:** `findDueForExpiry`'s own `WHERE status IN ('sent','viewed')` filter makes
+`accepted`/`declined`/`cancelled`/already-`expired` invitations structurally unreachable from this route
+— not merely "not touched by convention," there is no code path by which this route's query could ever
+select one, even if its `expires_at` happens to be in the past (tested directly: an accepted invitation
+manually given a past `expires_at` is confirmed unchanged by a scheduler run; same for declined and
+cancelled).
+
+**Tests added (9):** 2 in `relationshipInvitationService.test.ts` (relationship-cancellation-on-expiry
+consistency; idempotent repeated `expireDueInvitations` calls) + 7 in a new
+`src/app/api/scheduler/expire-relationship-invitations/route.test.ts` (valid auth accepted; missing auth
+rejected; wrong-token auth rejected; a due invitation transitions to `expired` while a not-yet-due one
+stays `sent`; an accepted invitation is untouched even with a manually-backdated `expires_at`; declined
+and cancelled invitations are both untouched the same way; repeated execution is idempotent and does not
+re-cancel an already-cancelled relationship).
+
+**Validation re-run in full:** `npx tsc --noEmit` — 0 errors. `npx eslint` (scoped to every touched file)
+— 0 errors, 0 warnings. `npx vitest run` (full repository suite) — 663/663 passing across 83 files (up
+from 654 — 9 net new tests, 1 new test file), zero regressions. `npm run build` — pass, the new
+`/api/scheduler/expire-relationship-invitations` route present alongside all prior relationship-domain
+routes, no change to any existing route's classification. `npx drizzle-kit check` — pass, "Everything's
+fine." `npx drizzle-kit generate` — "No schema changes, nothing to migrate" (this fix touches only
+application/route code, no schema).
+
+**Result: the invitation-expiration scheduler gap is closed.** Remaining Known Limitations are now only
+3, 4, and 6 (dispute-driven restriction, CSV bulk-invite, and no UI) — see the updated
+`docs/sprints/SPRINT_18A_COMPLETION_REPORT.md`.
+
+### Sprint 18A remediation pass — two acceptance criteria closed, no new gaps introduced
+
+Requested directly: the original completion report scored two acceptance criteria below PASS
+(Document/evidence connector = FAIL; Debit-card connector = PARTIAL). This pass closes both for real,
+not by relabeling — each has new production code and new passing tests.
+
+**Document/evidence connector (Phase 25).** Added `RelationshipService.getRelationshipEvidence`/
+`getRelationshipEvidenceSignedUrl` plus a narrow `EvidenceReader` interface. `EvidenceService` already
+structurally satisfies `EvidenceReader` (`listEvidence`/`getSignedEvidenceUrl` match exactly), so
+production DI (`getRelationshipService.ts`) passes `getEvidenceService()` straight through — no adapter
+class needed, matching the `RelationshipStatusSyncer` precedent (passing a service directly where its
+shape already matches). Two new routes. Two new tests in `relationshipService.test.ts` cover: no-agreement-yet
+rejection, and a full visibility scenario (creditor sees a shared item but not the debtor's private
+upload; debtor sees both; an unrelated third party is rejected at the relationship-participation gate
+*before* Sprint 7's own agreement-party check ever runs; signed-URL passthrough works and is equally
+gated).
+
+**Debit-card connector (Phase 21).** The original gap was structural, not an oversight: `financial_account`
+had no card-expiry/brand columns, and Sprint 12's `debit_card_method.expires_at_month`/`expires_at_year`
+are `NOT NULL`. Fixed the actual schema gap rather than working around it — added `card_expiry_month`,
+`card_expiry_year`, `card_brand` (all nullable, additive; migration `0020_jittery_may_parker.sql`, 3
+`ALTER TABLE ADD COLUMN` statements, `drizzle-kit check` clean, re-`generate` confirms no drift).
+`RelationshipFinancialAccountService.addAccount` now requires `maskedLast4`/`cardExpiryMonth`/
+`cardExpiryYear` when `accountType` is `debit_card` (validated range: month 1–12, year ≥ 2000).
+`RelationshipService.linkAgreement` gained a `debit_card` branch symmetric with its existing
+`bank_account` branch, calling a new `CardMethodReader` interface implemented by
+`DebitCardFinancialAccountAdapter` (delegates entirely to Sprint 12's unmodified
+`DebitCardMethodService.registerCard`, then attaches `financial_account_id` via one narrow update —
+exact mirror of `AchMandateFinancialAccountAdapter`). `checkActivationPrerequisites` gained `card_missing`,
+symmetric with `mandate_missing`. Five new tests: `addAccount` debit-card field validation (missing
+fields rejected, invalid month rejected, valid input accepted), auto-registration at `linkAgreement`
+time, and a `card_missing` edge case (card revoked out-of-band after auto-registration, mirroring the
+existing `mandate_missing` edge-case test).
+
+**Validation re-run in full after both fixes:** `npx tsc --noEmit` — 0 errors. `npx eslint` (scoped to
+every touched file) — 0 errors, 0 warnings. `npx vitest run` (full repository suite) — 654/654 passing
+across 82 files (up from 649 — 5 net new tests, 0 files added since both fixes landed in existing test
+files). `npm run build` — pass, all 22 relationship-domain routes present. `npx drizzle-kit check` —
+pass. `npx drizzle-kit generate` re-run after the new migration confirms "No schema changes, nothing to
+migrate." Zero regressions — every Sprint 1–17 test and every pre-remediation Sprint 18A test still
+passes unchanged.
+
+**Result: all Sprint 18A acceptance criteria are now PASS.** See the updated
+`docs/sprints/SPRINT_18A_COMPLETION_REPORT.md` for the full re-scored acceptance criteria table.
 
 ### Sprint 17 implementation notes
 
