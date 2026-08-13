@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { agreement } from "./agreement";
+import { financialAccount } from "./financialAccount";
 import { debitCardMethodStatusEnum, profileKindEnum } from "./enums";
 
 /**
@@ -35,5 +36,9 @@ export const debitCardMethod = pgTable("debit_card_method", {
   // not-FK-constrained precedent as ach_mandate.supersedesMandateId (self-referential FK adds real
   // complexity for zero benefit at this schema's scale).
   supersedesCardMethodId: uuid("supersedes_card_method_id"),
+  // Sprint 18A addition: additive, nullable — same precedent as ach.ts's identical
+  // `financialAccountId` addition; set only when this card was registered through the relationship
+  // flow by reusing a party's already-known `financial_account`.
+  financialAccountId: uuid("financial_account_id").references(() => financialAccount.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }).enableRLS();

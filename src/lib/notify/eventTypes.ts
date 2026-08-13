@@ -25,7 +25,14 @@ export type NotificationEventType =
   | "security_event"
   | "staff_permissions"
   | "payout_account_change"
-  | "account_restriction";
+  | "account_restriction"
+  | "relationship_invitation"
+  | "relationship_accepted"
+  | "relationship_declined"
+  | "relationship_activated"
+  | "relationship_restricted"
+  | "relationship_funding_account_replaced"
+  | "relationship_payout_account_replaced";
 
 /**
  * "Critical notifications cannot be disabled" (this sprint's own instruction, verbatim). Master spec
@@ -45,6 +52,16 @@ export type NotificationEventType =
  * effect (Sprints 14/15's own dual-party mechanics), so missing the *notification* specifically
  * doesn't let anything happen unnoticed the way missing a settlement or a bank-account-change alert
  * would.
+ *
+ * Sprint 18A adds `relationship_restricted` (an admin-imposed access change — directly mirrors the
+ * already-critical `account_restriction`), `relationship_funding_account_replaced` (mirrors
+ * `bank_change`/`card_change` — the money-movement source is changing) and
+ * `relationship_payout_account_replaced` (mirrors the already-critical `payout_account_change`) as
+ * critical for the same reasons their mirrored counterparts are. `relationship_invitation`/
+ * `relationship_accepted`/`relationship_declined`/`relationship_activated` remain non-critical,
+ * mirroring `agreement_invitation`/`agreement_signed`: each is a cooperative-handshake or lifecycle
+ * event the recipient must still separately act on (view/accept/decline, or that only unlocks further
+ * activity rather than moving money itself), not money moving unnoticed.
  */
 export const CRITICAL_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = new Set<NotificationEventType>([
   "payment_failed",
@@ -57,6 +74,9 @@ export const CRITICAL_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = n
   "payout_account_change",
   "account_restriction",
   "settlement",
+  "relationship_restricted",
+  "relationship_funding_account_replaced",
+  "relationship_payout_account_replaced",
 ]);
 
 export function isCriticalNotificationType(type: NotificationEventType): boolean {
@@ -89,6 +109,13 @@ export const DEFAULT_CHANNELS: Record<NotificationEventType, readonly Notificati
   staff_permissions: ["email", "in_app"],
   payout_account_change: ["email", "sms", "in_app"],
   account_restriction: ["email", "sms", "in_app"],
+  relationship_invitation: ["email", "in_app"],
+  relationship_accepted: ["email", "in_app"],
+  relationship_declined: ["email", "in_app"],
+  relationship_activated: ["email", "in_app"],
+  relationship_restricted: ["email", "sms", "in_app"],
+  relationship_funding_account_replaced: ["email", "sms", "in_app"],
+  relationship_payout_account_replaced: ["email", "sms", "in_app"],
 };
 
 export function isNotificationEventType(value: string): value is NotificationEventType {

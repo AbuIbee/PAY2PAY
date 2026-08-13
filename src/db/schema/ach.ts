@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { agreement } from "./agreement";
+import { financialAccount } from "./financialAccount";
 import { achMandateStatusEnum, profileKindEnum } from "./enums";
 
 /**
@@ -32,5 +33,11 @@ export const achMandate = pgTable("ach_mandate", {
   // Not FK-constrained — same precedent as agreement.ts's `agreementVersion.parentVersionId`
   // (self-referential FK adds real complexity for zero benefit at this schema's scale).
   supersedesMandateId: uuid("supersedes_mandate_id"),
+  // Sprint 18A addition: additive, nullable — set only when this mandate was created through the
+  // relationship flow by reusing a party's already-known `financial_account` (see
+  // financialAccount.ts's doc comment); every pre-Sprint-18A mandate, and every mandate created
+  // directly through Sprint 11's own `AchMandateService.authorize` outside the relationship flow,
+  // simply has this null. Never required, never read by any Sprint 9–17 code path.
+  financialAccountId: uuid("financial_account_id").references(() => financialAccount.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }).enableRLS();
