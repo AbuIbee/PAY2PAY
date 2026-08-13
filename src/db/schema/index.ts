@@ -23,3 +23,4 @@ export * from "./partialPayment";
 export * from "./settlement";
 export * from "./agreementDispute";
 export * from "./paymentDispute";
+export * from "./notify";

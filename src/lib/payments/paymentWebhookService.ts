@@ -3,6 +3,9 @@ import type { AuditService } from "@/lib/audit/auditService";
 import { ForbiddenError } from "@/lib/errors";
 import type { LedgerService } from "@/lib/ledger/ledgerService";
 import { logger } from "@/lib/logger";
+import type { NotificationEventType } from "@/lib/notify/eventTypes";
+import type { NotificationService } from "@/lib/notify/notificationService";
+import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { PaymentProvider } from "./paymentProvider";
 import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus } from "./paymentService";
 
@@ -108,6 +111,18 @@ export class PaymentWebhookService {
       audit: AuditService;
       /** Sprint 13: installment past_due/paid marking, notification, and retry scheduling — optional, see FailedPaymentWorkflow's doc comment. */
       failedPaymentWorkflow?: FailedPaymentWorkflow;
+      /**
+       * Sprint 17 (docs/sprints/SPRINT_17_Notifications.md) Product Owner review pass addition —
+       * notifies both parties on a "succeeded" (`payment_cleared`) or "disputed" (`payment_disputed`)
+       * transition, the two remaining payment-status events this sprint's own required event list
+       * names that weren't yet wired to any real trigger (only `payment_failed`, via
+       * `failedPaymentWorkflow`, existed at Sprint 17's initial implementation pass). Both optional —
+       * every pre-Sprint-17 test constructing this service without them is unaffected — and, matching
+       * `postLedgerEntry`/`runFailedPaymentWorkflow`'s identical "never fail the webhook" contract, a
+       * notification failure here is caught and logged, never thrown.
+       */
+      notifications?: NotificationService;
+      profileOwners?: ProfileOwnerReader;
     },
   ) {}
 
@@ -187,6 +202,41 @@ export class PaymentWebhookService {
 
     await this.postLedgerEntry(eventType, updated, data);
     await this.runFailedPaymentWorkflow(newStatus, updated, failureCategory ?? null);
+    await this.notifyPaymentStatus(newStatus, updated);
+  }
+
+  /** Sprint 17 review-pass addition — see the constructor's `notifications`/`profileOwners` doc comment. */
+  private async notifyPaymentStatus(status: PaymentAttemptStatus, payment: PaymentAttemptRecord): Promise<void> {
+    if (!this.deps.notifications || !this.deps.profileOwners) return;
+    const notificationType: NotificationEventType | null =
+      status === "succeeded" ? "payment_cleared" : status === "disputed" ? "payment_disputed" : null;
+    if (!notificationType) return;
+
+    try {
+      const [payerUserId, recipientUserId] = await Promise.all([
+        this.deps.profileOwners.getOwnerUserId(payment.payerProfileKind, payment.payerProfileId),
+        this.deps.profileOwners.getOwnerUserId(payment.recipientProfileKind, payment.recipientProfileId),
+      ]);
+      const recipients = [payerUserId, recipientUserId].filter((id): id is string => id !== null);
+      await Promise.all(
+        recipients.map((userId) =>
+          this.deps.notifications!.notify({
+            recipientUserId: userId,
+            notificationType,
+            relatedPaymentAttemptId: payment.id,
+            relatedAgreementId: payment.agreementId,
+            payload: { amountMinorUnits: payment.amountMinorUnits, currency: payment.currency },
+            dedupeKey: `${notificationType}:${payment.id}:${userId}`,
+          }),
+        ),
+      );
+    } catch (error) {
+      logger.error("payment_webhook_notification_failed", {
+        paymentAttemptId: payment.id,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

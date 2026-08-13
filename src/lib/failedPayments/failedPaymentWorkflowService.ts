@@ -1,4 +1,5 @@
 import "server-only";
+import type { NotificationEventType } from "@/lib/notify/eventTypes";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { PaymentAttemptRecord } from "@/lib/payments/paymentService";
@@ -28,12 +29,7 @@ export class FailedPaymentWorkflowService implements FailedPaymentWorkflow {
     if (!payment.installmentScheduleItemId) return;
 
     await this.deps.installments.markPastDue(payment.installmentScheduleItemId);
-    await this.notifyBothParties(payment, {
-      notificationType: "payment_failed",
-      subject: "A payment did not go through",
-      body: this.failureBody(failureCategory),
-      payload: { failureCategory: failureCategory ?? "unknown" },
-    });
+    await this.notifyBothParties(payment, "payment_failed", { failureCategory: failureCategory ?? "unknown" });
     await this.deps.retries.scheduleRetryForFailedPayment(payment);
   }
 
@@ -47,7 +43,8 @@ export class FailedPaymentWorkflowService implements FailedPaymentWorkflow {
 
   private async notifyBothParties(
     payment: PaymentAttemptRecord,
-    input: { notificationType: string; subject: string; body: string; payload: Record<string, unknown> },
+    notificationType: NotificationEventType,
+    payload: Record<string, unknown>,
   ): Promise<void> {
     const [payerUserId, recipientUserId] = await Promise.all([
       this.deps.profileOwners.getOwnerUserId(payment.payerProfileKind, payment.payerProfileId),
@@ -58,20 +55,16 @@ export class FailedPaymentWorkflowService implements FailedPaymentWorkflow {
       recipients.map((recipientUserId) =>
         this.deps.notifications.notify({
           recipientUserId,
-          notificationType: input.notificationType,
+          notificationType,
           relatedPaymentAttemptId: payment.id,
           relatedAgreementId: payment.agreementId,
-          subject: input.subject,
-          body: input.body,
-          payload: input.payload,
+          payload,
+          // Non-sensitive only — never a raw processor code, per docs/PAYMENT_ARCHITECTURE.md §6.
+          // Idempotent per (payment, recipient, type) — safe if this webhook-driven handler is ever
+          // invoked twice for the same payment_attempt.
+          dedupeKey: `${notificationType}:${payment.id}:${recipientUserId}`,
         }),
       ),
     );
-  }
-
-  /** Non-sensitive only — never includes a raw processor code, per docs/PAYMENT_ARCHITECTURE.md §6. */
-  private failureBody(failureCategory: string | null): string {
-    const category = failureCategory ?? "an issue with the payment method";
-    return `A scheduled payment could not be completed (${category}). A manual payment can be made now, or the system will automatically retry once.`;
   }
 }
