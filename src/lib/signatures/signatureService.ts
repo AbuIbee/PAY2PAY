@@ -5,7 +5,7 @@ import type { PersonalProfileRepository } from "@/lib/auth/authService";
 import { generateAgreementPdf, hashPdfContent } from "@/lib/documents/agreementPdf";
 import type { DocumentStorage } from "@/lib/documents/documentStorage";
 import type { ProfileDisplayReader } from "@/lib/documents/profileDisplayReader";
-import { ConfigurationError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { ConfigurationError, ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { StaffService } from "@/lib/staff/staffService";
@@ -112,7 +112,7 @@ export class SignatureService {
       action: "sign_agreement",
     });
     if (!stepUpOk) {
-      throw new ForbiddenError(
+      throw new StepUpRequiredError(
         "Step-up verification is required before signing. Please complete a fresh verification challenge and try again.",
       );
     }

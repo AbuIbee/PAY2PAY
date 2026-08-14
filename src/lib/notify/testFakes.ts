@@ -35,6 +35,7 @@ export class InMemoryNotificationEventRepository implements NotificationEventRep
       nextRetryAt: null,
       deliveredAt: null,
       createdAt: new Date(),
+      readAt: null,
       ...input,
     };
     this.byId.set(record.id, record);
@@ -79,6 +80,13 @@ export class InMemoryNotificationEventRepository implements NotificationEventRep
     return [...this.byId.values()]
       .filter((e) => e.recipientUserId === recipientUserId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async markRead(id: string, recipientUserId: string, readAt: Date): Promise<NotificationEventRecord | null> {
+    const record = this.byId.get(id);
+    if (!record || record.recipientUserId !== recipientUserId) return null;
+    record.readAt = readAt;
+    return record;
   }
 
   private mustFind(id: string): NotificationEventRecord {

@@ -100,13 +100,29 @@ export class AccountDisabledError extends AppError {
  * are, but you can't do this."
  */
 export class ForbiddenError extends AppError {
-  constructor(message = "You do not have access to this resource.") {
+  constructor(message = "You do not have access to this resource.", code = "FORBIDDEN") {
     super(message, {
       statusCode: 403,
-      code: "FORBIDDEN",
+      code,
       isOperational: true,
     });
     this.name = "ForbiddenError";
+  }
+}
+
+/**
+ * A fresh MFA step-up (see MfaService.requireStepUp) is needed before this
+ * action can proceed. Still an instanceof ForbiddenError (existing tests/
+ * callers that check for that keep working), but with its own `code` so a
+ * client can reliably show a step-up challenge and retry the original
+ * action, instead of treating this the same as any other authorization
+ * failure (Sprint 18B: "action -> backend says step-up required -> UI
+ * challenge -> success -> safely retry original action").
+ */
+export class StepUpRequiredError extends ForbiddenError {
+  constructor(message = "Step-up verification is required to continue.") {
+    super(message, "STEP_UP_REQUIRED");
+    this.name = "StepUpRequiredError";
   }
 }
 

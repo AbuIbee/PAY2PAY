@@ -10,6 +10,22 @@ afterEach(() => {
   cleanup();
 });
 
+// jsdom does not implement <dialog>'s showModal()/close() (a known jsdom
+// gap, not a bug in our code) — Sprint 18B's StepUpChallenge and any other
+// <dialog>-based UI need these to be callable in tests.
+if (typeof HTMLDialogElement !== "undefined") {
+  if (!HTMLDialogElement.prototype.showModal) {
+    HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    };
+  }
+  if (!HTMLDialogElement.prototype.close) {
+    HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+      this.removeAttribute("open");
+    };
+  }
+}
+
 // Test-only defaults so modules that lazily call getServerEnv() (e.g.
 // AuditService) work without requiring a real .env.local in CI. These are
 // not secrets — never used outside the test process.

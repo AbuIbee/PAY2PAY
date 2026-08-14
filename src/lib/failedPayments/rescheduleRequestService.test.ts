@@ -181,4 +181,25 @@ describe("RescheduleRequestService", () => {
     await service.decideReschedule({ requestId: request.id, decision: "approved", decisionReason: null, actingUserId: CREDITOR_USER_ID });
     expect(auditRepo.events.map((e) => e.action)).toEqual(["reschedule_requested", "reschedule_approved"]);
   });
+
+  describe("listByAgreementId (Sprint 18B Payments UI)", () => {
+    it("lets either party see the agreement's reschedule requests", async () => {
+      await service.requestReschedule({
+        installmentScheduleItemId: installmentId,
+        agreementId,
+        requestedDueDate: "2026-09-15",
+        reason: null,
+        actingUserId: DEBTOR_USER_ID,
+      });
+
+      const asDebtor = await service.listByAgreementId(agreementId, DEBTOR_USER_ID);
+      expect(asDebtor).toHaveLength(1);
+      const asCreditor = await service.listByAgreementId(agreementId, CREDITOR_USER_ID);
+      expect(asCreditor).toHaveLength(1);
+    });
+
+    it("denies a user who is not a party to the agreement", async () => {
+      await expect(service.listByAgreementId(agreementId, OTHER_USER_ID)).rejects.toThrow(ForbiddenError);
+    });
+  });
 });

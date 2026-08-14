@@ -23,6 +23,8 @@ export interface NotificationEventRecord {
   nextRetryAt: Date | null;
   deliveredAt: Date | null;
   createdAt: Date;
+  /** Sprint 18B: null means unread — the Notification Center's read/unread state. */
+  readAt: Date | null;
 }
 
 /** Real implementation: DrizzleNotificationEventRepository. */
@@ -44,6 +46,8 @@ export interface NotificationEventRepository {
   /** Cron-scan entry point — a periodic/administrative operation, not a per-request hot path, mirroring PaymentAttemptRepository.listAll's precedent. */
   findDueForRetry(now: Date, maxAttempts: number): Promise<NotificationEventRecord[]>;
   listForUser(recipientUserId: string): Promise<NotificationEventRecord[]>;
+  /** Sprint 18B: no-op if already read. Scoping to recipientUserId (not just id) is the authorization boundary — a user can never mark another user's notification read. */
+  markRead(id: string, recipientUserId: string, readAt: Date): Promise<NotificationEventRecord | null>;
 }
 
 /** Real implementation: DrizzleNotificationPreferenceRepository. */
@@ -181,6 +185,10 @@ export class NotificationService {
 
   async listForUser(recipientUserId: string): Promise<NotificationEventRecord[]> {
     return this.deps.events.listForUser(recipientUserId);
+  }
+
+  async markRead(recipientUserId: string, notificationId: string): Promise<NotificationEventRecord | null> {
+    return this.deps.events.markRead(notificationId, recipientUserId, new Date());
   }
 
   private async resolveChannels(userId: string, type: NotificationEventType, critical: boolean): Promise<NotificationChannel[]> {

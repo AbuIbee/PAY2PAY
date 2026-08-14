@@ -154,6 +154,23 @@ export class PaymentRetryService {
   }
 
   /**
+   * Sprint 18B: the failed-payment detail card's "scheduled retry date" —
+   * authorized the same way PaymentService.retrievePayment authorizes a
+   * single payment (payer or recipient of the *original* attempt), since
+   * this class has no party-role concept of its own beyond that.
+   */
+  async findForOriginalPayment(originalPaymentAttemptId: string, actingUserId: string): Promise<PaymentRetryRecord | null> {
+    const original = await this.deps.paymentAttempts.findById(originalPaymentAttemptId);
+    if (!original) return null;
+    const [payerOwner, recipientOwner] = await Promise.all([
+      this.deps.profileOwners.getOwnerUserId(original.payerProfileKind, original.payerProfileId),
+      this.deps.profileOwners.getOwnerUserId(original.recipientProfileKind, original.recipientProfileId),
+    ]);
+    if (payerOwner !== actingUserId && recipientOwner !== actingUserId) return null;
+    return this.deps.retries.findByOriginalPaymentAttemptId(originalPaymentAttemptId);
+  }
+
+  /**
    * The cron-triggered batch entry point (`POST /api/scheduler/retry-failed-payments`) — Vercel has
    * no persistent worker process, so "firing" a due retry only happens when something calls this,
    * not from a timer this class itself owns. Each retry's own creation failure (e.g. the mandate/card

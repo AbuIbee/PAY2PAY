@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { rescheduleRequest } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -45,6 +45,16 @@ export class DrizzleRescheduleRequestRepository implements RescheduleRequestRepo
     const db = getDb();
     const rows = await db.select().from(rescheduleRequest).where(eq(rescheduleRequest.id, id)).limit(1);
     return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  async listByAgreementId(agreementId: string): Promise<RescheduleRequestRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(rescheduleRequest)
+      .where(eq(rescheduleRequest.agreementId, agreementId))
+      .orderBy(desc(rescheduleRequest.createdAt));
+    return rows.map(toRecord);
   }
 
   async decide(

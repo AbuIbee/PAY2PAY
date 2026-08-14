@@ -136,6 +136,12 @@ export class InMemoryRescheduleRequestRepository implements RescheduleRequestRep
     return this.byId.get(id) ?? null;
   }
 
+  async listByAgreementId(agreementId: string): Promise<RescheduleRequestRecord[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.agreementId === agreementId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
   async decide(
     id: string,
     status: "approved" | "rejected",

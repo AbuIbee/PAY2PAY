@@ -1,7 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import Link from "next/link";
-import { AdminNavLink } from "@/components/AdminNavLink";
-import { MobileNavToggle } from "@/components/MobileNavToggle";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -19,47 +16,18 @@ export const viewport: Viewport = {
   themeColor: "#082f2b",
 };
 
+/**
+ * Sprint 18B: the marketing site and the authenticated product now have
+ * distinct shells — (marketing)/layout.tsx keeps the original public
+ * header/footer, (app)/layout.tsx is the new authenticated nav — so this
+ * root layout only supplies the document skeleton both share.
+ */
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en">
       <body>
         <a className="skip-link" href="#main-content">Skip to content</a>
-        <div className="app-shell">
-          <header className="app-header">
-            <div className="header-inner">
-              <Link className="brand" href="/" aria-label="PAY2PAY home">
-                <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-                <span>PAY2PAY</span>
-              </Link>
-              <div style={{ marginInlineStart: "auto", display: "flex", alignItems: "center" }}>
-                <AdminNavLink />
-                <Link href="/login" className="button button--ghost" style={{ marginInlineEnd: "0.75rem" }}>
-                  Sign in
-                </Link>
-                <MobileNavToggle />
-              </div>
-            </div>
-          </header>
-          <main id="main-content" className="app-main">
-            <div className="container">{children}</div>
-          </main>
-          <footer className="app-footer">
-            <div className="footer-inner">
-              <Link className="brand brand--footer" href="/">
-                <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-                <span>PAY2PAY</span>
-              </Link>
-              <p>Clear terms. Mutual approval. Documented repayment.</p>
-              <nav aria-label="Footer navigation">
-                <Link href="/privacy">Privacy</Link>
-                <Link href="/terms">Terms</Link>
-                <Link href="/support">Support</Link>
-                <Link href="/accessibility">Accessibility</Link>
-              </nav>
-              <small>© 2026 PAY2PAY. Product preview—financial functionality is not yet enabled.</small>
-            </div>
-          </footer>
-        </div>
+        {children}
       </body>
     </html>
   );

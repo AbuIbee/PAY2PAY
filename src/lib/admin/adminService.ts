@@ -2,7 +2,7 @@ import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
 import type { AccountClassification, PlatformRole, SessionRepository, UserAccountRepository } from "@/lib/auth/authService";
 import type { MfaService } from "@/lib/auth/mfaService";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import { isAdminRole, isOwnerRole } from "./capabilities";
 
 export interface AdminOverviewData {
@@ -181,7 +181,7 @@ export class AdminService {
       action: "admin_role_change",
     });
     if (!stepUpOk) {
-      throw new ForbiddenError("Step-up verification is required to change a platform role.");
+      throw new StepUpRequiredError("Step-up verification is required to change a platform role.");
     }
     if (target.platformRole === newRole) {
       throw new ValidationError(`This account already has the "${newRole}" role.`);
@@ -227,7 +227,7 @@ export class AdminService {
       action: "admin_impersonation_start",
     });
     if (!stepUpOk) {
-      throw new ForbiddenError("Step-up verification is required to start a support view.");
+      throw new StepUpRequiredError("Step-up verification is required to start a support view.");
     }
     if (!reason.trim()) {
       throw new ValidationError("A reason is required to start a support view.");

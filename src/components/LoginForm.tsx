@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
+import { getSafeNextPath } from "@/lib/ui/safeRedirect";
 
 type Status = "idle" | "submitting" | "success" | "error";
 
 export function LoginForm() {
   const formId = useId();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<Status>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -28,7 +30,7 @@ export function LoginForm() {
       });
       if (response.ok) {
         setStatus("success");
-        router.push("/account");
+        router.push(getSafeNextPath(searchParams.get("next"), "/dashboard"));
         return;
       }
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
@@ -74,7 +76,9 @@ export function LoginForm() {
       <p style={{ fontSize: "0.85rem", color: "var(--ink-soft)" }}>
         <Link href="/forgot-password">Forgot your password?</Link>
         {" · "}
-        <Link href="/signup">Create an account</Link>
+        <Link href={searchParams.get("next") ? `/signup?next=${encodeURIComponent(searchParams.get("next")!)}` : "/signup"}>
+          Create an account
+        </Link>
       </p>
     </form>
   );

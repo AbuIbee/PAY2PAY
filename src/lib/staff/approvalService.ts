@@ -1,7 +1,7 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
 import type { MfaService } from "@/lib/auth/mfaService";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import type { Capability } from "./capabilities";
 import { isCapability } from "./capabilities";
 import type { StaffService } from "./staffService";
@@ -64,6 +64,8 @@ export interface StaffApprovalRequestRepository {
     id: string,
     input: { status: "approved" | "rejected"; approvedByStaffId: string; decidedAt: Date },
   ): Promise<void>;
+  /** Sprint 18B: the pending-approval queue UI needs a list, not just findById — read-only, no new business rule. */
+  listPendingByBusiness(businessProfileId: string): Promise<StaffApprovalRequestRecord[]>;
 }
 
 export interface ProposalOutcome {
@@ -101,6 +103,11 @@ export class ApprovalService {
     return this.policies.listByBusiness(businessProfileId);
   }
 
+  /** Read-only; callers are expected to have already checked staff membership (see the API route) — same convention as listPolicies. */
+  async listPendingRequests(businessProfileId: string): Promise<StaffApprovalRequestRecord[]> {
+    return this.requests.listPendingByBusiness(businessProfileId);
+  }
+
   async setApprovalPolicy(input: {
     businessProfileId: string;
     actingUserId: string;
@@ -128,7 +135,7 @@ export class ApprovalService {
       action: "approval_policy_change",
     });
     if (!stepUpOk) {
-      throw new ForbiddenError("Step-up verification is required to change an approval policy.");
+      throw new StepUpRequiredError("Step-up verification is required to change an approval policy.");
     }
 
     const policy = await this.policies.upsert({

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { paymentAttempt } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -129,6 +129,16 @@ export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository
   async listAll(): Promise<PaymentAttemptRecord[]> {
     const db = getDb();
     const rows = await db.select().from(paymentAttempt);
+    return rows.map(toRecord);
+  }
+
+  async listByAgreementId(agreementId: string): Promise<PaymentAttemptRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(paymentAttempt)
+      .where(eq(paymentAttempt.agreementId, agreementId))
+      .orderBy(desc(paymentAttempt.createdAt));
     return rows.map(toRecord);
   }
 }

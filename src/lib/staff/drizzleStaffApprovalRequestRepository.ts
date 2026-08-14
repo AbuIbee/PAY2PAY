@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { staffApprovalRequest } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -58,5 +58,15 @@ export class DrizzleStaffApprovalRequestRepository implements StaffApprovalReque
       .update(staffApprovalRequest)
       .set({ status: input.status, approvedByStaffId: input.approvedByStaffId, decidedAt: input.decidedAt })
       .where(eq(staffApprovalRequest.id, id));
+  }
+
+  async listPendingByBusiness(businessProfileId: string): Promise<StaffApprovalRequestRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(staffApprovalRequest)
+      .where(and(eq(staffApprovalRequest.businessProfileId, businessProfileId), eq(staffApprovalRequest.status, "pending")))
+      .orderBy(desc(staffApprovalRequest.createdAt));
+    return rows.map(toRecord);
   }
 }

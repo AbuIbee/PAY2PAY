@@ -1,6 +1,6 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
 import type { AgreementRepository, AgreementService, PartyRole } from "@/lib/agreements/agreementService";
 import type { MfaService } from "@/lib/auth/mfaService";
@@ -352,7 +352,7 @@ export class SettlementService {
       action: "approve_settlement",
     });
     if (!stepUpOk) {
-      throw new ForbiddenError("Step-up verification is required to propose, counter, or accept a settlement as the creditor.");
+      throw new StepUpRequiredError("Step-up verification is required to propose, counter, or accept a settlement as the creditor.");
     }
   }
 

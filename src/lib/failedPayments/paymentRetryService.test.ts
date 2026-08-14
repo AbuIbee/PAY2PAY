@@ -83,6 +83,27 @@ describe("PaymentRetryService", () => {
     expect(retry?.status).toBe("scheduled");
   });
 
+  describe("findForOriginalPayment (Sprint 18B Payments UI)", () => {
+    it("returns the scheduled retry to either party of the original payment", async () => {
+      const submitted = await failAnInstallmentPayment("k-retry-status-payer");
+      const asPayer = await ctx.paymentRetryService.findForOriginalPayment(submitted.id, PAYER_USER_ID);
+      expect(asPayer?.status).toBe("scheduled");
+      const asRecipient = await ctx.paymentRetryService.findForOriginalPayment(submitted.id, RECIPIENT_USER_ID);
+      expect(asRecipient?.status).toBe("scheduled");
+    });
+
+    it("returns null for a user who is neither payer nor recipient", async () => {
+      const submitted = await failAnInstallmentPayment("k-retry-status-stranger");
+      const asStranger = await ctx.paymentRetryService.findForOriginalPayment(submitted.id, "stranger-user");
+      expect(asStranger).toBeNull();
+    });
+
+    it("returns null when no retry was ever scheduled for this payment id", async () => {
+      const result = await ctx.paymentRetryService.findForOriginalPayment(randomUUID(), PAYER_USER_ID);
+      expect(result).toBeNull();
+    });
+  });
+
   it("retry: the scheduled retry fires and creates a new payment_attempt via the same payment method", async () => {
     const submitted = await failAnInstallmentPayment("k-retry-fires");
     const { fired, canceled } = await ctx.paymentRetryService.fireDueRetries(new Date(Date.now() + 1000));

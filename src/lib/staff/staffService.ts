@@ -3,7 +3,7 @@ import type { AuditService } from "@/lib/audit/auditService";
 import type { MfaService } from "@/lib/auth/mfaService";
 import type { SessionRepository } from "@/lib/auth/authService";
 import { generateOpaqueToken, hashOpaqueToken } from "@/lib/auth/token";
-import { ConflictError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { ConflictError, ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import type { EmailSender } from "@/lib/notify/emailSender";
 import { DEFAULT_ROLE_CAPABILITIES, HIGH_RISK_CAPABILITIES, isCapability } from "./capabilities";
 import type { Capability, StaffRole } from "./capabilities";
@@ -270,7 +270,7 @@ export class StaffService {
         action: "staff_removal",
       });
       if (!stepUpOk) {
-        throw new ForbiddenError("Step-up verification is required to remove this staff member.");
+        throw new StepUpRequiredError("Step-up verification is required to remove this staff member.");
       }
     }
 
@@ -317,7 +317,7 @@ export class StaffService {
       action: "staff_role_change",
     });
     if (!stepUpOk) {
-      throw new ForbiddenError("Step-up verification is required to change a staff member's role.");
+      throw new StepUpRequiredError("Step-up verification is required to change a staff member's role.");
     }
 
     const newCustomRoleId = input.newRole === "custom" ? (input.newCustomRoleId ?? null) : null;
@@ -346,7 +346,7 @@ export class StaffService {
       action: "custom_role_edit",
     });
     if (!stepUpOk) {
-      throw new ForbiddenError("Step-up verification is required to create a custom role.");
+      throw new StepUpRequiredError("Step-up verification is required to create a custom role.");
     }
 
     const role = await this.customRoles.insert({
@@ -381,7 +381,7 @@ export class StaffService {
       action: "custom_role_edit",
     });
     if (!stepUpOk) {
-      throw new ForbiddenError("Step-up verification is required to edit a custom role.");
+      throw new StepUpRequiredError("Step-up verification is required to edit a custom role.");
     }
 
     const permissions = input.permissions ? this.validatePermissions(input.permissions) : undefined;

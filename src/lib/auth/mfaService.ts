@@ -107,6 +107,18 @@ export class MfaService {
     return verified.length > 0;
   }
 
+  /**
+   * Sprint 18B: the enrollment UI and the step-up challenge UI both need to
+   * know, before rendering anything, which verified methods (if any) exist
+   * for this user — otherwise a step-up challenge could be shown to a user
+   * with no enrolled method at all, who can never complete it. Read-only,
+   * no new state.
+   */
+  async listEnrolledMethods(userId: string): Promise<MfaMethod[]> {
+    const verified = await this.credentials.findVerifiedByUserId(userId);
+    return [...new Set(verified.map((credential) => credential.method))];
+  }
+
   async beginTotpEnrollment(
     userId: string,
     accountLabel: string,

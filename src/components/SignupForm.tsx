@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
+import { getSafeNextPath } from "@/lib/ui/safeRedirect";
 
 type Status = "idle" | "submitting" | "success" | "error";
 
 export function SignupForm() {
   const formId = useId();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<Status>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -32,7 +34,7 @@ export function SignupForm() {
       });
       if (response.ok) {
         setStatus("success");
-        router.push("/account");
+        router.push(getSafeNextPath(searchParams.get("next"), "/dashboard"));
         return;
       }
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
@@ -80,7 +82,10 @@ export function SignupForm() {
       </button>
 
       <p style={{ fontSize: "0.85rem", color: "var(--ink-soft)" }}>
-        Already have an account? <Link href="/login">Sign in</Link>
+        Already have an account?{" "}
+        <Link href={searchParams.get("next") ? `/login?next=${encodeURIComponent(searchParams.get("next")!)}` : "/login"}>
+          Sign in
+        </Link>
       </p>
     </form>
   );
