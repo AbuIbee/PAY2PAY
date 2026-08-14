@@ -186,4 +186,28 @@ describe("PaymentService", () => {
       ctx.provider.cancelPayment = originalCancel;
     });
   });
+
+  describe("listByAgreementId (Sprint 18B Payments UI)", () => {
+    it("returns only payment attempts for the given agreement, newest first", async () => {
+      await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+      await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+
+      const forAgreementA1 = await ctx.paymentService.createPayment(
+        baseInput({ idempotencyKey: "agreement-a-1", agreementId: "agreement-a" }),
+      );
+      const forAgreementA2 = await ctx.paymentService.createPayment(
+        baseInput({ idempotencyKey: "agreement-a-2", agreementId: "agreement-a" }),
+      );
+      await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "agreement-b-1", agreementId: "agreement-b" }));
+
+      const results = await ctx.paymentService.listByAgreementId("agreement-a");
+      expect(results.map((r) => r.id).sort()).toEqual([forAgreementA1.id, forAgreementA2.id].sort());
+      expect(results.every((r) => r.agreementId === "agreement-a")).toBe(true);
+    });
+
+    it("returns an empty list for an agreement with no payment attempts", async () => {
+      const results = await ctx.paymentService.listByAgreementId("no-such-agreement");
+      expect(results).toEqual([]);
+    });
+  });
 });

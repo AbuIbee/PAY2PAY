@@ -97,6 +97,8 @@ export interface PaymentAttemptRepository {
   findOpenByInstallment(installmentScheduleItemId: string): Promise<PaymentAttemptRecord | null>;
   /** Sprint 10: batch reconciliation's full-scan entry point (ReconciliationService.reconcileAll) — a periodic/administrative operation, not a per-request hot path. */
   listAll(): Promise<PaymentAttemptRecord[]>;
+  /** Sprint 18B: the Payments UI needs a scoped list, not the cron-only listAll() above. */
+  listByAgreementId(agreementId: string): Promise<PaymentAttemptRecord[]>;
 }
 
 /**
@@ -275,6 +277,19 @@ export class PaymentService {
 
   async retrievePayment(id: string, actingUserId: string): Promise<PaymentAttemptRecord> {
     return this.getAuthorizedRecord(id, actingUserId, "payer_or_recipient");
+  }
+
+  /**
+   * Sprint 18B: the Payments UI's per-agreement list. Deliberately takes no
+   * actingUserId — this class has no agreement-party data to check against,
+   * so the caller (the route) is expected to have already authorized the
+   * agreement via AgreementService.resolvePartyRole before calling this,
+   * the same "authorize at the boundary that owns the data" split already
+   * used elsewhere (e.g. SignatureService injects AgreementService itself
+   * rather than duplicating party-resolution here for one read method).
+   */
+  async listByAgreementId(agreementId: string): Promise<PaymentAttemptRecord[]> {
+    return this.deps.payments.listByAgreementId(agreementId);
   }
 
   async cancelPayment(id: string, actingUserId: string): Promise<PaymentAttemptRecord> {

@@ -24,6 +24,7 @@ function toRecord(row: Row): NotificationEventRecord {
     nextRetryAt: row.nextRetryAt,
     deliveredAt: row.deliveredAt,
     createdAt: row.createdAt,
+    readAt: row.readAt,
   };
 }
 
@@ -100,5 +101,15 @@ export class DrizzleNotificationEventRepository implements NotificationEventRepo
       .where(eq(notificationEvent.recipientUserId, recipientUserId))
       .orderBy(desc(notificationEvent.createdAt));
     return rows.map(toRecord);
+  }
+
+  async markRead(id: string, recipientUserId: string, readAt: Date): Promise<NotificationEventRecord | null> {
+    const db = getDb();
+    const [row] = await db
+      .update(notificationEvent)
+      .set({ readAt })
+      .where(and(eq(notificationEvent.id, id), eq(notificationEvent.recipientUserId, recipientUserId)))
+      .returning();
+    return row ? toRecord(row) : null;
   }
 }

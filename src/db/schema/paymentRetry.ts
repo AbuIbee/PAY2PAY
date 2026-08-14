@@ -124,6 +124,11 @@ export const notificationEvent = pgTable(
     nextRetryAt: timestamp("next_retry_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // Sprint 18B: the Notification Center's read/unread state. Null means unread. Additive,
+    // nullable column — existing rows are simply unread until the recipient opens them, no backfill
+    // needed. Distinct from `deliveredAt` (a delivery-pipeline concept, Sprint 17) — this is purely
+    // "has the recipient seen this in the UI."
+    readAt: timestamp("read_at", { withTimezone: true }),
   },
   (table) => [uniqueIndex("notification_event_dedupe_key_unique").on(table.dedupeKey)],
 ).enableRLS();

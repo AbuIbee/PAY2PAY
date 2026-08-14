@@ -34,6 +34,8 @@ export interface RescheduleRequestRepository {
     reason: string | null;
   }): Promise<RescheduleRequestRecord>;
   findById(id: string): Promise<RescheduleRequestRecord | null>;
+  /** Sprint 18B: the Payments/reschedule UI's per-agreement list (debtor's own requests, creditor's pending queue). */
+  listByAgreementId(agreementId: string): Promise<RescheduleRequestRecord[]>;
   decide(
     id: string,
     status: "approved" | "rejected",
@@ -148,6 +150,25 @@ export class RescheduleRequestService {
       input.decisionReason,
     );
     return decided;
+  }
+
+  /**
+   * Sprint 18B: either party may view an agreement's reschedule requests —
+   * the debtor to track their own request, the creditor to see what's
+   * awaiting a decision. Same party-membership check as every other
+   * agreement-scoped read in this codebase.
+   */
+  async listByAgreementId(agreementId: string, actingUserId: string): Promise<RescheduleRequestRecord[]> {
+    const parties = await this.deps.parties.getParties(agreementId);
+    if (!parties) throw new ValidationError("Agreement not found.");
+    const [creditorOwner, debtorOwner] = await Promise.all([
+      this.deps.profileOwners.getOwnerUserId(parties.creditor.profileKind, parties.creditor.profileId),
+      this.deps.profileOwners.getOwnerUserId(parties.debtor.profileKind, parties.debtor.profileId),
+    ]);
+    if (creditorOwner !== actingUserId && debtorOwner !== actingUserId) {
+      throw new ForbiddenError("You do not have access to this agreement's reschedule requests.");
+    }
+    return this.deps.requests.listByAgreementId(agreementId);
   }
 
   private async recordAudit(

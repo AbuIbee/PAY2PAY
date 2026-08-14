@@ -36,17 +36,27 @@ export const BLANK_AGREEMENT_TERMS: AgreementTermsFormValues = {
   disputeProcedure: "",
 };
 
-/** Dollars-and-cents input over an integer-minor-units value — never lets the caller hold a float minor-unit value. */
+/**
+ * Dollars-and-cents input over an integer-minor-units value — never lets the caller hold a float
+ * minor-unit value. `required` defaults to true (most of these fields are server-validated as
+ * positive, so blocking an empty submission client-side is correct); pass `required={false}` for a
+ * field the backend allows to be zero (e.g. "previous payments already made" on a brand-new
+ * agreement) — otherwise a deliberately-entered "0" immediately redisplays as an empty string (see
+ * the value ternary below) and the field's own `required` attribute becomes permanently
+ * unsatisfiable, silently blocking submission for the single most common real value of that field.
+ */
 function DollarField({
   id,
   label,
   minorUnits,
   onChange,
+  required = true,
 }: {
   id: string;
   label: string;
   minorUnits: number;
   onChange: (minorUnits: number) => void;
+  required?: boolean;
 }) {
   return (
     <div className="field">
@@ -62,7 +72,7 @@ function DollarField({
           const dollars = Number(event.target.value);
           onChange(Number.isFinite(dollars) ? Math.round(dollars * 100) : 0);
         }}
-        required
+        required={required}
       />
     </div>
   );
@@ -134,6 +144,7 @@ export function AgreementTermsFields({
           label="Previous payments already made"
           minorUnits={values.previousPaymentsMinorUnits}
           onChange={(previousPaymentsMinorUnits) => onChange({ previousPaymentsMinorUnits })}
+          required={false}
         />
       </div>
 

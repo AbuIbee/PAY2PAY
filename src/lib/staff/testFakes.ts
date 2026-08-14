@@ -254,6 +254,12 @@ export class InMemoryStaffApprovalRequestRepository implements StaffApprovalRequ
       record.decidedAt = input.decidedAt;
     }
   }
+
+  async listPendingByBusiness(businessProfileId: string): Promise<StaffApprovalRequestRecord[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.businessProfileId === businessProfileId && r.status === "pending")
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
 }
 
 class InMemoryAuditEventRepositoryForStaff implements AuditEventRepository {

@@ -27,6 +27,7 @@ export function createPaymentDetailHandler(authService: AuthService, paymentServ
         recipient: { profileKind: record.recipientProfileKind, profileId: record.recipientProfileId },
         agreementId: record.agreementId,
         providerName: record.providerName,
+        paymentMethod: record.paymentMethod,
         failureReason: record.failureReason,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,

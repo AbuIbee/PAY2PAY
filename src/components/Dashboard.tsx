@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { BusinessProfileForm } from "./BusinessProfileForm";
 import { ProfileSwitcher, type SelectableProfile } from "./ProfileSwitcher";
+import { formatMoney } from "@/lib/ui/money";
 
 interface PersonalDashboardData {
   moneyIOweMinorUnits: number;
@@ -28,12 +30,70 @@ function activeKeyFor(profile: SelectableProfile | null): string {
   return profile.kind === "personal" ? "personal" : `business:${profile.businessProfileId}`;
 }
 
+/**
+ * Sprint 18B: "What requires action?" deep-links — always real routes built
+ * elsewhere in this sprint, never placeholders. The unread-notification
+ * count is fetched separately so this card can say "3 unread" rather than
+ * just "Notifications".
+ */
+function ActionCards({ unreadNotifications }: { unreadNotifications: number | null }) {
+  return (
+    <div className="card-grid">
+      <Link href="/connections/invitations" className="action-card">
+        <div>
+          <p className="action-card__title">Pending invitations</p>
+          <p className="action-card__detail">Review connections waiting on your acceptance</p>
+        </div>
+        <span className="action-card__arrow" aria-hidden="true">→</span>
+      </Link>
+      <Link href="/agreements" className="action-card">
+        <div>
+          <p className="action-card__title">Agreements needing signature</p>
+          <p className="action-card__detail">Review and sign agreements awaiting you</p>
+        </div>
+        <span className="action-card__arrow" aria-hidden="true">→</span>
+      </Link>
+      <Link href="/payment-methods" className="action-card">
+        <div>
+          <p className="action-card__title">Payment methods</p>
+          <p className="action-card__detail">Add or verify a bank account or card</p>
+        </div>
+        <span className="action-card__arrow" aria-hidden="true">→</span>
+      </Link>
+      <Link href="/payments" className="action-card">
+        <div>
+          <p className="action-card__title">Payments</p>
+          <p className="action-card__detail">Check for failed payments or retries due</p>
+        </div>
+        <span className="action-card__arrow" aria-hidden="true">→</span>
+      </Link>
+      <Link href="/notifications" className="action-card">
+        <div>
+          <p className="action-card__title">Notifications</p>
+          <p className="action-card__detail">
+            {unreadNotifications === null ? "View updates" : unreadNotifications > 0 ? `${unreadNotifications} unread` : "You're all caught up"}
+          </p>
+        </div>
+        <span className="action-card__arrow" aria-hidden="true">→</span>
+      </Link>
+      <Link href="/support" className="action-card">
+        <div>
+          <p className="action-card__title">Support &amp; appeals</p>
+          <p className="action-card__detail">Open cases, disputes, and appeal status</p>
+        </div>
+        <span className="action-card__arrow" aria-hidden="true">→</span>
+      </Link>
+    </div>
+  );
+}
+
 export function Dashboard() {
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [profiles, setProfiles] = useState<SelectableProfile[]>([]);
   const [active, setActive] = useState<SelectableProfile | null>(null);
   const [personalData, setPersonalData] = useState<PersonalDashboardData | null>(null);
   const [businessData, setBusinessData] = useState<BusinessDashboardData | null>(null);
+  const [unreadNotifications, setUnreadNotifications] = useState<number | null>(null);
 
   const loadAll = useCallback(async () => {
     const [profilesResponse, activeResponse] = await Promise.all([
@@ -61,6 +121,14 @@ export function Dashboard() {
       if (response.ok) setBusinessData((await response.json()) as BusinessDashboardData);
     }
     setLoadStatus("ready");
+
+    fetch("/api/notifications")
+      .then(async (response) => {
+        if (!response.ok) return;
+        const body = (await response.json()) as { notifications: Array<{ readAt: string | null }> };
+        setUnreadNotifications(body.notifications.filter((n) => n.readAt === null).length);
+      })
+      .catch(() => setUnreadNotifications(null));
   }, []);
 
   useEffect(() => {
@@ -108,34 +176,64 @@ export function Dashboard() {
   }
 
   return (
-    <div style={{ display: "grid", gap: "1.5rem", maxWidth: "40rem" }}>
+    <div style={{ display: "grid", gap: "2rem" }}>
       <div className="hero__actions" style={{ alignItems: "flex-end" }}>
         <ProfileSwitcher profiles={profiles} activeKey={activeKeyFor(active)} onSwitch={(p) => void handleSwitch(p)} />
         <BusinessProfileForm onCreated={() => void loadAll()} />
       </div>
 
       {active?.kind === "personal" && personalData ? (
-        <div className="early-access-form">
-          <h2 style={{ margin: 0, fontSize: "1.1rem" }}>Personal</h2>
-          <p style={{ margin: 0 }}>Money I owe: ${(personalData.moneyIOweMinorUnits / 100).toFixed(2)}</p>
-          <p style={{ margin: 0 }}>Money owed to me: ${(personalData.moneyOwedToMeMinorUnits / 100).toFixed(2)}</p>
-          <p style={{ margin: 0 }}>Agreements: {personalData.agreements.length}</p>
-          <p style={{ margin: 0 }}>Upcoming payments: {personalData.upcomingPayments.length}</p>
-          <p style={{ margin: 0 }}>Requests: {personalData.requests.length}</p>
+        <div className="card-grid">
+          <div className="stat-card">
+            <span className="stat-card__label">Money I owe</span>
+            <span className="stat-card__value">{formatMoney(personalData.moneyIOweMinorUnits)}</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-card__label">Money owed to me</span>
+            <span className="stat-card__value">{formatMoney(personalData.moneyOwedToMeMinorUnits)}</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-card__label">Agreements</span>
+            <span className="stat-card__value">{personalData.agreements.length}</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-card__label">Upcoming payments</span>
+            <span className="stat-card__value">{personalData.upcomingPayments.length}</span>
+          </div>
         </div>
       ) : null}
 
       {active?.kind === "business" && businessData ? (
-        <div className="early-access-form">
-          <h2 style={{ margin: 0, fontSize: "1.1rem" }}>{active.displayName}</h2>
-          <p style={{ margin: 0 }}>Receivables: ${(businessData.receivablesMinorUnits / 100).toFixed(2)}</p>
-          <p style={{ margin: 0 }}>Payables: ${(businessData.payablesMinorUnits / 100).toFixed(2)}</p>
-          <p style={{ margin: 0 }}>Agreements: {businessData.agreements.length}</p>
-          <p style={{ margin: 0 }}>Customers: {businessData.customers.length}</p>
-          <p style={{ margin: 0, color: "var(--ink-soft)" }}>Staff — coming in a later phase</p>
-          <p style={{ margin: 0, color: "var(--ink-soft)" }}>Reports — coming in a later phase</p>
+        <div className="card-grid">
+          <div className="stat-card">
+            <span className="stat-card__label">Receivables</span>
+            <span className="stat-card__value">{formatMoney(businessData.receivablesMinorUnits)}</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-card__label">Payables</span>
+            <span className="stat-card__value">{formatMoney(businessData.payablesMinorUnits)}</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-card__label">Agreements</span>
+            <span className="stat-card__value">{businessData.agreements.length}</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-card__label">Customers</span>
+            <span className="stat-card__value">{businessData.customers.length}</span>
+          </div>
         </div>
       ) : null}
+
+      {active?.kind === "business" && (
+        <p style={{ margin: 0 }}>
+          <Link href="/organization/staff">Manage staff</Link> for {active.displayName}.
+        </p>
+      )}
+
+      <div>
+        <h2 style={{ margin: "0 0 1rem", fontSize: "1.1rem" }}>What requires action</h2>
+        <ActionCards unreadNotifications={unreadNotifications} />
+      </div>
     </div>
   );
 }

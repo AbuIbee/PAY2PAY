@@ -108,6 +108,12 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     return [...this.byId.values()];
   }
 
+  async listByAgreementId(agreementId: string): Promise<PaymentAttemptRecord[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.agreementId === agreementId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
   /** Test-only helper (not part of PaymentAttemptRepository) — backdates a record for staleness tests. */
   setCreatedAt(id: string, createdAt: Date): void {
     const record = this.byId.get(id);

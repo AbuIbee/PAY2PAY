@@ -8,6 +8,8 @@ import type { ApprovalService } from "@/lib/staff/approvalService";
 import { CAPABILITIES } from "@/lib/staff/capabilities";
 import { ValidationError } from "@/lib/errors";
 import { getApprovalService } from "@/lib/staff/getApprovalService";
+import { getStaffService } from "@/lib/staff/getStaffService";
+import type { StaffService } from "@/lib/staff/staffService";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,8 +62,39 @@ export function createApprovalRequestProposeHandler(authService: AuthService, ap
   };
 }
 
+/** The pending-approval queue for a business — see ApprovalService.listPendingRequests. */
+export function createApprovalRequestListHandler(authService: AuthService, staffService: StaffService, approvalService: ApprovalService) {
+  return async function handleList(request: NextRequest): Promise<Response> {
+    const { userId } = await requireSession(request, authService);
+    const businessProfileId = new URL(request.url).searchParams.get("businessProfileId");
+    if (!businessProfileId) throw new ValidationError("businessProfileId is required.");
+    await staffService.requireActiveStaff(businessProfileId, userId);
+
+    const requests = await approvalService.listPendingRequests(businessProfileId);
+    return NextResponse.json(
+      {
+        requests: requests.map((r) => ({
+          id: r.id,
+          proposedByStaffId: r.proposedByStaffId,
+          relatedAgreementId: r.relatedAgreementId,
+          actionType: r.actionType,
+          reasonFlagged: r.reasonFlagged,
+          status: r.status,
+          createdAt: r.createdAt,
+        })),
+      },
+      { status: 200 },
+    );
+  };
+}
+
 async function handlePropose(request: NextRequest): Promise<Response> {
   return createApprovalRequestProposeHandler(getAuthService(), getApprovalService())(request);
 }
 
+async function handleList(request: NextRequest): Promise<Response> {
+  return createApprovalRequestListHandler(getAuthService(), getStaffService(), getApprovalService())(request);
+}
+
 export const POST = withErrorHandling("staff_approval_request_propose", handlePropose);
+export const GET = withErrorHandling("staff_approval_request_list", handleList);

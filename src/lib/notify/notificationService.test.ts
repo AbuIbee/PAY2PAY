@@ -140,6 +140,21 @@ describe("NotificationService", () => {
       expect(user2Notifications.every((n) => n.recipientUserId === "user-2")).toBe(true);
     });
 
+    it("markRead marks a notification read only for its own recipient, and is a no-op for another user's notification", async () => {
+      const { notificationService } = createTestNotificationService();
+      const [record] = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} });
+      if (!record) throw new Error("expected a record");
+      expect(record.readAt).toBeNull();
+
+      const deniedForOtherUser = await notificationService.markRead("user-2", record.id);
+      expect(deniedForOtherUser).toBeNull();
+      const stillUnread = await notificationService.listForUser("user-1");
+      expect(stillUnread[0]?.readAt).toBeNull();
+
+      const updated = await notificationService.markRead("user-1", record.id);
+      expect(updated?.readAt).not.toBeNull();
+    });
+
     it("getPreferences never returns another user's preferences", async () => {
       const { notificationService } = createTestNotificationService();
       await notificationService.setPreference({ userId: "user-1", notificationType: "agreement_signed", channel: "email", enabled: false });

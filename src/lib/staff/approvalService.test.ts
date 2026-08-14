@@ -134,6 +134,31 @@ describe("ApprovalService", () => {
     ).rejects.toThrow(ForbiddenError);
   });
 
+  it("listPendingRequests returns only this business's pending requests, oldest last", async () => {
+    const outcome = await approvalCtx.approvalService.proposeAction({
+      businessProfileId: BUSINESS_A,
+      proposedByUserId: managerUserId,
+      actionType: "approve_partial_payment",
+      amountMinorUnits: 50_000,
+      relatedAgreementId: null,
+      actionPayload: { note: "large payment" },
+    });
+    expect(outcome.requiresApproval).toBe(true);
+
+    const pending = await approvalCtx.approvalService.listPendingRequests(BUSINESS_A);
+    expect(pending.map((r) => r.id)).toContain(outcome.request!.id);
+    expect(pending.every((r) => r.status === "pending")).toBe(true);
+
+    await approvalCtx.approvalService.decideAction({
+      businessProfileId: BUSINESS_A,
+      decidingUserId: ownerUserId,
+      requestId: outcome.request!.id,
+      decision: "approved",
+    });
+    const afterDecision = await approvalCtx.approvalService.listPendingRequests(BUSINESS_A);
+    expect(afterDecision.map((r) => r.id)).not.toContain(outcome.request!.id);
+  });
+
   it("approval policy changes are audited and require step-up", async () => {
     expect(approvalCtx.auditRepo.events.map((e) => e.action)).toContain("approval_policy_updated");
 
