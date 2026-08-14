@@ -591,3 +591,35 @@ export const relationshipFinancialAccountAssignmentStatusEnum = pgEnum("relation
   "active",
   "superseded",
 ]);
+
+/**
+ * Sprint 18 (docs/sprints/SPRINT_18_AdminSupport_Appeals.md): the fine-grained internal-staff role a
+ * `platform_admin` (Sprint 6A) may additionally hold, narrowing which admin capabilities they may
+ * exercise — entirely separate from `PlatformRole` (member/platform_admin/platform_owner), which
+ * remains the base gate every Sprint 18 action still requires first. Mirrors Sprint 4's
+ * business-staff role/capability split, applied to platform-level (not per-business) staff. "admin"
+ * always has every Sprint 18 capability, the same structural-bypass precedent as Sprint 4's "owner"
+ * (see adminRoleService.ts) — never needing to be kept in sync as capabilities are added.
+ */
+export const internalAdminRoleEnum = pgEnum("internal_admin_role", ["support", "compliance", "fraud_reviewer", "admin"]);
+
+/**
+ * Sprint 18: "retention hold, dispute hold, fraud-review hold, litigation/legal hold, administrative
+ * retention override" — this sprint's own required hold-type vocabulary, verbatim. Deliberately a
+ * closed enum (unlike `notification_type`/`relationship.context`'s free-text precedent) — this
+ * sprint's own file names an exact, fixed list with no "additional types may include" language, so
+ * there is no open vocabulary to preserve room for.
+ */
+export const retentionHoldTypeEnum = pgEnum("retention_hold_type", ["retention", "dispute", "fraud_review", "litigation", "administrative_override"]);
+
+/** Sprint 18: "restrict payment activity," "restrict new agreements," "restrict payouts where permitted" — this sprint's own required restriction vocabulary. Deliberately excludes account suspension: Sprint 6A's `AdminService.suspendUser`/`reactivateUser` already own that exact behavior and are reused unchanged, not duplicated here. */
+export const adminRestrictionTypeEnum = pgEnum("admin_restriction_type", ["payment_activity", "new_agreement_creation", "payout"]);
+
+/** Sprint 18: a support case's own lifecycle. */
+export const supportCaseStatusEnum = pgEnum("support_case_status", ["open", "in_review", "resolved", "closed"]);
+
+/** Sprint 18 §30 Appeals: "keep restrictions in place during review unless an authorized reviewer lifts them" — `submitted` and `under_review` are both still-pending states (assigning a reviewer moves `submitted` → `under_review`); `decided` is terminal. */
+export const appealStatusEnum = pgEnum("appeal_status", ["submitted", "under_review", "decided"]);
+
+/** Sprint 18 §30: the three outcomes a reviewer may record — "partially_overturned" exists because a restriction is frequently narrower or broader than what full reversal would imply (e.g. a payout restriction upheld but its duration shortened), not because the platform is adjudicating fault (no such field exists on this table — see appealService.ts's own doc comment). */
+export const appealDecisionEnum = pgEnum("appeal_decision", ["upheld", "overturned", "partially_overturned"]);

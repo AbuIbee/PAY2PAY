@@ -32,7 +32,8 @@ export type NotificationEventType =
   | "relationship_activated"
   | "relationship_restricted"
   | "relationship_funding_account_replaced"
-  | "relationship_payout_account_replaced";
+  | "relationship_payout_account_replaced"
+  | "appeal_decided";
 
 /**
  * "Critical notifications cannot be disabled" (this sprint's own instruction, verbatim). Master spec
@@ -62,6 +63,11 @@ export type NotificationEventType =
  * mirroring `agreement_invitation`/`agreement_signed`: each is a cooperative-handshake or lifecycle
  * event the recipient must still separately act on (view/accept/decline, or that only unlocks further
  * activity rather than moving money itself), not money moving unnoticed.
+ *
+ * Sprint 18 adds `appeal_decided` as critical — master spec §30's own explicit "Notify the user by
+ * email" requirement for appeal decisions, and a decision directly changes whether a restriction on
+ * the user's account stays in place, the same "real financial/access harm if silently missed" bar
+ * `account_restriction`/`relationship_restricted` are already held to.
  */
 export const CRITICAL_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = new Set<NotificationEventType>([
   "payment_failed",
@@ -77,6 +83,7 @@ export const CRITICAL_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = n
   "relationship_restricted",
   "relationship_funding_account_replaced",
   "relationship_payout_account_replaced",
+  "appeal_decided",
 ]);
 
 export function isCriticalNotificationType(type: NotificationEventType): boolean {
@@ -116,6 +123,7 @@ export const DEFAULT_CHANNELS: Record<NotificationEventType, readonly Notificati
   relationship_restricted: ["email", "sms", "in_app"],
   relationship_funding_account_replaced: ["email", "sms", "in_app"],
   relationship_payout_account_replaced: ["email", "sms", "in_app"],
+  appeal_decided: ["email", "sms", "in_app"],
 };
 
 export function isNotificationEventType(value: string): value is NotificationEventType {

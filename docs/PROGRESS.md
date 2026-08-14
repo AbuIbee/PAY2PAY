@@ -2274,3 +2274,125 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## Sprint 18 — Admin/Support/Appeals
+
+Source: `docs/sprints/SPRINT_18_AdminSupport_Appeals.md`, traced against master spec §28 (Data
+Retention), §29 (Administration), §30 (Appeals), and `docs/SPRINT_REQUIREMENTS_MATRIX.md` row 18
+(FR-ADMIN-001–003, FR-APPEAL-001–003, FR-RET-001–003). Implemented in an isolated worktree
+(`sprint-18-adminsupport-appeals`), branched from `origin/master`'s tip (`be88af3`, the Sprint 18A
+merge commit).
+
+### Scope delivered
+
+- **Internal admin-role/capability model**: `admin_role_assignment` (support/compliance/fraud_reviewer/admin,
+  at most one active role per user) + a fixed `AdminCapability` vocabulary (mirrors Sprint 4's
+  business-staff role/capability split exactly). Sits on top of Sprint 6A's `PlatformRole` — a
+  `platform_admin` with no internal role has zero Sprint 18 capabilities; `platform_owner` bypasses
+  every check unconditionally, and role assignment/revocation is itself Owner-only.
+- **Retention/legal holds**: `retention_hold` — `retention`/`dispute`/`fraud_review`/`litigation`/
+  `administrative_override` types, `hasActiveHold` as the query a future deletion job must consult,
+  multiple simultaneous holds all independently required to clear, every placement/release audited.
+- **Platform/agreement-level restrictions**: `admin_restriction` — `payment_activity`/
+  `new_agreement_creation`/`payout`, targeting any resource type, at most one active restriction of a
+  given type per target — deliberately distinct from Sprint 6A's account suspension (reused unchanged),
+  Sprint 18A's relationship-scoped restriction, and Sprint 16's dispute-scoped restriction (see
+  `docs/SPRINT_CONTROL.md`'s Sprint 18 implementation notes for the full three-way boundary).
+- **Support cases**: `support_case` — open/status-transition/close, deliberately minimal (no ticketing
+  taxonomy this sprint's own file never named).
+- **Appeals**: `appeal` — case ID, evidence description, original decision, independent reviewer
+  (enforced by a database `CHECK` constraint *and* application-level check), decision/rationale,
+  email notification. Restrictions stay in place during review; only a `decided` appeal's own
+  `overturned`/`partially_overturned` outcome can lift one, via a new `liftAsAppealOutcome` seam that
+  deliberately bypasses the restriction-type capability check (see implementation notes — a real gap
+  the test suite itself caught: a `compliance` reviewer lacks restriction-placement capabilities, and
+  requiring them anyway would have made the appeals process unable to reverse its own subject matter).
+- **Read-only oversight surfaces** (`AdminCaseReviewService`): verification status (Sprint 3), dispute
+  detail by id (Sprint 16's own repositories, not the party-gated services), and a new read-only
+  `audit_event` query reader (mirrors Sprint 6A's `AdminOverviewReader` precedent) — also satisfies
+  "review payment failures" (every payment failure is already an audited event).
+
+### Files created (35)
+
+Schema: `src/db/schema/adminOps.ts`. Services: `src/lib/admin/{adminRoleService,retentionHoldService,
+adminRestrictionService,supportCaseService,appealService,adminCaseReviewService}.ts`. Capabilities:
+`src/lib/admin/adminCapabilities.ts`. Repositories/adapters:
+`src/lib/admin/{drizzleAdminRoleAssignmentRepository,drizzleRetentionHoldRepository,
+drizzleAdminRestrictionRepository,drizzleSupportCaseRepository,drizzleAppealRepository,
+drizzleAdminAuditReader,adminDisputeReaderAdapter}.ts`. DI wiring:
+`src/lib/admin/{getAdminRoleService,getRetentionHoldService,getAdminRestrictionService,
+getSupportCaseService,getAppealService,getAdminCaseReviewService}.ts`. Test fakes + tests:
+`src/lib/admin/{adminOpsTestFakes,adminRoleService.test,retentionHoldService.test,
+adminRestrictionService.test,supportCaseService.test,appealService.test,adminCaseReviewService.test}.ts`.
+Routes (19): `src/app/api/admin/roles/{assign,revoke}/route.ts`,
+`src/app/api/admin/retention/holds/{place/route,release/route,route}.ts`,
+`src/app/api/admin/restrictions/{place/route,lift/route,route}.ts`,
+`src/app/api/admin/support-cases/{open/route,status/route,route}.ts`,
+`src/app/api/appeals/{submit/route,route}.ts`, `src/app/api/admin/appeals/{assign/route,decide/route,route}.ts`,
+`src/app/api/admin/review/{verification,dispute,audit-log}/route.ts`. Migration:
+`drizzle/migrations/0021_ancient_roughhouse.sql` (+ `meta/0021_snapshot.json`).
+
+### Files modified (5)
+
+`src/db/schema/{enums,index}.ts` (6 new enums; export the new schema module); `src/lib/notify/
+{eventTypes,templates}.ts` (1 new `NotificationEventType` member, `appeal_decided`, classified
+critical); `drizzle/migrations/meta/_journal.json` (journal entry for the new migration). Zero
+existing tables, columns, or service methods from any prior sprint were altered — this is the first
+sprint since 18A with no additive columns on any prior-sprint table at all.
+
+### Tests
+
+708/708 passing across 89 files (up from 663/83 at the end of Sprint 18A — 45 net new across 6 new
+files). Covers: **privilege escalation** (mandatory per this sprint's own instruction) for every
+capability-gated action — a `member` rejected outright, a `platform_admin` with no internal role
+rejected, a `platform_admin` whose internal role lacks the specific capability rejected, an `admin`
+internal role granted every capability without needing the default-capability table to list them, and
+`platform_owner` bypassing every check even with zero internal role assigned; **retention hold tests**
+(mandatory) — hold blocks deletion (`hasActiveHold` true/false around placement/release), multiple
+simultaneous holds all independently required to clear before `hasActiveHold` reports false, hold
+placement/release both audited, a non-privileged user rejected from placing or releasing; **appeal
+workflow** — the original decision-maker rejected as sole reviewer (both the service-level check and
+the underlying DB `CHECK` constraint exist; the service-level check is what tests exercise directly),
+a non-assigned-reviewer rejected from deciding even while holding `manage_appeal`, deciding twice
+rejected, an `upheld` decision leaves any restriction untouched, an `overturned` decision correctly
+lifts a named restriction via the capability-independent `liftAsAppealOutcome` seam, a non-Owner
+reviewer's attached ledger adjustment rejected by the reused `LedgerAdminService` gate while the
+decision itself still records, an Owner-role reviewer's ledger adjustment posted through the reused
+mechanism; **admin restriction lifecycle** — double-restriction-of-the-same-type rejected, double-lift
+rejected, `isRestricted` correctly false for a never-restricted target; **support case lifecycle** —
+open/in_review/closed transitions, updating an already-closed case rejected; **case review** —
+capability-gated reads of verification status, dispute detail, and audit-log entries for a target.
+Sprints 1–17 and Sprint 18A's own tests all still pass unchanged.
+
+### Verification commands run
+
+`npx tsc --noEmit` — pass, 0 errors (the sole remaining `LayoutProps` finding is the same pre-existing
+`.next/types` artifact every prior worktree sprint has independently documented). `npx eslint
+src/lib/admin src/app/api/admin src/app/api/appeals src/db/schema/adminOps.ts` — pass, 0 errors, 0
+warnings. `npx vitest run` (full repository suite) — pass, 708/708 across 89 files, zero regressions.
+`npm run build` (`next build`, Turbopack) — pass; all 19 new routes generated correctly as dynamic
+(`ƒ`) routes, confirmed present in the build output, no change to any existing route's classification.
+`npx drizzle-kit generate` — produced exactly one new migration, then re-run after the hand-added
+`REVOKE` statements confirmed "No schema changes, nothing to migrate." `npx drizzle-kit check` — pass,
+"Everything's fine," migration history internally consistent, no drift. RLS + `REVOKE ALL ... FROM
+anon, authenticated` confirmed present on all 5 new tables; the `appeal_reviewer_not_original_decision_maker`
+CHECK constraint and both partial unique indexes (`admin_role_assignment_active_user_unique`,
+`admin_restriction_active_target_unique`) hand-verified present in the generated SQL.
+
+### Git commit
+
+**Not yet committed.** Per this session's explicit instruction ("Do not commit, push, merge, deploy,
+or begin Sprint 19 unless `docs/SPRINT_CONTROL.md` specifically authorizes that action at this
+stage") — matching Sprints 5–18A's own precedent. No file outside the created/modified lists above was
+touched; no pre-existing table's existing columns, no existing service method's existing behavior, and
+no existing route was altered. `src/lib/admin/adminService.ts` (Sprint 6A) was never imported by any
+Sprint 18 file — verified structurally, not just by review: Sprint 18's own services depend only on
+`isAdminRole`/`isOwnerRole` from `src/lib/admin/capabilities.ts`, never on `AdminService` itself.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**
