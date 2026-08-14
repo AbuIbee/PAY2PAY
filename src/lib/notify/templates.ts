@@ -209,4 +209,13 @@ export const NOTIFICATION_TEMPLATES: Record<NotificationEventType, NotificationT
     smsBody: "Your PAY2PAY relationship payout account changed. If this wasn't expected, contact support.",
     inAppBody: "The payout account for this relationship has changed.",
   }),
+  appeal_decided: (p) => {
+    const decision = str(p, "decision", "decided");
+    return {
+      subject: "A decision has been made on your appeal",
+      emailBody: `Your appeal has been reviewed and the decision is: ${decision}.`,
+      smsBody: `Your PAY2PAY appeal decision: ${decision}.`,
+      inAppBody: `Your appeal decision: ${decision}.`,
+    };
+  },
 };
