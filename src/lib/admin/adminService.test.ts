@@ -294,4 +294,16 @@ describe("AdminService", () => {
       await expect(ctx.adminService.suspendUser(fakeAdminCtx, target.id, "reason")).rejects.toThrow(ForbiddenError);
     });
   });
+
+  describe("PRSprint 04: environment/provider status on the dashboard overview", () => {
+    it("includes the injected environment status verbatim for a Platform Admin caller", async () => {
+      ctx.environmentStatus.status = { ...ctx.environmentStatus.status, appEnv: "staging", database: "configured" };
+      const overview = await ctx.adminService.getDashboardOverview("platform_admin");
+      expect(overview.environmentStatus).toEqual(ctx.environmentStatus.status);
+    });
+
+    it("never leaks past requireAdmin — a member gets ForbiddenError before any status is computed", async () => {
+      await expect(ctx.adminService.getDashboardOverview("member")).rejects.toThrow(ForbiddenError);
+    });
+  });
 });

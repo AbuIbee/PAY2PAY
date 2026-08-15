@@ -4,6 +4,7 @@ import type { AccountClassification, PlatformRole, SessionRepository, UserAccoun
 import type { MfaService } from "@/lib/auth/mfaService";
 import { ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import { isAdminRole, isOwnerRole } from "./capabilities";
+import type { AdminEnvironmentStatus, EnvironmentStatusReader } from "./environmentStatus";
 
 export interface AdminOverviewData {
   totalUsers: number;
@@ -17,6 +18,8 @@ export interface AdminOverviewData {
   agreementPdfCount: number;
   recentAuditEvents: AdminAuditEventSummary[];
   recentAdminActions: AdminAuditEventSummary[];
+  // PRSprint 04: admin-only, secret-free provider/environment status — see environmentStatus.ts.
+  environmentStatus: AdminEnvironmentStatus;
 }
 
 export interface AdminAuditEventSummary {
@@ -30,9 +33,9 @@ export interface AdminAuditEventSummary {
   reason: string | null;
 }
 
-/** Real implementation: DrizzleAdminOverviewReader. Read-only aggregate queries only. */
+/** Real implementation: DrizzleAdminOverviewReader. Read-only aggregate queries only — environmentStatus is deliberately excluded here and merged in by AdminService.getDashboardOverview instead, since it is config-derived, not a DB metric. */
 export interface AdminOverviewReader {
-  getOverview(): Promise<AdminOverviewData>;
+  getOverview(): Promise<Omit<AdminOverviewData, "environmentStatus">>;
 }
 
 export interface AdminUserSummary {
@@ -91,6 +94,7 @@ export interface AdminServiceDeps {
   overview: AdminOverviewReader;
   directory: AdminUserDirectoryReader;
   impersonationSessions: AdminImpersonationSessionRepository;
+  environmentStatus: EnvironmentStatusReader;
 }
 
 /**
@@ -113,7 +117,8 @@ export class AdminService {
 
   async getDashboardOverview(actingRole: PlatformRole): Promise<AdminOverviewData> {
     this.requireAdmin(actingRole);
-    return this.deps.overview.getOverview();
+    const overview = await this.deps.overview.getOverview();
+    return { ...overview, environmentStatus: this.deps.environmentStatus.getStatus() };
   }
 
   async searchUsers(actingRole: PlatformRole, query: { email?: string; userId?: string }): Promise<AdminUserSummary[]> {

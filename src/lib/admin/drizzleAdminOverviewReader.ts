@@ -42,7 +42,7 @@ const AUDIT_SELECT = {
  * fabricate metrics that are not backed by real data."
  */
 export class DrizzleAdminOverviewReader implements AdminOverviewReader {
-  async getOverview(): Promise<AdminOverviewData> {
+  async getOverview(): Promise<Omit<AdminOverviewData, "environmentStatus">> {
     const db = getDb();
 
     const [

@@ -12,6 +12,26 @@ import type {
   AdminUserDirectoryReader,
   AdminUserSummary,
 } from "./adminService";
+import type { AdminEnvironmentStatus, EnvironmentStatusReader } from "./environmentStatus";
+
+/** Deterministic fake — never touches process.env, mirroring this file's other in-memory doubles. */
+export class InMemoryEnvironmentStatusReader implements EnvironmentStatusReader {
+  status: AdminEnvironmentStatus = {
+    appEnv: "test",
+    nodeEnv: "test",
+    database: "configured",
+    documentStorage: "not_configured",
+    paymentProvider: "sandbox",
+    kycProvider: "sandbox",
+    emailDelivery: "console_log_only",
+    smsDelivery: "console_log_only",
+    scheduledJobs: "not_configured",
+  };
+
+  getStatus(): AdminEnvironmentStatus {
+    return this.status;
+  }
+}
 
 /** Test-only in-memory doubles for AdminService, mirroring src/lib/agreements/testFakes.ts's pattern. */
 
@@ -64,7 +84,7 @@ export class InMemoryAdminUserDirectoryReader implements AdminUserDirectoryReade
 export class InMemoryAdminOverviewReader implements AdminOverviewReader {
   constructor(private readonly users: InMemoryUserAccountRepository) {}
 
-  async getOverview(): Promise<AdminOverviewData> {
+  async getOverview(): Promise<Omit<AdminOverviewData, "environmentStatus">> {
     const all = [...this.users.byId.values()];
     return {
       totalUsers: all.length,
@@ -125,6 +145,7 @@ export function createTestAdminService() {
   const impersonationSessions = new InMemoryAdminImpersonationSessionRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForAdmin();
   const audit = new AuditService(auditRepo);
+  const environmentStatus = new InMemoryEnvironmentStatusReader();
 
   const adminService = new AdminService({
     users,
@@ -134,7 +155,20 @@ export function createTestAdminService() {
     overview,
     directory,
     impersonationSessions,
+    environmentStatus,
   });
 
-  return { adminService, users, sessions, mfaService, mfaCredentials, stepUps, directory, overview, impersonationSessions, auditRepo };
+  return {
+    adminService,
+    users,
+    sessions,
+    mfaService,
+    mfaCredentials,
+    stepUps,
+    directory,
+    overview,
+    impersonationSessions,
+    auditRepo,
+    environmentStatus,
+  };
 }

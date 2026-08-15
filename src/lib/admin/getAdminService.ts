@@ -8,6 +8,7 @@ import { AdminService } from "./adminService";
 import { DrizzleAdminImpersonationSessionRepository } from "./drizzleAdminImpersonationSessionRepository";
 import { DrizzleAdminOverviewReader } from "./drizzleAdminOverviewReader";
 import { DrizzleAdminUserDirectoryReader } from "./drizzleAdminUserDirectoryReader";
+import { RealEnvironmentStatusReader } from "./environmentStatus";
 
 let cached: AdminService | null = null;
 
@@ -22,6 +23,7 @@ export function getAdminService(): AdminService {
       overview: new DrizzleAdminOverviewReader(),
       directory: new DrizzleAdminUserDirectoryReader(),
       impersonationSessions: new DrizzleAdminImpersonationSessionRepository(),
+      environmentStatus: new RealEnvironmentStatusReader(),
     });
   }
   return cached;
