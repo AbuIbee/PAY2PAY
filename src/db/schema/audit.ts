@@ -15,6 +15,19 @@ import { userAccount } from "./identity";
  * this table (enforced at the database/role-provisioning layer, outside
  * application code) — see docs/DATA_MODEL.md §6.
  */
+/**
+ * PRSprint 02 (docs/prsprints/PRSPRINT_02_RLS_CROSS_TENANT_SECURITY.md) gap fix: this table was
+ * created in Phase 0 before every other table in this schema adopted `.enableRLS()`, and no later
+ * migration ever added it here — only a REVOKE (see
+ * supabase/migrations/20260811131300_audit_event_revoke_gap_fix.sql, whose own comment's claim that
+ * "Row Level Security was already enabled ... via Supabase's own project-level default" was never
+ * verified against this schema source, which never declared it). REVOKE alone already makes this
+ * table unreachable by the anon/authenticated Postgres roles regardless of RLS state (Postgres
+ * requires the base GRANT before any RLS predicate is even evaluated), so there was no live
+ * cross-tenant exposure — but leaving the schema source silent on RLS for the one table where a
+ * human had to reason about it by hand, instead of drizzle-kit generating it automatically like
+ * every other table, is exactly the kind of drift this PRSprint exists to close.
+ */
 export const auditEvent = pgTable(
   "audit_event",
   {
@@ -50,4 +63,4 @@ export const auditEvent = pgTable(
     index("audit_event_agreement_idx").on(table.agreementId, table.occurredAt),
     index("audit_event_profile_idx").on(table.profileKind, table.profileId, table.occurredAt),
   ],
-);
+).enableRLS();
