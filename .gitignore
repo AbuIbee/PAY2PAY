@@ -40,6 +40,14 @@ yarn-error.log*
 .env.test
 .env.staging
 .env.production
+# PRSprint 04 (docs/prsprints/PRSPRINT_04_SECRETS_ENVIRONMENT_PRODUCTION_SEPARATION.md): the exact-name
+# patterns above never matched a suffixed backup/copy variant (e.g. a manually created
+# `.env.local.BACKUP`) — closing that gap defensively so any such file can never be accidentally
+# staged, regardless of what suffix a human appends to it.
+.env.local.*
+.env*.backup
+.env*.bak
+.env*.old
 !.env.example
 
 # vercel

@@ -13,6 +13,18 @@ interface AuditEventSummary {
   reason: string | null;
 }
 
+interface EnvironmentStatus {
+  appEnv: string;
+  nodeEnv: string;
+  database: "configured" | "not_configured";
+  documentStorage: "configured" | "not_configured";
+  paymentProvider: "sandbox";
+  kycProvider: "sandbox";
+  emailDelivery: "console_log_only";
+  smsDelivery: "console_log_only";
+  scheduledJobs: "configured" | "not_configured";
+}
+
 interface OverviewData {
   totalUsers: number;
   activeUsers: number;
@@ -25,6 +37,11 @@ interface OverviewData {
   agreementPdfCount: number;
   recentAuditEvents: AuditEventSummary[];
   recentAdminActions: AuditEventSummary[];
+  environmentStatus: EnvironmentStatus;
+}
+
+function formatStatusLabel(value: string): string {
+  return value.replaceAll("_", " ");
 }
 
 type LoadStatus = "loading" | "ready" | "unauthorized" | "forbidden" | "error";
@@ -106,6 +123,20 @@ export function AdminDashboard() {
         )}
         <p style={{ margin: 0 }}>Signature events: {data.signatureEventCount}</p>
         <p style={{ margin: 0 }}>Signed PDFs: {data.agreementPdfCount}</p>
+      </div>
+
+      <div className="early-access-form">
+        <h2 style={{ margin: 0, fontSize: "1.1rem" }}>Environment &amp; provider status</h2>
+        <p style={{ margin: 0 }}>
+          App env: {data.environmentStatus.appEnv} (Node: {data.environmentStatus.nodeEnv})
+        </p>
+        <p style={{ margin: 0 }}>Database: {formatStatusLabel(data.environmentStatus.database)}</p>
+        <p style={{ margin: 0 }}>Document storage: {formatStatusLabel(data.environmentStatus.documentStorage)}</p>
+        <p style={{ margin: 0 }}>Payment provider: {formatStatusLabel(data.environmentStatus.paymentProvider)}</p>
+        <p style={{ margin: 0 }}>KYC/KYB provider: {formatStatusLabel(data.environmentStatus.kycProvider)}</p>
+        <p style={{ margin: 0 }}>Email delivery: {formatStatusLabel(data.environmentStatus.emailDelivery)}</p>
+        <p style={{ margin: 0 }}>SMS delivery: {formatStatusLabel(data.environmentStatus.smsDelivery)}</p>
+        <p style={{ margin: 0 }}>Scheduled jobs: {formatStatusLabel(data.environmentStatus.scheduledJobs)}</p>
       </div>
 
       <div className="early-access-form">
