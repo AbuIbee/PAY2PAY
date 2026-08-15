@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { agreement, installmentScheduleItem } from "./agreement";
 import { paymentAttemptStatusEnum, paymentMethodEnum, profileKindEnum } from "./enums";
 
@@ -61,6 +61,13 @@ export const paymentAttempt = pgTable(
   (table) => [
     uniqueIndex("payment_attempt_idempotency_key_unique").on(table.idempotencyKey),
     uniqueIndex("payment_attempt_provider_payment_id_unique").on(table.providerPaymentId),
+    // PRSprint 03 (docs/prsprints/PRSPRINT_03_DATABASE_INTEGRITY_STATE_MACHINES.md): a payment
+    // attempt of zero or negative amount has no valid business meaning — every creation path
+    // already validates this at the zod boundary (see src/lib/agreements/validation.ts's
+    // `.positive()` schedule-amount checks), but nothing stopped a future bug in application code
+    // from writing a bad row directly. Applied NOT VALID in the migration (not scanned against
+    // existing rows here) — see that migration file's own comment for why.
+    check("payment_attempt_amount_positive", sql`${table.amountMinorUnits} > 0`),
   ],
 ).enableRLS();
 

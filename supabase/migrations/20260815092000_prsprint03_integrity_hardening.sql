@@ -1,0 +1,41 @@
+-- PRSprint 03 (docs/prsprints/PRSPRINT_03_DATABASE_INTEGRITY_STATE_MACHINES.md): closes two concrete
+-- gaps found while auditing this repository's ~25 prior migrations against the PRSprint 03 scope
+-- (positive-money constraints, membership/participant/invitation uniqueness, state-machine
+-- backstops, cascade-delete review, history preservation, and multi-step transaction use). The
+-- audit found this codebase's existing conventions already cover almost all of that scope
+-- correctly (every FK in this schema's history uses `ON DELETE no action` — no cascade ever
+-- silently deletes a legally/financially significant row; LedgerService already posts a journal
+-- entry and its postings inside one DB transaction; state machines are enforced in application code
+-- with dedicated invalid-transition tests per sprint). Two real gaps remained:
+--
+-- 1. `business_staff_member`'s uniqueness constraint on (business_profile_id, user_id) was a full
+--    index with no exception for a soft-removed row (removed_at IS NOT NULL). Since removal is
+--    non-destructive by design and staffService.ts's acceptInvitation always INSERTs a new row
+--    rather than reviving an old one, this made it impossible to ever re-invite a former staff
+--    member back to the same business without hitting a live unique-constraint violation. Replaced
+--    with a partial index scoped to active (non-removed) rows only, matching this schema's own
+--    established "active-only" uniqueness pattern (relationship_financial_account_active_slot_
+--    unique, admin_role_assignment_active_user_unique, admin_restriction_active_target_unique).
+--    Safe against existing data — this only loosens a constraint, never tightens one.
+--
+-- 2. `payment_attempt.amount_minor_units` and `ledger_posting.amount_minor_units` (the two tables
+--    that record actual money movement) had no database-level backstop against a zero/negative
+--    value, relying entirely on zod validation at the request boundary. Added explicit CHECK
+--    constraints matching this schema's own established check() pattern (see
+--    staff_approval_request_no_self_approval, relationship_participant_exactly_one_party for
+--    precedent). Applied NOT VALID: this migration targets a live, already-populated,
+--    production-linked database (reconciled in PRSprint 01), and while every existing write path
+--    already enforces positivity at the application boundary, this sandbox has no way to safely
+--    confirm zero pre-existing violating rows before this migration runs. NOT VALID applies the
+--    check to every new/updated row immediately without scanning history, so it cannot fail this
+--    migration or block any legitimate future write. A follow-up `VALIDATE CONSTRAINT` pass against
+--    the live database (outside this sandbox) is a known, documented follow-up, not silently
+--    assumed done — see this PRSprint's completion report.
+--
+-- Idempotent: `DROP INDEX`/`CREATE UNIQUE INDEX` are safe to re-run in sequence (Postgres errors on
+-- a duplicate name, not silently double-applies), and re-adding an already-present CHECK constraint
+-- with the same name is likewise a clean no-op-or-error, never silent double application.
+DROP INDEX IF EXISTS "business_staff_member_business_user_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "business_staff_member_active_business_user_unique" ON "business_staff_member" USING btree ("business_profile_id","user_id") WHERE "business_staff_member"."removed_at" IS NULL;--> statement-breakpoint
+ALTER TABLE "payment_attempt" ADD CONSTRAINT "payment_attempt_amount_positive" CHECK ("payment_attempt"."amount_minor_units" > 0) NOT VALID;--> statement-breakpoint
+ALTER TABLE "ledger_posting" ADD CONSTRAINT "ledger_posting_amount_positive" CHECK ("ledger_posting"."amount_minor_units" > 0) NOT VALID;

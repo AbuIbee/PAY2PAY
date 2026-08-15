@@ -142,10 +142,21 @@ export const businessStaffMember = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("business_staff_member_business_user_unique").on(
-      table.businessProfileId,
-      table.userId,
-    ),
+    // PRSprint 03 (docs/prsprints/PRSPRINT_03_DATABASE_INTEGRITY_STATE_MACHINES.md) fix: the
+    // original constraint here was a full (non-partial) unique index on (business_profile_id,
+    // user_id), with no exception for a soft-removed row (removed_at IS NOT NULL). Since removal is
+    // non-destructive (the comment above, FR-STAFF-005) and staffService.ts's `acceptInvitation`
+    // always INSERTs a new row rather than reviving the old one, that full-table constraint made it
+    // impossible to ever re-invite a former staff member back to the same business — the second
+    // acceptance would hit a live unique-constraint violation. This partial index (matching this
+    // schema's own established "active-only" pattern — see admin_role_assignment_active_user_unique,
+    // admin_restriction_active_target_unique, relationship_financial_account_active_slot_unique)
+    // keeps the real invariant this table needs (at most one *active* membership per business+user,
+    // which staffService.ts's own findActiveByBusinessAndUser guard depends on) while allowing a
+    // business to re-hire a former staff member.
+    uniqueIndex("business_staff_member_active_business_user_unique")
+      .on(table.businessProfileId, table.userId)
+      .where(sql`${table.removedAt} IS NULL`),
   ],
 ).enableRLS();
 
