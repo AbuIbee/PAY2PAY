@@ -1,0 +1,15 @@
+-- PRSprint 02 (docs/prsprints/PRSPRINT_02_RLS_CROSS_TENANT_SECURITY.md): audit_event was created in
+-- the very first migration (Phase 0/Sprint 1) before every other table in this schema adopted
+-- `.enableRLS()` in its Drizzle schema definition (src/db/schema/audit.ts). A later hotfix
+-- (20260811131300_audit_event_revoke_gap_fix.sql) closed the missing REVOKE but its own comment's
+-- claim that "Row Level Security was already enabled ... via Supabase's own project-level default"
+-- was never verified against this table's schema source, which never declared it, and no earlier
+-- migration in this repository's history ever ran this statement either. REVOKE alone already makes
+-- this table unreachable by the anon/authenticated Postgres roles regardless of RLS state (Postgres
+-- requires the base GRANT before any RLS predicate is even evaluated), so there was no live
+-- cross-tenant exposure from this gap — this migration closes the remaining ambiguity so the live
+-- database matches what src/db/schema/audit.ts now explicitly declares, the same way every other
+-- table in this schema already does. Idempotent: re-running ENABLE ROW LEVEL SECURITY on a table
+-- that already has it enabled (whether by a prior manual/dashboard action or not) is a no-op, not an
+-- error.
+ALTER TABLE "audit_event" ENABLE ROW LEVEL SECURITY;
