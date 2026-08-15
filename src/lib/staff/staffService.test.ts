@@ -223,6 +223,54 @@ describe("StaffService", () => {
     void invitation;
   });
 
+  it(
+    "PRSprint 03: a business can re-invite and re-accept a previously removed staff member " +
+      "(the live schema's uniqueness constraint on business_staff_member used to be a full, not " +
+      "partial, index on (business_profile_id, user_id) with no exception for a removed row, which " +
+      "would have thrown a live unique-constraint violation on the second acceptInvitation's INSERT " +
+      "even though this in-memory fake never modeled that bug — see the migration fix in " +
+      "supabase/migrations/20260815092000_prsprint03_integrity_hardening.sql)",
+    async () => {
+      const formerStaffUserId = randomUUID();
+      ctx.userEmails.set(formerStaffUserId, "boomerang@example.com");
+
+      const firstInvitation = await ctx.staffService.inviteStaff({
+        businessProfileId: BUSINESS_A,
+        invitedByUserId: ownerUserId,
+        email: "boomerang@example.com",
+        role: "manager",
+      });
+      const firstToken = ctx.emailSender.lastTokenFor("boomerang@example.com")!;
+      const firstMember = await ctx.staffService.acceptInvitation(firstToken, formerStaffUserId);
+      void firstInvitation;
+
+      await ctx.staffService.removeStaff({
+        businessProfileId: BUSINESS_A,
+        actingUserId: ownerUserId,
+        actingSessionId: "owner-session-remove",
+        targetStaffId: firstMember.id,
+      });
+      await expect(ctx.staffService.requireActiveStaff(BUSINESS_A, formerStaffUserId)).rejects.toThrow(ForbiddenError);
+
+      // Re-invite the same person to the same business — this is the exact scenario the old full
+      // unique index would have blocked at the database layer on the INSERT below.
+      await ctx.staffService.inviteStaff({
+        businessProfileId: BUSINESS_A,
+        invitedByUserId: ownerUserId,
+        email: "boomerang@example.com",
+        role: "receivables_staff",
+      });
+      const secondToken = ctx.emailSender.lastTokenFor("boomerang@example.com")!;
+      const secondMember = await ctx.staffService.acceptInvitation(secondToken, formerStaffUserId);
+
+      expect(secondMember.id).not.toBe(firstMember.id);
+      expect(secondMember.role).toBe("receivables_staff");
+      await expect(ctx.staffService.requireActiveStaff(BUSINESS_A, formerStaffUserId)).resolves.toMatchObject({
+        id: secondMember.id,
+      });
+    },
+  );
+
   it("staff invitation: acceptance is rejected if the accepting account's email doesn't match the invited email", async () => {
     const wrongUserId = randomUUID();
     ctx.userEmails.set(wrongUserId, "someone-else@example.com");

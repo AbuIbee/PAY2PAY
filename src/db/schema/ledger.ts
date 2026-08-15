@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { check, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { agreement } from "./agreement";
 import { paymentAttempt } from "./payment";
 import {
@@ -67,22 +67,33 @@ export const ledgerJournalEntry = pgTable(
  * enforced in application code, checked by a dedicated test (`assertBalanced`/"balance invariant"),
  * not by a DB constraint (Postgres has no native multi-row CHECK across sibling postings).
  */
-export const ledgerPosting = pgTable("ledger_posting", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  journalEntryId: uuid("journal_entry_id")
-    .notNull()
-    .references(() => ledgerJournalEntry.id),
-  accountId: uuid("account_id")
-    .notNull()
-    .references(() => ledgerAccount.id),
-  // Denormalized from ledger_account.account_type at posting time, purely to avoid a join on every
-  // balance/reconciliation/admin read — safe because a posting's account never changes once written
-  // (append-only) and an account's own account_type never changes after creation either.
-  accountType: ledgerAccountTypeEnum("account_type").notNull(),
-  direction: ledgerPostingDirectionEnum("direction").notNull(),
-  amountMinorUnits: integer("amount_minor_units").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}).enableRLS();
+export const ledgerPosting = pgTable(
+  "ledger_posting",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    journalEntryId: uuid("journal_entry_id")
+      .notNull()
+      .references(() => ledgerJournalEntry.id),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => ledgerAccount.id),
+    // Denormalized from ledger_account.account_type at posting time, purely to avoid a join on every
+    // balance/reconciliation/admin read — safe because a posting's account never changes once written
+    // (append-only) and an account's own account_type never changes after creation either.
+    accountType: ledgerAccountTypeEnum("account_type").notNull(),
+    direction: ledgerPostingDirectionEnum("direction").notNull(),
+    amountMinorUnits: integer("amount_minor_units").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // PRSprint 03 (docs/prsprints/PRSPRINT_03_DATABASE_INTEGRITY_STATE_MACHINES.md): `direction`
+    // (debit/credit) already carries the sign for this double-entry ledger — see this file's own
+    // doc comment — so `amountMinorUnits` is always meant to be an unsigned magnitude. A zero or
+    // negative posting amount would silently corrupt every balance/reconciliation computation that
+    // sums postings by direction. Applied NOT VALID in the migration — see that file's comment.
+    check("ledger_posting_amount_positive", sql`${table.amountMinorUnits} > 0`),
+  ],
+).enableRLS();
 
 /**
  * Sprint 10 reconciliation exceptions — explicit, persisted records of a detected mismatch
