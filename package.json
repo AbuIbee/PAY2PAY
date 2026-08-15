@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "db:check-drift": "node scripts/check-schema-drift.mjs",
+    "test:tooling": "node --test scripts/*.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",
