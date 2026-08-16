@@ -136,6 +136,7 @@ export class AdminService {
 
   async suspendUser(ctx: ActingContext, targetUserId: string, reason: string): Promise<void> {
     const target = await this.authorizeMutableTarget(ctx, targetUserId);
+    await this.requireFreshStepUp(ctx, "admin_user_suspend");
     if (target.status === "suspended") {
       throw new ValidationError("This account is already suspended.");
     }
@@ -149,6 +150,7 @@ export class AdminService {
 
   async reactivateUser(ctx: ActingContext, targetUserId: string, reason: string): Promise<void> {
     const target = await this.authorizeMutableTarget(ctx, targetUserId);
+    await this.requireFreshStepUp(ctx, "admin_user_reactivate");
     if (target.status === "active") {
       throw new ValidationError("This account is already active.");
     }
@@ -158,6 +160,7 @@ export class AdminService {
 
   async revokeUserSessions(ctx: ActingContext, targetUserId: string, reason: string | null): Promise<void> {
     await this.authorizeMutableTarget(ctx, targetUserId);
+    await this.requireFreshStepUp(ctx, "admin_sessions_revoke");
     await this.deps.sessions.revokeAllForUser(targetUserId);
     await this.recordAdminAudit(ctx, "admin_sessions_revoked", targetUserId, reason, null);
   }
@@ -180,14 +183,7 @@ export class AdminService {
       throw new ForbiddenError("Platform Owner access is required to change a platform role.");
     }
     const target = await this.authorizeMutableTarget(ctx, targetUserId);
-    const stepUpOk = await this.deps.mfa.requireStepUp({
-      userId: ctx.actingUserId,
-      sessionId: ctx.actingSessionId,
-      action: "admin_role_change",
-    });
-    if (!stepUpOk) {
-      throw new StepUpRequiredError("Step-up verification is required to change a platform role.");
-    }
+    await this.requireFreshStepUp(ctx, "admin_role_change", "Step-up verification is required to change a platform role.");
     if (target.platformRole === newRole) {
       throw new ValidationError(`This account already has the "${newRole}" role.`);
     }
@@ -226,14 +222,7 @@ export class AdminService {
     reason: string,
   ): Promise<{ impersonationSessionId: string; view: AdminUserDetail }> {
     const target = await this.authorizeMutableTargetAllowAdmins(ctx, targetUserId);
-    const stepUpOk = await this.deps.mfa.requireStepUp({
-      userId: ctx.actingUserId,
-      sessionId: ctx.actingSessionId,
-      action: "admin_impersonation_start",
-    });
-    if (!stepUpOk) {
-      throw new StepUpRequiredError("Step-up verification is required to start a support view.");
-    }
+    await this.requireFreshStepUp(ctx, "admin_impersonation_start", "Step-up verification is required to start a support view.");
     if (!reason.trim()) {
       throw new ValidationError("A reason is required to start a support view.");
     }
@@ -269,6 +258,28 @@ export class AdminService {
   private requireAdmin(role: PlatformRole): void {
     if (!isAdminRole(role)) {
       throw new ForbiddenError("Administrative access is required.");
+    }
+  }
+
+  /**
+   * PRSprint 06 (docs/prsprints/PRSPRINT_06_AUTHENTICATION_SESSION_HARDENING.md): shared step-up
+   * gate for every high-risk admin action — account suspend/reactivate/session-revoke joined
+   * Sprint 6A's original role-change/impersonation-start callers here, since disabling or
+   * re-enabling someone's account and forcibly signing them out are just as security-sensitive as
+   * a role change, and previously had no step-up requirement at all.
+   */
+  private async requireFreshStepUp(
+    ctx: ActingContext,
+    action: string,
+    message = "Step-up verification is required for this action.",
+  ): Promise<void> {
+    const stepUpOk = await this.deps.mfa.requireStepUp({
+      userId: ctx.actingUserId,
+      sessionId: ctx.actingSessionId,
+      action,
+    });
+    if (!stepUpOk) {
+      throw new StepUpRequiredError(message);
     }
   }
 

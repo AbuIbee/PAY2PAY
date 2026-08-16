@@ -69,8 +69,12 @@ export interface SessionRecord {
   id: string;
   userId: string;
   sessionTokenHash: string;
+  createdAt: Date;
+  lastSeenAt: Date;
   expiresAt: Date;
   revokedAt: Date | null;
+  ipAddress: string | null;
+  userAgent: string | null;
 }
 
 /** Real implementation: DrizzleSessionRepository. */
@@ -83,10 +87,14 @@ export interface SessionRepository {
     userAgent: string | null;
   }): Promise<SessionRecord>;
   findByTokenHash(sessionTokenHash: string): Promise<SessionRecord | null>;
+  /** PRSprint 06: session self-service (view/revoke) needs to look a session up by its own id, not just its token hash — the raw token is never sent back to the client after login, only the opaque session id. */
+  findById(id: string): Promise<SessionRecord | null>;
   revoke(id: string): Promise<void>;
   /** Used by resetPassword: a successful password reset invalidates every existing session. */
   revokeAllForUser(userId: string): Promise<void>;
   touchLastSeen(id: string): Promise<void>;
+  /** PRSprint 06 (docs/prsprints/PRSPRINT_06_AUTHENTICATION_SESSION_HARDENING.md): every non-revoked, non-expired session for a user, most recently active first — powers "Signed-in devices" self-service visibility. */
+  listActiveForUser(userId: string, now: Date): Promise<SessionRecord[]>;
 }
 
 export interface EmailVerificationTokenRecord {
@@ -453,6 +461,74 @@ export class AuthService {
       occurredAt: new Date().toISOString(),
       ipAddress: null,
       deviceInfo: null,
+      previousValue: null,
+      newValue: null,
+      reason: null,
+      authStrength: "basic",
+      relatedDocumentId: null,
+      relatedCaseId: null,
+    });
+  }
+
+  /**
+   * PRSprint 06 (docs/prsprints/PRSPRINT_06_AUTHENTICATION_SESSION_HARDENING.md): "Device/session
+   * visibility" — every active session belonging to `userId`, never another user's (there is no
+   * parameter through which a caller could request someone else's sessions; the id always comes
+   * from the trusted, DB-sourced identity `requireSession` resolved, never client input).
+   */
+  async listSessions(userId: string): Promise<SessionRecord[]> {
+    return this.sessions.listActiveForUser(userId, new Date());
+  }
+
+  /**
+   * Revokes exactly one of the caller's own sessions. Deliberately throws the same
+   * AuthenticationError for "no such session", "already revoked", and "belongs to a different
+   * user" — an IDOR attempt (guessing another user's session id) gets no signal distinguishing it
+   * from a typo, mirroring login's account-enumeration resistance.
+   */
+  async revokeSession(userId: string, sessionId: string, context: AuthActionContext): Promise<void> {
+    const session = await this.sessions.findById(sessionId);
+    if (!session || session.userId !== userId || session.revokedAt) {
+      throw new AuthenticationError("This session could not be found.");
+    }
+    await this.sessions.revoke(sessionId);
+    await this.audit.record({
+      actorUserId: userId,
+      actorRole: "personal_user",
+      profileKind: null,
+      profileId: null,
+      agreementId: null,
+      action: "session_revoked_self",
+      occurredAt: new Date().toISOString(),
+      ipAddress: context.ipAddress,
+      deviceInfo: context.userAgent ? { userAgent: context.userAgent } : null,
+      previousValue: null,
+      newValue: null,
+      reason: null,
+      authStrength: "basic",
+      relatedDocumentId: null,
+      relatedCaseId: null,
+    });
+  }
+
+  /**
+   * "Log out everywhere" — revokes every session for `userId`, including whichever session the
+   * caller is currently using (matching PRSprint 06's literal scope wording). The route calling
+   * this is responsible for also clearing the caller's own session cookie, since the session this
+   * request authenticated with is revoked too.
+   */
+  async revokeAllSessions(userId: string, context: AuthActionContext): Promise<void> {
+    await this.sessions.revokeAllForUser(userId);
+    await this.audit.record({
+      actorUserId: userId,
+      actorRole: "personal_user",
+      profileKind: null,
+      profileId: null,
+      agreementId: null,
+      action: "logout_all_sessions",
+      occurredAt: new Date().toISOString(),
+      ipAddress: context.ipAddress,
+      deviceInfo: context.userAgent ? { userAgent: context.userAgent } : null,
       previousValue: null,
       newValue: null,
       reason: null,

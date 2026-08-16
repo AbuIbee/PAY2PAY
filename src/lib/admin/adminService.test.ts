@@ -51,7 +51,9 @@ describe("AdminService", () => {
       const admin = await seedUser("platform_admin");
       const target = await seedUser("member");
       await ctx.sessions.insert({ userId: target.id, sessionTokenHash: "hash-1", expiresAt: new Date(Date.now() + 60_000), ipAddress: null, userAgent: null });
-      const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
+      const adminSessionId = randomUUID();
+      const adminCtx = ctxFor(admin.id, adminSessionId, "platform_admin");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, adminSessionId);
 
       await ctx.adminService.suspendUser(adminCtx, target.id, "policy violation");
       let summary = await ctx.directory.getSummary(target.id);
@@ -89,6 +91,31 @@ describe("AdminService", () => {
       const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
 
       await expect(ctx.adminService.suspendUser(adminCtx, otherAdmin.id, "reason")).rejects.toThrow(ForbiddenError);
+    });
+  });
+
+  describe("PRSprint 06: suspend/reactivate/revoke-sessions require a fresh step-up", () => {
+    it("rejects suspend, reactivate, and revoke-sessions without a fresh step-up", async () => {
+      const admin = await seedUser("platform_admin");
+      const target = await seedUser("member");
+      const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
+      // Deliberately no grantStepUp call.
+
+      await expect(ctx.adminService.suspendUser(adminCtx, target.id, "reason")).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.reactivateUser(adminCtx, target.id, "reason")).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.revokeUserSessions(adminCtx, target.id, "reason")).rejects.toThrow(ForbiddenError);
+    });
+
+    it("accepts suspend/reactivate/revoke-sessions once a fresh step-up exists", async () => {
+      const admin = await seedUser("platform_admin");
+      const target = await seedUser("member");
+      const sessionId = randomUUID();
+      const adminCtx = ctxFor(admin.id, sessionId, "platform_admin");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+
+      await ctx.adminService.suspendUser(adminCtx, target.id, "policy");
+      await ctx.adminService.reactivateUser(adminCtx, target.id, "resolved");
+      await ctx.adminService.revokeUserSessions(adminCtx, target.id, "precaution");
     });
   });
 

@@ -360,6 +360,100 @@ describe("AuthService.logout / validateSession", () => {
   });
 });
 
+// PRSprint 06 (docs/prsprints/PRSPRINT_06_AUTHENTICATION_SESSION_HARDENING.md): device/session
+// visibility and self-service revocation, including "log out everywhere".
+describe("AuthService.listSessions / revokeSession / revokeAllSessions", () => {
+  let ctx: ReturnType<typeof createTestAuthService>;
+  let userId: string;
+  let firstSessionId: string;
+  let secondSessionId: string;
+  const context = { ipAddress: "203.0.113.5", userAgent: "test-agent" };
+
+  beforeEach(async () => {
+    ctx = createTestAuthService();
+    const signupResult = await ctx.authService.signup({
+      email: "sessions-user@example.com",
+      password: "correct horse battery staple",
+      dateOfBirth,
+      ipAddress: null,
+      userAgent: null,
+    });
+    userId = signupResult.user.id;
+    const firstValidated = await ctx.authService.validateSession(signupResult.token);
+    firstSessionId = firstValidated!.sessionId;
+
+    const loginResult = await ctx.authService.login({
+      email: "sessions-user@example.com",
+      password: "correct horse battery staple",
+      ipAddress: null,
+      userAgent: null,
+    });
+    const secondValidated = await ctx.authService.validateSession(loginResult.token);
+    secondSessionId = secondValidated!.sessionId;
+  });
+
+  it("lists only this user's active sessions, never another user's", async () => {
+    const other = await ctx.authService.signup({
+      email: "other-sessions-user@example.com",
+      password: "correct horse battery staple",
+      dateOfBirth,
+      ipAddress: null,
+      userAgent: null,
+    });
+
+    const sessions = await ctx.authService.listSessions(userId);
+    expect(sessions).toHaveLength(2);
+    expect(sessions.map((s) => s.id).sort()).toEqual([firstSessionId, secondSessionId].sort());
+    expect(sessions.some((s) => s.userId === other.user.id)).toBe(false);
+  });
+
+  it("omits a session once it has been revoked", async () => {
+    await ctx.authService.revokeSession(userId, firstSessionId, context);
+    const sessions = await ctx.authService.listSessions(userId);
+    expect(sessions.map((s) => s.id)).toEqual([secondSessionId]);
+  });
+
+  it("revokeSession refuses to revoke another user's session (IDOR)", async () => {
+    const other = await ctx.authService.signup({
+      email: "attacker-sessions-user@example.com",
+      password: "correct horse battery staple",
+      dateOfBirth,
+      ipAddress: null,
+      userAgent: null,
+    });
+    const otherValidated = await ctx.authService.validateSession(other.token);
+
+    await expect(
+      ctx.authService.revokeSession(userId, otherValidated!.sessionId, context),
+    ).rejects.toThrow(AuthenticationError);
+    // The victim's session must still be valid — the attempt had no effect.
+    expect(await ctx.authService.validateSession(other.token)).not.toBeNull();
+  });
+
+  it("revokeSession rejects an unknown session id", async () => {
+    await expect(
+      ctx.authService.revokeSession(userId, "00000000-0000-0000-0000-000000000000", context),
+    ).rejects.toThrow(AuthenticationError);
+  });
+
+  it("revokeSession records a self-service audit event", async () => {
+    await ctx.authService.revokeSession(userId, firstSessionId, context);
+    const actions = ctx.auditRepo.events.map((event) => event.action);
+    expect(actions).toContain("session_revoked_self");
+  });
+
+  it("revokeAllSessions revokes every session for the user, including the current one", async () => {
+    await ctx.authService.revokeAllSessions(userId, context);
+    expect(await ctx.authService.listSessions(userId)).toEqual([]);
+  });
+
+  it("revokeAllSessions records a logout-everywhere audit event", async () => {
+    await ctx.authService.revokeAllSessions(userId, context);
+    const actions = ctx.auditRepo.events.map((event) => event.action);
+    expect(actions).toContain("logout_all_sessions");
+  });
+});
+
 // Sanity check that the constructor itself still accepts the documented
 // shape directly (not just through the createTestAuthService helper).
 describe("AuthService construction", () => {
