@@ -35,7 +35,7 @@ describe("AdminService", () => {
       await expect(ctx.adminService.getUserDetail(memberCtx, target.id)).rejects.toThrow(ForbiddenError);
       await expect(ctx.adminService.suspendUser(memberCtx, target.id, "reason")).rejects.toThrow(ForbiddenError);
       await expect(ctx.adminService.reactivateUser(memberCtx, target.id, "reason")).rejects.toThrow(ForbiddenError);
-      await expect(ctx.adminService.revokeUserSessions(memberCtx, target.id, null)).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.revokeUserSessions(memberCtx, target.id, "reason")).rejects.toThrow(ForbiddenError);
       await expect(
         ctx.adminService.changeUserRole(memberCtx, target.id, "platform_admin", "reason"),
       ).rejects.toThrow(ForbiddenError);
