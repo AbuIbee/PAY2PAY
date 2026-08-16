@@ -58,7 +58,7 @@ const EARLY_ACCESS_CONSENT_VERSION = "v0-unfinished";
 export function createEarlyAccessHandler(repository: EarlyAccessLeadRepository) {
   return async function handleEarlyAccess(request: NextRequest): Promise<Response> {
     const ip = getClientIp(request);
-    if (!checkRateLimit(`early-access:ip:${ip}`, EARLY_ACCESS_LIMIT_PER_IP, EARLY_ACCESS_WINDOW_MS)) {
+    if (!(await checkRateLimit(`early-access:ip:${ip}`, EARLY_ACCESS_LIMIT_PER_IP, EARLY_ACCESS_WINDOW_MS))) {
       throw new RateLimitedError("Too many submissions. Please try again later.");
     }
 

@@ -4,13 +4,21 @@ import { withErrorHandling } from "@/lib/api-handler";
 import type { AuthService } from "@/lib/auth/authService";
 import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
-import { ValidationError } from "@/lib/errors";
+import { RateLimitedError, ValidationError } from "@/lib/errors";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { getClientIp } from "@/lib/request-ip";
 import { getPaymentService } from "@/lib/payments/getPaymentService";
 import type { PaymentService } from "@/lib/payments/paymentService";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// PRSprint 05 (docs/prsprints/PRSPRINT_05_DISTRIBUTED_RATE_LIMITING_ABUSE_CONTROLS.md): this route
+// previously had no rate limiting — a compromised session or automated script could otherwise submit
+// unbounded payment-creation attempts. PaymentService's own idempotency-key dedupe (Sprint 9) prevents
+// duplicate charges, but not unbounded distinct attempts, which this closes.
+const PAYMENT_CREATE_LIMIT_PER_USER = 30;
+const PAYMENT_CREATE_WINDOW_MS = 60 * 60 * 1000;
 
 const profileRefSchema = z.object({
   profileKind: z.enum(["personal", "business"]),
@@ -39,6 +47,10 @@ export function createPaymentCreateHandler(authService: AuthService, paymentServ
     const parsed = createPaymentSchema.safeParse(rawBody);
     if (!parsed.success) {
       throw new ValidationError(parsed.error.issues[0]?.message ?? "A valid payment request is required.");
+    }
+
+    if (!(await checkRateLimit(`payment-create:user:${userId}`, PAYMENT_CREATE_LIMIT_PER_USER, PAYMENT_CREATE_WINDOW_MS))) {
+      throw new RateLimitedError("Too many payment attempts. Please try again later.");
     }
 
     const record = await paymentService.createPayment({

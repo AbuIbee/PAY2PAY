@@ -32,11 +32,11 @@ export function createLoginHandler(authService: AuthService) {
       throw new ValidationError("A valid email and password are required.");
     }
 
-    if (!checkRateLimit(`login:ip:${ip}`, LOGIN_LIMIT_PER_IP, LOGIN_WINDOW_MS)) {
+    if (!(await checkRateLimit(`login:ip:${ip}`, LOGIN_LIMIT_PER_IP, LOGIN_WINDOW_MS))) {
       throw new RateLimitedError("Too many login attempts. Please try again later.");
     }
     if (
-      !checkRateLimit(`login:email:${parsed.data.email}`, LOGIN_LIMIT_PER_EMAIL, LOGIN_WINDOW_MS)
+      !(await checkRateLimit(`login:email:${parsed.data.email}`, LOGIN_LIMIT_PER_EMAIL, LOGIN_WINDOW_MS))
     ) {
       throw new RateLimitedError("Too many login attempts. Please try again later.");
     }

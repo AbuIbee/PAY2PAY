@@ -32,7 +32,7 @@ const SIGNUP_WINDOW_MS = 10 * 60 * 1000;
 export function createSignupHandler(authService: AuthService) {
   return async function handleSignup(request: NextRequest): Promise<Response> {
     const ip = getClientIp(request);
-    if (!checkRateLimit(`signup:ip:${ip}`, SIGNUP_LIMIT_PER_IP, SIGNUP_WINDOW_MS)) {
+    if (!(await checkRateLimit(`signup:ip:${ip}`, SIGNUP_LIMIT_PER_IP, SIGNUP_WINDOW_MS))) {
       throw new RateLimitedError("Too many signup attempts. Please try again later.");
     }
 

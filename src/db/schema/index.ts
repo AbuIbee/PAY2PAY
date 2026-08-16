@@ -27,3 +27,4 @@ export * from "./notify";
 export * from "./relationship";
 export * from "./financialAccount";
 export * from "./adminOps";
+export * from "./rateLimit";

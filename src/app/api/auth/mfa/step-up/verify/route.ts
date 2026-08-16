@@ -26,7 +26,7 @@ const STEP_UP_WINDOW_MS = 15 * 60 * 1000;
 export function createStepUpVerifyHandler(authService: AuthService, mfaService: MfaService) {
   return async function handleVerify(request: NextRequest): Promise<Response> {
     const { userId, sessionId } = await requireSession(request, authService);
-    if (!checkRateLimit(`mfa-step-up:session:${sessionId}`, STEP_UP_LIMIT_PER_SESSION, STEP_UP_WINDOW_MS)) {
+    if (!(await checkRateLimit(`mfa-step-up:session:${sessionId}`, STEP_UP_LIMIT_PER_SESSION, STEP_UP_WINDOW_MS))) {
       throw new RateLimitedError();
     }
     const rawBody: unknown = await request.json().catch(() => null);
