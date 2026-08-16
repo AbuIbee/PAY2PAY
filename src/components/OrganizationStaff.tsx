@@ -5,6 +5,8 @@ import Link from "next/link";
 import { apiFetch } from "@/lib/ui/apiFetch";
 import { formatDate } from "@/lib/ui/date";
 import { DEFAULT_ROLE_CAPABILITIES, type StaffRole } from "@/lib/staff/capabilities";
+import { StepUpChallenge } from "@/components/StepUpChallenge";
+import { useStepUpGuardedAction } from "@/lib/ui/useStepUpGuardedAction";
 
 const ROLE_LABEL: Record<string, string> = {
   owner: "Owner",
@@ -52,6 +54,7 @@ export function OrganizationStaff() {
   const [state, setState] = useState<LoadState>("loading");
   const [businessProfileId, setBusinessProfileId] = useState<string | null>(null);
   const [canManage, setCanManage] = useState(false);
+  const [selfUserId, setSelfUserId] = useState<string | null>(null);
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -67,6 +70,7 @@ export function OrganizationStaff() {
         return;
       }
       setBusinessProfileId(active.businessProfileId);
+      setSelfUserId(me.id);
       const [staffBody, rolesBody] = await Promise.all([
         apiFetch<{ staff: StaffMember[] }>(`/api/staff?businessProfileId=${active.businessProfileId}`),
         apiFetch<{ customRoles: CustomRole[] }>(`/api/staff/custom-roles?businessProfileId=${active.businessProfileId}`),
@@ -146,16 +150,21 @@ export function OrganizationStaff() {
                   <th>Role</th>
                   <th>Authorized signer</th>
                   <th>Since</th>
+                  {canManage && <th>Actions</th>}
                 </tr>
               </thead>
               <tbody>
                 {staff.map((member) => (
-                  <tr key={member.id}>
-                    <td data-label="Member">{shortId(member.userId)}</td>
-                    <td data-label="Role">{roleLabel(member)}</td>
-                    <td data-label="Authorized signer">{member.isAuthorizedRepresentative ? "Yes" : "No"}</td>
-                    <td data-label="Since">{formatDate(member.createdAt)}</td>
-                  </tr>
+                  <StaffMemberRow
+                    key={member.id}
+                    member={member}
+                    isSelf={member.userId === selfUserId}
+                    canManage={canManage}
+                    customRoles={customRoles}
+                    businessProfileId={businessProfileId}
+                    roleLabel={roleLabel}
+                    onChanged={() => void refresh()}
+                  />
                 ))}
               </tbody>
             </table>
@@ -260,5 +269,176 @@ function InviteStaffCard({
         </div>
       </form>
     </div>
+  );
+}
+
+/**
+ * PRSprint 08 (docs/prsprints/PRSPRINT_08_BUSINESS_MEMBERSHIP_STAFF_ADMINISTRATION.md):
+ * "Role-change UI" and "Removal UI" — StaffService.updateStaffRole/removeStaff and their
+ * /api/staff/role, /api/staff/remove routes already existed and were already tested, but no UI
+ * ever called them. Both actions always require a fresh step-up (updateStaffRole
+ * unconditionally; removeStaff when the target holds a high-risk capability), so both reuse the
+ * same useStepUpGuardedAction/StepUpChallenge pattern OrganizationStaffRoles.tsx already
+ * established for custom-role edits — no new step-up UX invented. The current user's own row
+ * never shows these actions (mirrors updateStaffRole's own server-side "you cannot change your
+ * own role" guard; removal has no such server-side guard, but self-removal from this list is a
+ * confusing, easy-to-mis-click action with no legitimate routine use, so it is kept out of the
+ * UI rather than added as a new authorization rule).
+ */
+function StaffMemberRow({
+  member,
+  isSelf,
+  canManage,
+  customRoles,
+  businessProfileId,
+  roleLabel,
+  onChanged,
+}: {
+  member: StaffMember;
+  isSelf: boolean;
+  canManage: boolean;
+  customRoles: CustomRole[];
+  businessProfileId: string;
+  roleLabel: (member: StaffMember) => string;
+  onChanged: () => void;
+}) {
+  const [editingRole, setEditingRole] = useState(false);
+  const [newRole, setNewRole] = useState<(typeof ASSIGNABLE_ROLES)[number]>(
+    ASSIGNABLE_ROLES.includes(member.role as (typeof ASSIGNABLE_ROLES)[number]) ? (member.role as (typeof ASSIGNABLE_ROLES)[number]) : "manager",
+  );
+  const [newCustomRoleId, setNewCustomRoleId] = useState(member.customRoleId ?? "");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const roleChange = useStepUpGuardedAction(async () => {
+    return apiFetch("/api/staff/role", {
+      method: "POST",
+      body: JSON.stringify({
+        businessProfileId,
+        targetStaffId: member.id,
+        newRole,
+        ...(newRole === "custom" && newCustomRoleId ? { newCustomRoleId } : {}),
+      }),
+    });
+  });
+
+  const removeStaff = useStepUpGuardedAction(async () => {
+    return apiFetch("/api/staff/remove", {
+      method: "POST",
+      body: JSON.stringify({ businessProfileId, targetStaffId: member.id }),
+    });
+  });
+
+  async function handleSaveRole() {
+    setErrorMessage(null);
+    try {
+      await roleChange.run();
+      setEditingRole(false);
+      onChanged();
+    } catch {
+      setErrorMessage("Couldn't change that member's role. Please try again.");
+    }
+  }
+
+  async function handleRemove() {
+    if (!window.confirm("Remove this team member? They will immediately lose access to this business.")) return;
+    setErrorMessage(null);
+    try {
+      await removeStaff.run();
+      onChanged();
+    } catch {
+      setErrorMessage("Couldn't remove that team member. Please try again.");
+    }
+  }
+
+  return (
+    <tr>
+      <td data-label="Member">{shortId(member.userId)}</td>
+      <td data-label="Role">
+        {editingRole ? (
+          <div style={{ display: "grid", gap: "0.5rem" }}>
+            <select
+              aria-label="New role"
+              value={newRole}
+              onChange={(event) => setNewRole(event.target.value as typeof newRole)}
+            >
+              {ASSIGNABLE_ROLES.map((r) => (
+                <option key={r} value={r}>{ROLE_LABEL[r]}</option>
+              ))}
+            </select>
+            {newRole === "custom" && (
+              <select
+                aria-label="Custom role"
+                value={newCustomRoleId}
+                onChange={(event) => setNewCustomRoleId(event.target.value)}
+              >
+                <option value="">Select a custom role…</option>
+                {customRoles.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        ) : (
+          roleLabel(member)
+        )}
+      </td>
+      <td data-label="Authorized signer">{member.isAuthorizedRepresentative ? "Yes" : "No"}</td>
+      <td data-label="Since">{formatDate(member.createdAt)}</td>
+      {canManage && (
+        <td data-label="Actions">
+          {isSelf ? (
+            <span style={{ color: "var(--ink-soft)", fontSize: "0.8rem" }}>You</span>
+          ) : (
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {editingRole ? (
+                <>
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    onClick={() => void handleSaveRole()}
+                    disabled={newRole === "custom" && !newCustomRoleId}
+                  >
+                    Save role
+                  </button>
+                  <button type="button" className="button button--ghost" onClick={() => setEditingRole(false)}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="button button--ghost" onClick={() => setEditingRole(true)}>
+                    Change role
+                  </button>
+                  <button type="button" className="button button--ghost" onClick={() => void handleRemove()}>
+                    Remove
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          {errorMessage && (
+            <p className="field-error" role="alert">
+              {errorMessage}
+            </p>
+          )}
+          {roleChange.isChallengeOpen && (
+            <StepUpChallenge
+              action="staff_role_change"
+              actionDescription="change this team member's role"
+              onVerified={roleChange.resolveChallenge}
+              onCancel={roleChange.cancelChallenge}
+            />
+          )}
+          {removeStaff.isChallengeOpen && (
+            <StepUpChallenge
+              action="staff_removal"
+              actionDescription="remove this team member"
+              onVerified={removeStaff.resolveChallenge}
+              onCancel={removeStaff.cancelChallenge}
+            />
+          )}
+        </td>
+      )}
+    </tr>
   );
 }
