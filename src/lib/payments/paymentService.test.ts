@@ -187,6 +187,51 @@ describe("PaymentService", () => {
     });
   });
 
+  describe("PRSprint 09: a payment linked to a real agreement must match its actual debtor/creditor", () => {
+    const AGREEMENT_ID = "11111111-1111-1111-1111-111111111111";
+    const OTHER_PROFILE = { profileKind: "personal" as ProfileKind, profileId: "unrelated-profile-1" };
+
+    beforeEach(async () => {
+      await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+      await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+      ctx.verificationCtx.profileOwners.set(OTHER_PROFILE.profileKind, OTHER_PROFILE.profileId, OTHER_USER_ID);
+      await markFullyVerified(OTHER_PROFILE.profileKind, OTHER_PROFILE.profileId);
+      ctx.agreements.register(AGREEMENT_ID, { creditor: RECIPIENT, debtor: PAYER });
+    });
+
+    it("succeeds when payer/recipient exactly match the agreement's debtor/creditor", async () => {
+      const record = await ctx.paymentService.createPayment(baseInput({ agreementId: AGREEMENT_ID }));
+      expect(record.status).toBe("pending");
+      expect(record.agreementId).toBe(AGREEMENT_ID);
+    });
+
+    it("rejects a recipient that does not match the agreement's real creditor", async () => {
+      await expect(
+        ctx.paymentService.createPayment(baseInput({ agreementId: AGREEMENT_ID, recipient: OTHER_PROFILE })),
+      ).rejects.toThrow(ForbiddenError);
+      await expect(
+        ctx.paymentService.createPayment(baseInput({ agreementId: AGREEMENT_ID, recipient: OTHER_PROFILE })),
+      ).rejects.toThrow(/must match this agreement's debtor and creditor/i);
+      // No payment_attempt row was ever created for the rejected attempts.
+      expect(await ctx.paymentService.listByAgreementId(AGREEMENT_ID)).toEqual([]);
+    });
+
+    it("rejects a payer that does not match the agreement's real debtor, even if they own that profile", async () => {
+      await expect(
+        ctx.paymentService.createPayment(
+          baseInput({ agreementId: AGREEMENT_ID, payer: OTHER_PROFILE, actingUserId: OTHER_USER_ID }),
+        ),
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it("does not enforce the check when the agreement id does not resolve to any real agreement", async () => {
+      const record = await ctx.paymentService.createPayment(
+        baseInput({ agreementId: "22222222-2222-2222-2222-222222222222", recipient: OTHER_PROFILE }),
+      );
+      expect(record.status).toBe("pending");
+    });
+  });
+
   describe("listByAgreementId (Sprint 18B Payments UI)", () => {
     it("returns only payment attempts for the given agreement, newest first", async () => {
       await markFullyVerified(PAYER.profileKind, PAYER.profileId);

@@ -5,7 +5,8 @@ import type { NotificationService } from "@/lib/notify/notificationService";
 import { createTestVerificationService } from "@/lib/profiles/testFakes";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import { PaymentService } from "./paymentService";
-import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus, PaymentMethod } from "./paymentService";
+import type { AgreementPartiesReader, PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus, PaymentMethod } from "./paymentService";
+import type { ProfileRef } from "./paymentProvider";
 import { PaymentWebhookService } from "./paymentWebhookService";
 import type { FailedPaymentWorkflow, PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
 import { SandboxPaymentProvider } from "./sandboxPaymentProvider";
@@ -121,6 +122,26 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
   }
 }
 
+/**
+ * PRSprint 09: default-permissive fake — an unregistered `agreementId` resolves to `null` (no
+ * agreement found), which `PaymentService.reserveAttempt` treats as "nothing to cross-check", not
+ * "reject". Matches this test suite's long-established convention (predating this PRSprint) of
+ * using `agreementId` as an opaque grouping label in many fixtures with no backing agreement row —
+ * every pre-PRSprint-09 test that never calls `.register()` is unaffected. Tests that specifically
+ * exercise the new payer/recipient-vs-agreement cross-check call `.register()` first.
+ */
+export class InMemoryAgreementPartiesReader implements AgreementPartiesReader {
+  private parties = new Map<string, { creditor: ProfileRef; debtor: ProfileRef }>();
+
+  register(agreementId: string, parties: { creditor: ProfileRef; debtor: ProfileRef }): void {
+    this.parties.set(agreementId, parties);
+  }
+
+  async getParties(agreementId: string): Promise<{ creditor: ProfileRef; debtor: ProfileRef } | null> {
+    return this.parties.get(agreementId) ?? null;
+  }
+}
+
 class InMemoryAuditEventRepositoryForPayments implements AuditEventRepository {
   events: AuditEventRecord[] = [];
   private nextId = 1;
@@ -144,6 +165,7 @@ export function createTestPaymentService() {
   const provider = new SandboxPaymentProvider(TEST_WEBHOOK_SECRET);
   const payments = new InMemoryPaymentAttemptRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForPayments();
+  const agreements = new InMemoryAgreementPartiesReader();
 
   const paymentService = new PaymentService({
     provider,
@@ -151,9 +173,10 @@ export function createTestPaymentService() {
     profileOwners: verificationCtx.profileOwners,
     payments,
     audit: new AuditService(auditRepo),
+    agreements,
   });
 
-  return { verificationCtx, provider, payments, auditRepo, paymentService };
+  return { verificationCtx, provider, payments, auditRepo, agreements, paymentService };
 }
 
 export class InMemoryPaymentWebhookEventRepository implements PaymentWebhookEventRepository {

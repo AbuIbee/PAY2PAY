@@ -102,6 +102,23 @@ export interface PaymentAttemptRepository {
 }
 
 /**
+ * PRSprint 09 (docs/prsprints/PRSPRINT_09_CANONICAL_AGREEMENT_PARTICIPANT_MODEL.md): the minimal
+ * read-only lookup `reserveAttempt` needs to enforce "the payer and recipient on an agreement-linked
+ * payment must be that agreement's real debtor and creditor" — mirrors `ProfileOwnerReader`'s
+ * established small-single-purpose-interface pattern rather than depending on the whole
+ * AgreementService (which would also introduce a payments -> agreements module dependency this
+ * codebase has never had). Real implementation: DrizzleAgreementPartiesReader.
+ */
+export interface AgreementPartiesReader {
+  /** Returns null if no agreement exists with this id. */
+  getParties(agreementId: string): Promise<{ creditor: ProfileRef; debtor: ProfileRef } | null>;
+}
+
+function profileRefEquals(a: ProfileRef, b: ProfileRef): boolean {
+  return a.profileKind === b.profileKind && a.profileId === b.profileId;
+}
+
+/**
  * Sprint 9 (docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md): the shared abstraction
  * application code depends on instead of any specific processor. This is the ONE place that calls
  * Sprint 3's `isFullyVerified` for both payer and recipient before creating a payment, per this
@@ -117,6 +134,7 @@ export class PaymentService {
       profileOwners: ProfileOwnerReader;
       payments: PaymentAttemptRepository;
       audit: AuditService;
+      agreements: AgreementPartiesReader;
     },
   ) {}
 
@@ -208,6 +226,28 @@ export class PaymentService {
     );
     if (payerOwnerUserId !== input.actingUserId) {
       throw new ForbiddenError("You may only create a payment as the payer.");
+    }
+
+    /**
+     * PRSprint 09: nothing here previously cross-checked a caller-supplied `agreementId` against
+     * that agreement's actual creditor/debtor — the payer-ownership check above only guarantees the
+     * caller owns the *payer* profile, not that `recipient` (or `payer`) is really this specific
+     * agreement's canonical counterparty. Left unchecked, a verified user could tag a payment made
+     * to any other verified user with an unrelated, real agreement's id, and PaymentWebhookService
+     * posts ledger entries keyed on exactly that stored `agreementId` — corrupting a third party's
+     * agreement balance with a payment neither of its real parties made. Enforced only when the
+     * agreement is found: an `agreementId` that doesn't resolve to any real row is intentionally
+     * left unchecked here (a pre-existing, unrelated test-suite convention treats `agreementId` as
+     * an opaque grouping label in many fixtures with no backing `agreement` row; a garbage id also
+     * cannot corrupt a real counterparty's balance, only create an orphaned ledger account under
+     * that id — a data-hygiene concern, not a cross-party integrity one, and a reasonable follow-up
+     * for a future PRSprint rather than this one).
+     */
+    if (input.agreementId) {
+      const parties = await this.deps.agreements.getParties(input.agreementId);
+      if (parties && (!profileRefEquals(parties.debtor, input.payer) || !profileRefEquals(parties.creditor, input.recipient))) {
+        throw new ForbiddenError("The payer and recipient must match this agreement's debtor and creditor.");
+      }
     }
 
     if (!Number.isInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
