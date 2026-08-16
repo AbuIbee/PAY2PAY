@@ -9,9 +9,14 @@ export default function AgreementsPage() {
     <div className="app-page">
       <div className="app-page__header">
         <h1>Agreements</h1>
-        <Link href="/agreements/new" className="button button--primary">
-          New agreement
-        </Link>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <Link href="/agreements/invite" className="button button--ghost">
+            Invite someone
+          </Link>
+          <Link href="/agreements/new" className="button button--primary">
+            New agreement
+          </Link>
+        </div>
       </div>
       <AgreementsList />
     </div>

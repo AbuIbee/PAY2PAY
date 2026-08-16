@@ -15,6 +15,10 @@
     {
       "path": "/api/scheduler/expire-relationship-invitations",
       "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/scheduler/expire-agreement-invitations",
+      "schedule": "0 17 * * *"
     }
   ]
 }
