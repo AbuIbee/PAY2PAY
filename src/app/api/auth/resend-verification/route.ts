@@ -17,7 +17,7 @@ const RESEND_WINDOW_MS = 60 * 60 * 1000;
 export function createResendVerificationHandler(authService: AuthService) {
   return async function handleResend(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
-    if (!checkRateLimit(`resend-verification:user:${userId}`, RESEND_LIMIT_PER_USER, RESEND_WINDOW_MS)) {
+    if (!(await checkRateLimit(`resend-verification:user:${userId}`, RESEND_LIMIT_PER_USER, RESEND_WINDOW_MS))) {
       throw new RateLimitedError();
     }
     await authService.resendVerificationEmail(userId);

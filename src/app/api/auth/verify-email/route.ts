@@ -18,7 +18,7 @@ const VERIFY_WINDOW_MS = 15 * 60 * 1000;
 export function createVerifyEmailHandler(authService: AuthService) {
   return async function handleVerifyEmail(request: NextRequest): Promise<Response> {
     const ip = getClientIp(request);
-    if (!checkRateLimit(`verify-email:ip:${ip}`, VERIFY_LIMIT_PER_IP, VERIFY_WINDOW_MS)) {
+    if (!(await checkRateLimit(`verify-email:ip:${ip}`, VERIFY_LIMIT_PER_IP, VERIFY_WINDOW_MS))) {
       throw new RateLimitedError();
     }
     const rawBody: unknown = await request.json().catch(() => null);

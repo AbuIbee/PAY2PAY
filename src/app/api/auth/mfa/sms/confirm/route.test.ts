@@ -58,4 +58,22 @@ describe("POST /api/auth/mfa/sms/confirm", () => {
     );
     expect(response.status).toBe(400);
   });
+
+  it(
+    "PRSprint 05 (docs/prsprints/PRSPRINT_05_DISTRIBUTED_RATE_LIMITING_ABUSE_CONTROLS.md): blocks " +
+      "with 429 once too many code-guess attempts have been made — this route previously had no " +
+      "rate limiting at all, unlike its own enroll step, leaving the 6-digit code brute-forceable",
+    async () => {
+      for (let i = 0; i < 8; i += 1) {
+        const response = await handlerFor()(
+          postWithCookie("http://localhost/api/auth/mfa/sms/confirm", { code: "000000" }, token),
+        );
+        expect(response.status).toBe(400);
+      }
+      const ninth = await handlerFor()(
+        postWithCookie("http://localhost/api/auth/mfa/sms/confirm", { code: "000000" }, token),
+      );
+      expect(ninth.status).toBe(429);
+    },
+  );
 });

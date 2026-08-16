@@ -6,10 +6,17 @@ import { getAdminRestrictionService } from "@/lib/admin/getAdminRestrictionServi
 import type { AuthService } from "@/lib/auth/authService";
 import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
-import { ValidationError } from "@/lib/errors";
+import { RateLimitedError, ValidationError } from "@/lib/errors";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// PRSprint 05 (docs/prsprints/PRSPRINT_05_DISTRIBUTED_RATE_LIMITING_ABUSE_CONTROLS.md): a
+// compromised or scripted-in-error admin session should not be able to place unbounded
+// restrictions; this bounds runaway automation without meaningfully limiting normal admin use.
+const RESTRICTION_PLACE_LIMIT_PER_ADMIN = 60;
+const RESTRICTION_PLACE_WINDOW_MS = 60 * 60 * 1000;
 
 const placeSchema = z.object({
   restrictionType: z.enum(["payment_activity", "new_agreement_creation", "payout"]),
@@ -27,6 +34,9 @@ export function createAdminRestrictionPlaceHandler(authService: AuthService, res
     const parsed = placeSchema.safeParse(rawBody);
     if (!parsed.success) {
       throw new ValidationError(parsed.error.issues[0]?.message ?? "A valid restriction payload is required.");
+    }
+    if (!(await checkRateLimit(`admin-restriction-place:admin:${userId}`, RESTRICTION_PLACE_LIMIT_PER_ADMIN, RESTRICTION_PLACE_WINDOW_MS))) {
+      throw new RateLimitedError("Too many restriction actions. Please try again later.");
     }
     const restriction = await restrictionService.restrict({
       restrictionType: parsed.data.restrictionType,

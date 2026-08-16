@@ -21,7 +21,7 @@ const CONFIRM_WINDOW_MS = 15 * 60 * 1000;
 export function createPasswordResetConfirmHandler(authService: AuthService) {
   return async function handleConfirm(request: NextRequest): Promise<Response> {
     const ip = getClientIp(request);
-    if (!checkRateLimit(`password-reset-confirm:ip:${ip}`, CONFIRM_LIMIT_PER_IP, CONFIRM_WINDOW_MS)) {
+    if (!(await checkRateLimit(`password-reset-confirm:ip:${ip}`, CONFIRM_LIMIT_PER_IP, CONFIRM_WINDOW_MS))) {
       throw new RateLimitedError();
     }
     const rawBody: unknown = await request.json().catch(() => null);

@@ -24,10 +24,10 @@ export function createPasswordResetRequestHandler(authService: AuthService) {
     if (!parsed.success) {
       throw new ValidationError("A valid email is required.");
     }
-    if (!checkRateLimit(`password-reset:ip:${ip}`, RESET_LIMIT_PER_IP, RESET_WINDOW_MS)) {
+    if (!(await checkRateLimit(`password-reset:ip:${ip}`, RESET_LIMIT_PER_IP, RESET_WINDOW_MS))) {
       throw new RateLimitedError();
     }
-    if (!checkRateLimit(`password-reset:email:${parsed.data.email}`, RESET_LIMIT_PER_EMAIL, RESET_WINDOW_MS)) {
+    if (!(await checkRateLimit(`password-reset:email:${parsed.data.email}`, RESET_LIMIT_PER_EMAIL, RESET_WINDOW_MS))) {
       throw new RateLimitedError();
     }
 

@@ -4,12 +4,21 @@ import { withErrorHandling } from "@/lib/api-handler";
 import type { AuthService } from "@/lib/auth/authService";
 import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
-import { ValidationError } from "@/lib/errors";
+import { RateLimitedError, ValidationError } from "@/lib/errors";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { getStaffService } from "@/lib/staff/getStaffService";
 import type { StaffService } from "@/lib/staff/staffService";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// PRSprint 05 (docs/prsprints/PRSPRINT_05_DISTRIBUTED_RATE_LIMITING_ABUSE_CONTROLS.md): this route
+// previously had no rate limiting — unbounded invitation creation is both a generic abuse vector
+// (per-inviter) and a spam vector against the invited party specifically (per-target-email, since a
+// single email could be re-invited repeatedly even by different inviting accounts/businesses).
+const INVITE_LIMIT_PER_INVITER = 20;
+const INVITE_LIMIT_PER_TARGET_EMAIL = 5;
+const INVITE_WINDOW_MS = 60 * 60 * 1000;
 
 const inviteSchema = z.object({
   businessProfileId: z.string().uuid(),
@@ -25,6 +34,19 @@ export function createStaffInviteHandler(authService: AuthService, staffService:
     const parsed = inviteSchema.safeParse(rawBody);
     if (!parsed.success) {
       throw new ValidationError(parsed.error.issues[0]?.message ?? "A valid invitation is required.");
+    }
+
+    if (!(await checkRateLimit(`staff-invite:inviter:${userId}`, INVITE_LIMIT_PER_INVITER, INVITE_WINDOW_MS))) {
+      throw new RateLimitedError("Too many invitations sent. Please try again later.");
+    }
+    if (
+      !(await checkRateLimit(
+        `staff-invite:target:${parsed.data.email.toLowerCase()}`,
+        INVITE_LIMIT_PER_TARGET_EMAIL,
+        INVITE_WINDOW_MS,
+      ))
+    ) {
+      throw new RateLimitedError("This person has already been invited too many times recently.");
     }
 
     const invitation = await staffService.inviteStaff({

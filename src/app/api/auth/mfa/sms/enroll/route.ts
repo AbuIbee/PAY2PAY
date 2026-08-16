@@ -21,7 +21,7 @@ const SMS_ENROLL_WINDOW_MS = 60 * 60 * 1000;
 export function createSmsEnrollHandler(authService: AuthService, mfaService: MfaService) {
   return async function handleEnroll(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
-    if (!checkRateLimit(`mfa-sms-enroll:user:${userId}`, SMS_ENROLL_LIMIT_PER_USER, SMS_ENROLL_WINDOW_MS)) {
+    if (!(await checkRateLimit(`mfa-sms-enroll:user:${userId}`, SMS_ENROLL_LIMIT_PER_USER, SMS_ENROLL_WINDOW_MS))) {
       throw new RateLimitedError();
     }
     const rawBody: unknown = await request.json().catch(() => null);
