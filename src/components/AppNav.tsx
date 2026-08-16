@@ -53,6 +53,20 @@ export function AppNav() {
   const [email, setEmail] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [unreadCount, setUnreadCount] = useState<number | null>(null);
+  // PRSprint 10A (docs/prsprints/PRSPRINT_10A_AUTHENTICATION_SIGNOUT_UI_REMEDIATION.md): the
+  // mobile drawer state — see app-shell.css's own doc comment on `.app-nav--mobile-open` for the
+  // root cause this closes (the entire nav, the only place Sign Out lived, was unconditionally
+  // `display:none` below 62rem with nothing ever rendered in its place).
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Closes the drawer on every navigation without an effect — React's own recommended "adjust
+  // state during render" pattern for resetting state when a prop changes, so it never stays open
+  // covering the new page. (An effect-based `setMobileNavOpen(false)` here would itself be a
+  // cascading-render anti-pattern per this repo's `react-hooks/set-state-in-effect` rule.)
+  const [lastPathname, setLastPathname] = useState(pathname);
+  if (pathname !== lastPathname) {
+    setLastPathname(pathname);
+    setMobileNavOpen(false);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -91,11 +105,45 @@ export function AppNav() {
   }
 
   return (
-    <nav className="app-nav" aria-label="Primary">
-      <Link className="app-nav__brand" href="/dashboard">
-        <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-        <span>PAY2PAY</span>
-      </Link>
+    <>
+      {/*
+        PRSprint 10A: the mobile topbar — this element already had CSS (`.app-topbar`,
+        `display:flex` below 62rem) but nothing ever rendered it, so mobile/narrow-viewport users
+        had no navigation and no Sign Out control at all. The "Log out" button here is always
+        visible, independent of the menu drawer, so Sign Out never requires discovering a
+        hamburger menu first.
+      */}
+      <div className="app-topbar">
+        <Link className="app-topbar__brand" href="/dashboard">
+          <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
+          <span>PAY2PAY</span>
+        </Link>
+        <div className="app-topbar__actions">
+          <button
+            type="button"
+            className="app-topbar__button"
+            aria-expanded={mobileNavOpen}
+            aria-controls="app-primary-nav"
+            onClick={() => setMobileNavOpen((open) => !open)}
+          >
+            {mobileNavOpen ? "Close" : "Menu"}
+          </button>
+          <button type="button" className="app-topbar__button app-topbar__logout" onClick={() => void handleLogout()}>
+            Log out
+          </button>
+        </div>
+      </div>
+
+      <nav id="app-primary-nav" className={`app-nav${mobileNavOpen ? " app-nav--mobile-open" : ""}`} aria-label="Primary">
+        <div className="app-nav__header">
+          <Link className="app-nav__brand" href="/dashboard">
+            <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
+            <span>PAY2PAY</span>
+          </Link>
+          <button type="button" className="app-nav__close" aria-label="Close menu" onClick={() => setMobileNavOpen(false)}>
+            Close
+          </button>
+        </div>
 
       <div className="app-nav__section">
         {PRIMARY_LINKS.map((item) => (
@@ -168,6 +216,7 @@ export function AppNav() {
           Log out
         </button>
       </div>
-    </nav>
+      </nav>
+    </>
   );
 }
