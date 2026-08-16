@@ -111,12 +111,17 @@ export class InMemorySessionRepository implements SessionRepository {
     ipAddress: string | null;
     userAgent: string | null;
   }): Promise<SessionRecord> {
+    const now = new Date();
     const session: SessionRecord = {
       id: randomUUID(),
       userId: input.userId,
       sessionTokenHash: input.sessionTokenHash,
+      createdAt: now,
+      lastSeenAt: now,
       expiresAt: input.expiresAt,
       revokedAt: null,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
     };
     this.byId.set(session.id, session);
     return session;
@@ -127,6 +132,10 @@ export class InMemorySessionRepository implements SessionRepository {
       if (session.sessionTokenHash === sessionTokenHash) return session;
     }
     return null;
+  }
+
+  async findById(id: string): Promise<SessionRecord | null> {
+    return this.byId.get(id) ?? null;
   }
 
   async revoke(id: string): Promise<void> {
@@ -140,8 +149,15 @@ export class InMemorySessionRepository implements SessionRepository {
     }
   }
 
-  async touchLastSeen(): Promise<void> {
-    // No last-seen assertions in these tests; no-op is sufficient.
+  async touchLastSeen(id: string): Promise<void> {
+    const session = this.byId.get(id);
+    if (session) session.lastSeenAt = new Date();
+  }
+
+  async listActiveForUser(userId: string, now: Date): Promise<SessionRecord[]> {
+    return [...this.byId.values()]
+      .filter((s) => s.userId === userId && !s.revokedAt && s.expiresAt.getTime() > now.getTime())
+      .sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
   }
 }
 

@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { deviceSession } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -12,8 +12,12 @@ function toRecord(row: DeviceSessionRow): SessionRecord {
     id: row.id,
     userId: row.userId,
     sessionTokenHash: row.sessionTokenHash,
+    createdAt: row.createdAt,
+    lastSeenAt: row.lastSeenAt,
     expiresAt: row.expiresAt,
     revokedAt: row.revokedAt,
+    ipAddress: row.ipAddress,
+    userAgent: row.userAgent,
   };
 }
 
@@ -58,6 +62,13 @@ export class DrizzleSessionRepository implements SessionRepository {
     return row ? toRecord(row) : null;
   }
 
+  async findById(id: string): Promise<SessionRecord | null> {
+    const db = getDb();
+    const rows = await db.select().from(deviceSession).where(eq(deviceSession.id, id)).limit(1);
+    const row = rows[0];
+    return row ? toRecord(row) : null;
+  }
+
   async revoke(id: string): Promise<void> {
     const db = getDb();
     await db.update(deviceSession).set({ revokedAt: new Date() }).where(eq(deviceSession.id, id));
@@ -74,5 +85,15 @@ export class DrizzleSessionRepository implements SessionRepository {
   async touchLastSeen(id: string): Promise<void> {
     const db = getDb();
     await db.update(deviceSession).set({ lastSeenAt: new Date() }).where(eq(deviceSession.id, id));
+  }
+
+  async listActiveForUser(userId: string, now: Date): Promise<SessionRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(deviceSession)
+      .where(and(eq(deviceSession.userId, userId), isNull(deviceSession.revokedAt), gt(deviceSession.expiresAt, now)))
+      .orderBy(desc(deviceSession.lastSeenAt));
+    return rows.map(toRecord);
   }
 }

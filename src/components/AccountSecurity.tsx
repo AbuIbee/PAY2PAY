@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/ui/apiFetch";
 
@@ -16,13 +17,6 @@ interface MfaStatus {
  * project (and adding one is out of this sprint's scope) — the TOTP secret
  * and otpauth URI are shown as plain text/code, which any authenticator app
  * can still accept via manual entry.
- *
- * Device-session list/revoke is NOT built here: SessionRepository (see
- * src/lib/auth/authService.ts) has no list-by-user method at all, only
- * findByTokenHash/insert/revoke/revokeAllForUser — there is no backend
- * capability to build a thin route on top of without inventing a new
- * repository method, which is out of this sprint's "don't materially expand
- * backend scope" boundary. Flagged as a real gap, not silently dropped.
  */
 export function AccountSecurity() {
   const [state, setState] = useState<LoadState>("loading");
@@ -97,15 +91,147 @@ export function AccountSecurity() {
         {mode === "sms" && <SmsEnroll onDone={() => { setMode("idle"); void refresh(); }} onCancel={() => setMode("idle")} />}
       </div>
 
-      <div className="card">
-        <div className="card__header">
-          <h2>Signed-in devices</h2>
-        </div>
-        <p style={{ color: "var(--ink-soft)" }}>
-          Device and session management isn&apos;t available yet — this account only supports signing out via the
-          navigation menu&apos;s Log out action, which ends your current session.
-        </p>
+      <SignedInDevices />
+    </div>
+  );
+}
+
+interface SessionSummary {
+  id: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+  isCurrent: boolean;
+}
+
+/**
+ * PRSprint 06 (docs/prsprints/PRSPRINT_06_AUTHENTICATION_SESSION_HARDENING.md): "Device/session
+ * visibility" and self-service "log out everywhere" — the gap this component's Sprint 18B doc
+ * comment previously flagged as deliberately not built (no list-by-user repository method
+ * existed). Now backed by GET/POST /api/account/sessions*.
+ */
+function SignedInDevices() {
+  const router = useRouter();
+  const [state, setState] = useState<LoadState>("loading");
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  async function refresh() {
+    try {
+      const body = await apiFetch<{ sessions: SessionSummary[] }>("/api/account/sessions");
+      setSessions(body.sessions);
+      setState("ready");
+    } catch {
+      setState("error");
+    }
+  }
+
+  useEffect(() => {
+    void (async () => {
+      await refresh();
+    })();
+  }, []);
+
+  async function handleRevoke(sessionId: string, isCurrent: boolean) {
+    setErrorMessage(null);
+    setPendingId(sessionId);
+    try {
+      await apiFetch("/api/account/sessions/revoke", { method: "POST", body: JSON.stringify({ sessionId }) });
+      if (isCurrent) {
+        router.push("/login");
+        router.refresh();
+        return;
+      }
+      await refresh();
+    } catch {
+      setErrorMessage("Couldn't sign out that device. Please try again.");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  async function handleLogoutAll() {
+    setErrorMessage(null);
+    setLoggingOutAll(true);
+    try {
+      await apiFetch("/api/account/sessions/logout-all", { method: "POST" });
+      router.push("/login");
+      router.refresh();
+    } catch {
+      setErrorMessage("Couldn't sign out of all devices. Please try again.");
+      setLoggingOutAll(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <h2>Signed-in devices</h2>
+        {sessions.length > 1 && (
+          <button type="button" className="button button--ghost" onClick={() => void handleLogoutAll()} disabled={loggingOutAll}>
+            {loggingOutAll ? "Signing out everywhere…" : "Log out of all devices"}
+          </button>
+        )}
       </div>
+
+      {state === "loading" && (
+        <div aria-hidden="true">
+          <div className="skeleton skeleton--line" style={{ width: "60%" }} />
+        </div>
+      )}
+
+      {state === "error" && (
+        <p className="form-status form-status--error" role="alert">
+          Something went wrong loading your signed-in devices. Please try again.
+        </p>
+      )}
+
+      {errorMessage && (
+        <p className="field-error" role="alert">
+          {errorMessage}
+        </p>
+      )}
+
+      {state === "ready" && (
+        <ul style={{ listStyle: "none", margin: "1rem 0 0", padding: 0, display: "grid", gap: "0.75rem" }}>
+          {sessions.map((session) => (
+            <li
+              key={session.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: "1rem",
+                padding: "0.75rem",
+                border: "1px solid var(--border-soft)",
+                borderRadius: "0.5rem",
+              }}
+            >
+              <div>
+                <div>
+                  {session.userAgent ?? "Unknown device"}{" "}
+                  {session.isCurrent && <span className="chip chip--success">This device</span>}
+                </div>
+                <small style={{ color: "var(--ink-soft)" }}>
+                  {session.ipAddress ?? "Unknown location"} · last active {new Date(session.lastSeenAt).toLocaleString()}
+                </small>
+              </div>
+              <button
+                type="button"
+                className="button button--ghost"
+                onClick={() => void handleRevoke(session.id, session.isCurrent)}
+                disabled={pendingId === session.id}
+              >
+                {session.isCurrent ? "Sign out" : "Revoke"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

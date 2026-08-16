@@ -3,6 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountSecurity } from "./AccountSecurity";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
+
+const NO_SESSIONS = { sessions: [] };
+
 describe("AccountSecurity", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -13,6 +19,9 @@ describe("AccountSecurity", () => {
     const fetchMock = vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
       if (input === "/api/auth/mfa/status") {
         return { ok: true, status: 200, json: async () => ({ enrolled: confirmed, methods: confirmed ? ["totp"] : [] }) };
+      }
+      if (input === "/api/account/sessions") {
+        return { ok: true, status: 200, json: async () => NO_SESSIONS };
       }
       if (input === "/api/auth/mfa/totp/enroll" && init?.method === "POST") {
         return { ok: true, status: 200, json: async () => ({ secret: "ABCD1234", otpauthUri: "otpauth://totp/PAY2PAY?secret=ABCD1234" }) };
@@ -45,12 +54,43 @@ describe("AccountSecurity", () => {
     expect(await screen.findByText(/^enabled$/i)).toBeInTheDocument();
   });
 
-  it("notes that device-session management is not available", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ enrolled: false, methods: [] }) }),
-    );
+  // PRSprint 06 (docs/prsprints/PRSPRINT_06_AUTHENTICATION_SESSION_HARDENING.md): device/session
+  // visibility replaced the old "isn't available yet" placeholder this test used to assert on.
+  it("lists signed-in devices, marks the current one, and can revoke another device", async () => {
+    let sessions = [
+      { id: "session-current", createdAt: "2026-01-01T00:00:00Z", lastSeenAt: "2026-01-02T00:00:00Z", expiresAt: "2026-02-01T00:00:00Z", ipAddress: "203.0.113.1", userAgent: "Chrome on macOS", isCurrent: true },
+      { id: "session-other", createdAt: "2026-01-01T00:00:00Z", lastSeenAt: "2026-01-01T12:00:00Z", expiresAt: "2026-02-01T00:00:00Z", ipAddress: "198.51.100.2", userAgent: "Safari on iPhone", isCurrent: false },
+    ];
+    const fetchMock = vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
+      if (input === "/api/auth/mfa/status") {
+        return { ok: true, status: 200, json: async () => ({ enrolled: false, methods: [] }) };
+      }
+      if (input === "/api/account/sessions") {
+        return { ok: true, status: 200, json: async () => ({ sessions }) };
+      }
+      if (input === "/api/account/sessions/revoke" && init?.method === "POST") {
+        const { sessionId } = JSON.parse(init.body as string) as { sessionId: string };
+        sessions = sessions.filter((s) => s.id !== sessionId);
+        return { ok: true, status: 200, json: async () => ({ status: "session_revoked" }) };
+      }
+      throw new Error(`Unhandled fetch: ${input}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
     render(<AccountSecurity />);
-    expect(await screen.findByText(/device and session management isn't available yet/i)).toBeInTheDocument();
+    expect(await screen.findByText("Chrome on macOS")).toBeInTheDocument();
+    expect(screen.getByText("Safari on iPhone")).toBeInTheDocument();
+    expect(screen.getByText("This device")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^revoke$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Safari on iPhone")).not.toBeInTheDocument();
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/account/sessions/revoke",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ sessionId: "session-other" }) }),
+    );
   });
 });

@@ -152,3 +152,53 @@ Covers every item in the sprint's required test list: signup, verification, logi
 password, logout, reset, session persistence, session revocation, protected routes, under-18
 rejection, cross-account isolation, TOTP enrollment, SMS-fallback-only-when-nothing-else-enrolled,
 sensitive-action-blocked-with-no-MFA, server-enforced step-up, step-up expiry, and no-silent-bypass.
+
+## 8. PRSprint 06 additions (Authentication & Session Hardening)
+
+`docs/prsprints/PRSPRINT_06_AUTHENTICATION_SESSION_HARDENING.md`. Reviewed everything built above
+against that PRSprint's scope (signup/login/logout/session persistence, expiration, single-use
+expiring password reset, enumeration protection, session revocation/logout-all, device/session
+visibility, MFA/step-up for high-risk actions, secure cookie settings) and Sprint 18C
+production-readiness requirements 40–42 and 110–112. Most of that scope was already built and
+tested in Sprint 2/6A/18B (see §§3–4 and 6 above, plus §5's already-tracked gaps) and needed no
+further change here. Two concrete, previously-untested gaps were closed:
+
+1. **Device/session visibility + self-service revocation ("log out everywhere") — was entirely
+   unbuilt.** `AccountSecurity.tsx`'s own doc comment previously flagged this explicitly: the
+   `SessionRepository` interface had no list-by-user method, only
+   `findByTokenHash`/`insert`/`revoke`/`revokeAllForUser`. Added `listActiveForUser(userId, now)`
+   and `findById(id)` to the repository interface (implemented in both
+   `DrizzleSessionRepository` and the in-memory test fake), and three new `AuthService` methods —
+   `listSessions`, `revokeSession` (ownership-checked; throws the same `AuthenticationError` for
+   "not found" and "belongs to someone else," so an IDOR guess gets no distinguishing signal, the
+   same enumeration-resistance pattern login already uses), and `revokeAllSessions` ("log out
+   everywhere," including the session that made the request). New self-service API surface: `GET
+   /api/account/sessions`, `POST /api/account/sessions/revoke`, `POST
+   /api/account/sessions/logout-all`. The Security page's "Signed-in devices" card now lists real
+   sessions (device/IP/last-active, current-device badge) with per-session revoke and a "log out
+   of all devices" action, replacing the placeholder text.
+2. **Three high-risk admin actions had no step-up requirement, unlike role-change and
+   impersonation-start.** `AdminService.suspendUser`, `reactivateUser`, and `revokeUserSessions`
+   (disabling/re-enabling an account and forcibly signing someone out) previously required only
+   platform-admin/owner authorization, no fresh MFA step-up — inconsistent with `changeUserRole`
+   and `startImpersonation`, which already did, and with requirement 40/111's "high-risk
+   operations... stronger authentication" and "Platform Owner account... MFA." Extracted the
+   existing step-up check into a shared `requireFreshStepUp` helper and applied it to all five
+   sensitive `AdminService` mutations uniformly.
+
+**Reviewed, deliberately not changed:** session "refresh"/sliding expiration was reviewed and
+intentionally left as a fixed 30-day absolute TTL (`SESSION_TTL_MS`) rather than adding
+silent-extension-on-activity — `device_session.last_seen_at` already gives visibility into recency
+without weakening the hard expiry, and a sliding window would need every one of this app's ~170
+authenticated routes to reissue a cookie, a materially larger and riskier change than this
+PRSprint's other items. Cookie settings (`httpOnly`, `secure` outside development, `sameSite:
+"lax"`) were re-reviewed against requirement 138/142 and found already correct, unchanged since
+Sprint 2. "No shared admin credentials" (requirement 112) is satisfied by construction, not a new
+check: every admin action already re-derives its actor from the trusted, DB-sourced session
+identity (never a client-supplied value), there is no generic/shared admin login path anywhere in
+this codebase, and every audit record already carries the real `actorUserId`.
+
+## 9. API surface added this PRSprint
+
+`GET /api/account/sessions`, `POST /api/account/sessions/revoke`, `POST
+/api/account/sessions/logout-all`.
