@@ -158,7 +158,15 @@ export class AdminService {
     await this.recordAdminAudit(ctx, "admin_user_reactivated", targetUserId, reason, { status: "active" });
   }
 
-  async revokeUserSessions(ctx: ActingContext, targetUserId: string, reason: string | null): Promise<void> {
+  /**
+   * PRSprint 07 (docs/prsprints/PRSPRINT_07_PLATFORM_OWNER_ADMIN_SUPPORT_CONTROLS.md): reason is now
+   * mandatory (was optional/nullable) — forcibly signing a user out of every device is exactly as
+   * sensitive as suspend/reactivate/role-change, which have always required a reason; there is no
+   * principled basis for this one action alone to skip it. Enforced by the route's zod schema
+   * (`min(1)`, matching suspend/reactivate/role-change's own validation), not re-checked here, for
+   * the same reason those three don't re-check it in the service either.
+   */
+  async revokeUserSessions(ctx: ActingContext, targetUserId: string, reason: string): Promise<void> {
     await this.authorizeMutableTarget(ctx, targetUserId);
     await this.requireFreshStepUp(ctx, "admin_sessions_revoke");
     await this.deps.sessions.revokeAllForUser(targetUserId);

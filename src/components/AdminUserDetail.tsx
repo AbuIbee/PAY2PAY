@@ -195,13 +195,13 @@ export function AdminUserDetail() {
             <button
               type="button"
               className="button button--ghost"
-              disabled={actionStatus === "working"}
+              disabled={actionStatus === "working" || !reason.trim()}
               onClick={() =>
                 void runAction(() =>
                   fetch("/api/admin/users/revoke-sessions", {
                     method: "POST",
                     headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ targetUserId: data.id, reason: reason || undefined }),
+                    body: JSON.stringify({ targetUserId: data.id, reason }),
                   }),
                 )
               }
