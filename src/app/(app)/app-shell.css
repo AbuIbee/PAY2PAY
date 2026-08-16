@@ -25,6 +25,11 @@
   color: var(--white);
 }
 .app-nav__brand { display: inline-flex; align-items: center; gap: 0.6rem; font-weight: 850; letter-spacing: -0.03em; color: var(--white); text-decoration: none; }
+.app-nav__header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.app-nav__close { display: none; padding: 0.4rem 0.7rem; border: 1px solid rgba(255,255,255,0.25); border-radius: 0.5rem; background: transparent; color: var(--white); font-weight: 650; cursor: pointer; }
+@media (max-width: 62rem) {
+  .app-nav__close { display: inline-block; }
+}
 .app-nav__section { display: grid; gap: var(--space-1); }
 .app-nav__section-label { padding: 0 var(--space-3); color: #9bd6c7; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
 .app-nav__link {
@@ -62,6 +67,22 @@
   background: rgba(255,255,255,0.95);
   backdrop-filter: blur(12px);
 }
+.app-topbar__brand { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 850; letter-spacing: -0.03em; color: var(--forest-950); text-decoration: none; }
+.app-topbar__actions { display: flex; align-items: center; gap: var(--space-2); }
+.app-topbar__button {
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.6rem;
+  background: var(--white);
+  color: var(--ink);
+  font-weight: 650;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.app-topbar__button:hover { border-color: var(--forest-700); }
+/* Always-visible on mobile, independent of the menu drawer below — Sign Out must never require discovering a hamburger menu first (PRSprint 10A). */
+.app-topbar__logout { border-color: #d99a92; color: #8c2f26; }
+.app-topbar__logout:hover { background: #fbe9e7; }
 
 .app-main-col { min-width: 0; }
 .app-page { padding: var(--space-8) var(--space-6) var(--space-16); max-width: 68rem; }
@@ -161,6 +182,22 @@
 @media (max-width: 62rem) {
   .app-authed { grid-template-columns: 1fr; }
   .app-nav { display: none; }
+  /*
+   * PRSprint 10A (docs/prsprints/PRSPRINT_10A_AUTHENTICATION_SIGNOUT_UI_REMEDIATION.md): root
+   * cause of the missing mobile Sign Out — `.app-topbar` below was already styled here, but no
+   * component ever rendered it, so the entire nav (the only place Sign Out lived) simply
+   * vanished below this breakpoint with nothing replacing it. `.app-nav--mobile-open` is the
+   * fix's other half: when the topbar's menu button is toggled, AppNav.tsx adds this class,
+   * turning the same nav content into a full-screen drawer instead of leaving it `display:none`.
+   */
+  .app-nav--mobile-open {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    height: 100vh;
+    width: 100%;
+  }
   .app-topbar { display: flex; }
   .app-page { padding: var(--space-6) var(--space-4) var(--space-12); }
 }

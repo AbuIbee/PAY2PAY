@@ -68,6 +68,10 @@ export function AccountDashboard() {
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
+    // PRSprint 10A: matches AppNav.tsx's own logout handler — forces Next's client-side Router
+    // Cache to drop any already-rendered protected-page segments, so a same-tab navigation right
+    // after logout can never serve stale cached content instead of re-checking the session.
+    router.refresh();
   }
 
   async function handleResendVerification() {
