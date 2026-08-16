@@ -183,6 +183,13 @@
       "when": 1786909559753,
       "tag": "0025_fluffy_garia",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1786921729814,
+      "tag": "0026_pink_annihilus",
+      "breakpoints": true
     }
   ]
 }

@@ -33,7 +33,8 @@ export type NotificationEventType =
   | "relationship_restricted"
   | "relationship_funding_account_replaced"
   | "relationship_payout_account_replaced"
-  | "appeal_decided";
+  | "appeal_decided"
+  | "agreement_invitation_response";
 
 /**
  * "Critical notifications cannot be disabled" (this sprint's own instruction, verbatim). Master spec
@@ -68,6 +69,13 @@ export type NotificationEventType =
  * email" requirement for appeal decisions, and a decision directly changes whether a restriction on
  * the user's account stays in place, the same "real financial/access harm if silently missed" bar
  * `account_restriction`/`relationship_restricted` are already held to.
+ *
+ * PRSprint 10 adds `agreement_invitation_response` (accept/decline/request-changes on a
+ * pre-agreement proposal) as non-critical — mirrors `relationship_accepted`/`relationship_declined`:
+ * a cooperative-negotiation lifecycle event the other party must still separately act on, not money
+ * moving unnoticed. `agreement_invitation` (the invitation-created event) already existed (Sprint
+ * 17) and is reused unchanged for the "notify an existing recognized user" path — see
+ * `AgreementInvitationService.createInvitation`.
  */
 export const CRITICAL_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = new Set<NotificationEventType>([
   "payment_failed",
@@ -124,6 +132,7 @@ export const DEFAULT_CHANNELS: Record<NotificationEventType, readonly Notificati
   relationship_funding_account_replaced: ["email", "sms", "in_app"],
   relationship_payout_account_replaced: ["email", "sms", "in_app"],
   appeal_decided: ["email", "sms", "in_app"],
+  agreement_invitation_response: ["email", "in_app"],
 };
 
 export function isNotificationEventType(value: string): value is NotificationEventType {

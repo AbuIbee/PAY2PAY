@@ -218,4 +218,14 @@ export const NOTIFICATION_TEMPLATES: Record<NotificationEventType, NotificationT
       inAppBody: `Your appeal decision: ${decision}.`,
     };
   },
+  agreement_invitation_response: (p) => {
+    const action = str(p, "action", "responded");
+    const label = action === "accepted" ? "accepted your proposal" : action === "declined" ? "declined your proposal" : "requested changes to your proposal";
+    return {
+      subject: "There's an update on your payment plan proposal",
+      emailBody: `The recipient of your payment plan proposal has ${label}.`,
+      smsBody: `PAY2PAY: your proposal was ${action === "accepted" ? "accepted" : action === "declined" ? "declined" : "countered"}.`,
+      inAppBody: `Your proposal recipient has ${label}.`,
+    };
+  },
 };
