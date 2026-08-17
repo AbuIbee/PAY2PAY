@@ -141,6 +141,10 @@ export class InMemoryBusinessProfileRepository implements BusinessProfileReposit
     const record = this.byId.get(id);
     if (record) record.status = status;
   }
+
+  async updateStatus(id: string, status: BusinessProfileStatus): Promise<void> {
+    this.setStatus(id, status);
+  }
 }
 
 export function createTestBusinessProfileService() {

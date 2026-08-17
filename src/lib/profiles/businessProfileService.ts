@@ -30,6 +30,14 @@ export interface BusinessProfileRepository {
   }): Promise<BusinessProfileRecord>;
   findById(id: string): Promise<BusinessProfileRecord | null>;
   listByOwner(ownerUserId: string): Promise<BusinessProfileRecord[]>;
+  /**
+   * PRSprint 11B (docs/prsprints/PRSPRINT_11B_ADMIN_CONSOLE_CONTROLLED_SUPPORT_ACCESS.md): no
+   * production code path could change a business profile's lifecycle status at all before this —
+   * `status` only ever existed as a schema column and a test-only in-memory helper
+   * (InMemoryBusinessProfileRepository.setStatus). Added so AdminService can suspend/reactivate a
+   * business the same way it already does for a user account.
+   */
+  updateStatus(id: string, status: BusinessProfileStatus): Promise<void>;
 }
 
 /**

@@ -90,6 +90,7 @@ export function AdminAuditLog() {
                     <th>When</th>
                     <th>Action</th>
                     <th>Actor</th>
+                    <th>Target</th>
                     <th>Reason</th>
                   </tr>
                 </thead>
@@ -100,6 +101,10 @@ export function AdminAuditLog() {
                       <td data-label="Action">{event.action}</td>
                       <td data-label="Actor">
                         {event.actorUserId} ({event.actorRole})
+                      </td>
+                      <td data-label="Target">
+                        {event.targetResourceType ?? "—"}
+                        {event.targetResourceId ? ` (${event.targetResourceId})` : ""}
                       </td>
                       <td data-label="Reason">{event.reason ?? "—"}</td>
                     </tr>

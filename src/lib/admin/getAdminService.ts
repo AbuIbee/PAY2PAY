@@ -4,7 +4,9 @@ import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventReposi
 import { DrizzleSessionRepository } from "@/lib/auth/drizzleSessionRepository";
 import { DrizzleUserAccountRepository } from "@/lib/auth/drizzleUserAccountRepository";
 import { getMfaService } from "@/lib/auth/getMfaService";
+import { DrizzleBusinessProfileRepository } from "@/lib/profiles/drizzleBusinessProfileRepository";
 import { AdminService } from "./adminService";
+import { DrizzleAdminBusinessDirectoryReader } from "./drizzleAdminBusinessDirectoryReader";
 import { DrizzleAdminImpersonationSessionRepository } from "./drizzleAdminImpersonationSessionRepository";
 import { DrizzleAdminOverviewReader } from "./drizzleAdminOverviewReader";
 import { DrizzleAdminUserDirectoryReader } from "./drizzleAdminUserDirectoryReader";
@@ -24,6 +26,8 @@ export function getAdminService(): AdminService {
       directory: new DrizzleAdminUserDirectoryReader(),
       impersonationSessions: new DrizzleAdminImpersonationSessionRepository(),
       environmentStatus: new RealEnvironmentStatusReader(),
+      businesses: new DrizzleBusinessProfileRepository(),
+      businessDirectory: new DrizzleAdminBusinessDirectoryReader(),
     });
   }
   return cached;

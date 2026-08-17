@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { adminImpersonationSession } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -36,5 +36,17 @@ export class DrizzleAdminImpersonationSessionRepository implements AdminImperson
   async markEnded(id: string, endedAt: Date): Promise<void> {
     const db = getDb();
     await db.update(adminImpersonationSession).set({ endedAt }).where(eq(adminImpersonationSession.id, id));
+  }
+
+  async findActiveForAdmin(adminUserId: string): Promise<AdminImpersonationSessionRecord | null> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(adminImpersonationSession)
+      .where(and(eq(adminImpersonationSession.adminUserId, adminUserId), isNull(adminImpersonationSession.endedAt)))
+      .orderBy(desc(adminImpersonationSession.startedAt))
+      .limit(1);
+    const row = rows[0];
+    return row ? toRecord(row) : null;
   }
 }
