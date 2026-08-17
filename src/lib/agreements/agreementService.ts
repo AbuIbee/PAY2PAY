@@ -1,5 +1,7 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
+import { logger } from "@/lib/logger";
+import type { NotificationService } from "@/lib/notify/notificationService";
 import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
@@ -206,6 +208,14 @@ export interface AgreementServiceDeps {
   staffService: StaffService;
   audit: AuditService;
   signing: SigningApplicationRepository;
+  /**
+   * PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md): optional, mirroring
+   * PaymentWebhookService's own identical `notifications?`/`profileOwners` precedent — every caller
+   * that omits it (most existing tests) is unaffected, and every notification call this class makes
+   * is wrapped in its own try/catch (see `notifyParty`) so a notification-layer failure can never
+   * fail the agreement-lifecycle transaction it was reporting on.
+   */
+  notifications?: NotificationService;
 }
 
 export interface CreateDraftInput {
@@ -386,7 +396,8 @@ export class AgreementService {
     await this.authorizeEitherParty(agreement, actingUserId, null);
     this.requireStatus(agreement, "draft");
     await this.deps.agreements.updateStatus(agreement.id, "awaiting_debtor_acknowledgment");
-    await this.recordAudit(agreement.id, actingUserId, "agreement_submitted", null);
+    const auditId = await this.recordAudit(agreement.id, actingUserId, "agreement_submitted", null);
+    await this.notifyParty(agreement, "debtor", "agreement_action_required", { stage: "acknowledge_debt" }, auditId);
   }
 
   /** FR-AGR-003 — a distinct, attributable event, separate from creation and from signing. */
@@ -395,7 +406,8 @@ export class AgreementService {
     await this.authorizeAsRole(agreement, "debtor", actingUserId, null);
     this.requireStatus(agreement, "awaiting_debtor_acknowledgment");
     await this.deps.agreements.updateStatus(agreement.id, "awaiting_creditor_acceptance");
-    await this.recordAudit(agreement.id, actingUserId, "debtor_acknowledged", null);
+    const auditId = await this.recordAudit(agreement.id, actingUserId, "debtor_acknowledged", null);
+    await this.notifyParty(agreement, "creditor", "agreement_action_required", { stage: "decide" }, auditId);
   }
 
   /** FR-AGR-004 — accept/reject/counter, each a distinct, attributable event separate from signing. */
@@ -412,13 +424,15 @@ export class AgreementService {
 
     if (input.decision === "accept") {
       await this.deps.agreements.updateStatus(agreement.id, "awaiting_signatures");
-      await this.recordAudit(agreement.id, input.actingUserId, "creditor_accepted", null);
+      const auditId = await this.recordAudit(agreement.id, input.actingUserId, "creditor_accepted", null);
+      await this.notifyParty(agreement, "debtor", "agreement_decided", { decision: "accepted" }, auditId);
       return;
     }
 
     if (input.decision === "reject") {
       await this.deps.agreements.updateStatus(agreement.id, "draft");
-      await this.recordAudit(agreement.id, input.actingUserId, "creditor_rejected", { reason: input.reason ?? null });
+      const auditId = await this.recordAudit(agreement.id, input.actingUserId, "creditor_rejected", { reason: input.reason ?? null });
+      await this.notifyParty(agreement, "debtor", "agreement_decided", { decision: "rejected" }, auditId);
       return;
     }
 
@@ -449,7 +463,8 @@ export class AgreementService {
     });
     await this.deps.scheduleItems.replaceForVersion(version.id, computed.items);
     await this.deps.agreements.updateStatus(agreement.id, "draft");
-    await this.recordAudit(agreement.id, input.actingUserId, "creditor_countered", null);
+    const auditId = await this.recordAudit(agreement.id, input.actingUserId, "creditor_countered", null);
+    await this.notifyParty(agreement, "debtor", "agreement_action_required", { stage: "review_counter" }, auditId);
   }
 
   /**
@@ -681,8 +696,58 @@ export class AgreementService {
     }
   }
 
-  private async recordAudit(agreementId: string, actorUserId: string, action: string, newValue: unknown): Promise<void> {
-    await this.deps.audit.record({
+  /**
+   * PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md): notifies the given party
+   * role's *account owner* (never every business-staff member — mirrors every other cross-service
+   * notification call site in this codebase, e.g. PaymentWebhookService.notifyPaymentStatus). Called
+   * only after the state-machine write it's reporting on has already committed, and never allowed to
+   * fail that write: `deps.notifications` is optional (silently a no-op if absent, matching every
+   * other caller's own graceful-degradation precedent) and every call is wrapped in its own
+   * try/catch — a notification-layer failure is logged, never thrown, so it can never undo or block
+   * the agreement transition it was reporting on.
+   */
+  private async notifyParty(
+    agreement: AgreementRecord,
+    role: PartyRole,
+    notificationType: "agreement_action_required" | "agreement_decided",
+    payload: Record<string, unknown>,
+    auditEventId: number,
+  ): Promise<void> {
+    if (!this.deps.notifications) return;
+    try {
+      const profile: ProfileRef =
+        role === "creditor"
+          ? { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId }
+          : { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId };
+      const recipientUserId = await this.deps.profileOwners.getOwnerUserId(profile.kind, profile.id);
+      if (!recipientUserId) return;
+      await this.deps.notifications.notify({
+        recipientUserId,
+        notificationType,
+        relatedAgreementId: agreement.id,
+        payload,
+        dedupeKey: `${notificationType}:${agreement.id}:audit:${auditEventId}:${recipientUserId}`,
+      });
+    } catch (error) {
+      logger.error("agreement_notification_failed", {
+        agreementId: agreement.id,
+        notificationType,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Returns the created audit event's own id — PRSprint 13 uses this as the natural
+   * "this specific transition instance" uniqueness marker for its notification dedupeKeys (see
+   * `notifyParty`), since an agreement can legitimately cycle through the same statuses multiple
+   * times across a multi-round negotiation (each `creditorDecide` counter sends the debtor back to
+   * "draft", from which they may `submitDraft` again), so a key scoped only to
+   * type+agreement+status would wrongly deduplicate away later, equally-legitimate rounds — the
+   * append-only audit trail already gives every call here its own distinct identity for free.
+   */
+  private async recordAudit(agreementId: string, actorUserId: string, action: string, newValue: unknown): Promise<number> {
+    const event = await this.deps.audit.record({
       actorUserId,
       actorRole: "agreement_party",
       profileKind: null,
@@ -699,5 +764,6 @@ export class AgreementService {
       relatedDocumentId: null,
       relatedCaseId: null,
     });
+    return event.id;
   }
 }

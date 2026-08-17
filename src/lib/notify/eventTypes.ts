@@ -34,7 +34,11 @@ export type NotificationEventType =
   | "relationship_funding_account_replaced"
   | "relationship_payout_account_replaced"
   | "appeal_decided"
-  | "agreement_invitation_response";
+  | "agreement_invitation_response"
+  | "agreement_action_required"
+  | "agreement_decided"
+  | "agreement_counterparty_signed"
+  | "amendment_decided";
 
 /**
  * "Critical notifications cannot be disabled" (this sprint's own instruction, verbatim). Master spec
@@ -76,6 +80,30 @@ export type NotificationEventType =
  * moving unnoticed. `agreement_invitation` (the invitation-created event) already existed (Sprint
  * 17) and is reused unchanged for the "notify an existing recognized user" path — see
  * `AgreementInvitationService.createInvitation`.
+ *
+ * PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md) adds four types closing a
+ * real gap this PRSprint's own audit found: `AgreementService`, `AmendmentService`, and
+ * `SignatureService` — the three services actually driving an agreement/amendment/signature through
+ * its state machine once it exists — never called `NotificationService.notify` at all before this,
+ * despite `agreement_signed`/`amendment` already existing in this taxonomy for exactly that purpose
+ * (only the pre-agreement *invitation* layer, `AgreementInvitationService`/`RelationshipService`, was
+ * wired). All four are non-critical, mirroring `amendment`'s own classification: each still requires
+ * the recipient to actively review/sign/decide within its own workflow before anything takes effect,
+ * so missing the notification specifically doesn't let anything happen unnoticed.
+ * - `agreement_action_required`: the *other* party must now act (submit → debtor must acknowledge;
+ *   acknowledge → creditor must decide; counter → debtor must review new terms) — mirrors
+ *   `amendment`'s own "awaiting your review" framing for the pre-signature negotiation phase of a
+ *   direct (non-invitation) agreement between two already-registered users.
+ * - `agreement_decided`: the creditor's accept/reject decision, told to the debtor who submitted/
+ *   acknowledged and is waiting to hear it.
+ * - `agreement_counterparty_signed`: one party has signed and the *other* has not yet — reused for
+ *   both the main agreement and an amendment's own signature step (payload `context: "agreement" |
+ *   "amendment"` distinguishes copy), since "your counterparty signed, you're up" is the same
+ *   user-facing moment either way, and this taxonomy avoids inventing a near-duplicate type for what
+ *   amendments already do with their own sign-off.
+ * - `amendment_decided`: the counterparty's accept/reject decision on a proposed amendment, and the
+ *   amendment's own completion ("now applied, a new agreement version is active") — told to the
+ *   proposer, mirroring `agreement_decided`'s identical shape for the main agreement.
  */
 export const CRITICAL_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = new Set<NotificationEventType>([
   "payment_failed",
@@ -133,6 +161,10 @@ export const DEFAULT_CHANNELS: Record<NotificationEventType, readonly Notificati
   relationship_payout_account_replaced: ["email", "sms", "in_app"],
   appeal_decided: ["email", "sms", "in_app"],
   agreement_invitation_response: ["email", "in_app"],
+  agreement_action_required: ["email", "in_app"],
+  agreement_decided: ["email", "in_app"],
+  agreement_counterparty_signed: ["email", "in_app"],
+  amendment_decided: ["email", "in_app"],
 };
 
 export function isNotificationEventType(value: string): value is NotificationEventType {

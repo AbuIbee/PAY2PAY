@@ -449,4 +449,138 @@ describe("AgreementService", () => {
       ).rejects.toThrow(ValidationError);
     });
   });
+
+  /**
+   * PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md): before this, none of
+   * submitDraft/acknowledgeDebt/creditorDecide ever called NotificationService.notify at all,
+   * despite two of the four PRSprint 13 event types (`agreement_action_required`/`agreement_decided`)
+   * existing for exactly this purpose. Uses its own local `ctx` (constructed with a real
+   * NotificationService) rather than the outer `beforeEach`'s, which deliberately omits it.
+   */
+  describe("PRSprint 13: notification wiring", () => {
+    async function setupNotifiedAgreement() {
+      const { createTestNotificationService } = await import("@/lib/notify/testFakes");
+      const notifyCtx = createTestNotificationService();
+      const localCtx = createTestAgreementService(undefined, notifyCtx.notificationService);
+      const creditorUserId = randomUUID();
+      const debtorUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      const debtorProfileId = randomUUID();
+      localCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+      localCtx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+      notifyCtx.contacts.set(creditorUserId, "creditor@example.com");
+      notifyCtx.contacts.set(debtorUserId, "debtor@example.com");
+      const created = await localCtx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      return { localCtx, notifyCtx, created, creditorUserId, debtorUserId };
+    }
+
+    it("submitDraft notifies the debtor (recipient resolution: creditor → debtor)", async () => {
+      const { localCtx, notifyCtx, created, debtorUserId } = await setupNotifiedAgreement();
+      await localCtx.agreementService.submitDraft(created.agreement.id, created.agreement.createdByUserId);
+      const debtorNotifications = await notifyCtx.notificationService.listForUser(debtorUserId);
+      expect(debtorNotifications.some((n) => n.notificationType === "agreement_action_required")).toBe(true);
+      expect(debtorNotifications.every((n) => n.relatedAgreementId === created.agreement.id)).toBe(true);
+    });
+
+    it("acknowledgeDebt notifies the creditor (recipient resolution: debtor → creditor)", async () => {
+      const { localCtx, notifyCtx, created, creditorUserId, debtorUserId } = await setupNotifiedAgreement();
+      await localCtx.agreementService.submitDraft(created.agreement.id, created.agreement.createdByUserId);
+      await localCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+      const creditorNotifications = await notifyCtx.notificationService.listForUser(creditorUserId);
+      expect(creditorNotifications.some((n) => n.notificationType === "agreement_action_required")).toBe(true);
+    });
+
+    it("creditorDecide(accept) notifies the debtor with decision=accepted", async () => {
+      const { localCtx, notifyCtx, created, creditorUserId, debtorUserId } = await setupNotifiedAgreement();
+      await localCtx.agreementService.submitDraft(created.agreement.id, created.agreement.createdByUserId);
+      await localCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+      await localCtx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
+      const debtorNotifications = await notifyCtx.notificationService.listForUser(debtorUserId);
+      const decided = debtorNotifications.find((n) => n.notificationType === "agreement_decided");
+      expect(decided?.payload).toMatchObject({ decision: "accepted" });
+    });
+
+    it("creditorDecide(reject) notifies the debtor with decision=rejected", async () => {
+      const { localCtx, notifyCtx, created, creditorUserId, debtorUserId } = await setupNotifiedAgreement();
+      await localCtx.agreementService.submitDraft(created.agreement.id, created.agreement.createdByUserId);
+      await localCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+      await localCtx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "reject", reason: "no" });
+      const debtorNotifications = await notifyCtx.notificationService.listForUser(debtorUserId);
+      const decided = debtorNotifications.find((n) => n.notificationType === "agreement_decided");
+      expect(decided?.payload).toMatchObject({ decision: "rejected" });
+    });
+
+    it("creditorDecide(counter) notifies the debtor to review new terms, and a SECOND counter round after resubmission produces a distinct, non-deduplicated notification", async () => {
+      const { localCtx, notifyCtx, created, creditorUserId, debtorUserId } = await setupNotifiedAgreement();
+      await localCtx.agreementService.submitDraft(created.agreement.id, created.agreement.createdByUserId);
+      await localCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+      await localCtx.agreementService.creditorDecide({
+        agreementId: created.agreement.id,
+        actingUserId: creditorUserId,
+        decision: "counter",
+        counterTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      });
+      // Second round: debtor resubmits, acknowledges again is N/A (debtor already the one who must
+      // review) — instead simulate the natural next round via submitDraft → acknowledgeDebt → counter again.
+      await localCtx.agreementService.submitDraft(created.agreement.id, creditorUserId);
+      await localCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+      await localCtx.agreementService.creditorDecide({
+        agreementId: created.agreement.id,
+        actingUserId: creditorUserId,
+        decision: "counter",
+        counterTerms: baseTerms({ installmentAmountMinorUnits: 10_000 }),
+      });
+      const debtorNotifications = (await notifyCtx.notificationService.listForUser(debtorUserId)).filter(
+        (n) => n.notificationType === "agreement_action_required" && n.channel === "email",
+      );
+      // Both counter rounds must be represented (one email-channel row each) — PRSprint 13's own
+      // "do not over-deduplicate legitimate distinct events" requirement.
+      const reviewCounterNotifications = debtorNotifications.filter((n) => (n.payload as { stage?: string }).stage === "review_counter");
+      expect(reviewCounterNotifications.length).toBe(2);
+    });
+
+    it("business profile recipient resolution notifies the business owner, not a bare profile id", async () => {
+      const { createTestNotificationService } = await import("@/lib/notify/testFakes");
+      const notifyCtx = createTestNotificationService();
+      const localCtx = createTestAgreementService(undefined, notifyCtx.notificationService);
+      const creditorUserId = randomUUID();
+      const businessOwnerUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      const businessProfileId = randomUUID();
+      localCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+      localCtx.profileOwners.set("business", businessProfileId, businessOwnerUserId);
+      const created = await localCtx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "business", id: businessProfileId },
+        ...baseTerms(),
+      });
+      await localCtx.agreementService.submitDraft(created.agreement.id, creditorUserId);
+      const ownerNotifications = await notifyCtx.notificationService.listForUser(businessOwnerUserId);
+      expect(ownerNotifications.some((n) => n.notificationType === "agreement_action_required")).toBe(true);
+    });
+
+    it("a notification-layer failure never fails the underlying agreement transition (failure isolation)", async () => {
+      const { localCtx, created } = await setupNotifiedAgreement();
+      // Replace the working notification service with one whose every call throws.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (localCtx.agreementService as any).deps.notifications = { notify: async () => { throw new Error("simulated_notify_outage"); } };
+      await expect(localCtx.agreementService.submitDraft(created.agreement.id, created.agreement.createdByUserId)).resolves.toBeUndefined();
+      const agreement = await localCtx.agreements.findById(created.agreement.id);
+      expect(agreement?.status).toBe("awaiting_debtor_acknowledgment");
+    });
+
+    it("no notification is generated for a failed/rejected transition attempt (retry after a rejected request creates no false notification)", async () => {
+      const { localCtx, notifyCtx, created, debtorUserId } = await setupNotifiedAgreement();
+      // Wrong actor / wrong status: acknowledgeDebt before submitDraft ever ran.
+      await expect(localCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId)).rejects.toThrow();
+      const debtorNotifications = await notifyCtx.notificationService.listForUser(debtorUserId);
+      expect(debtorNotifications).toHaveLength(0);
+    });
+  });
 });

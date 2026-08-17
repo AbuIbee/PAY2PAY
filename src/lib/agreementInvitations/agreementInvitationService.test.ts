@@ -323,6 +323,7 @@ describe("AgreementInvitationService", () => {
           amendments,
         }),
         audit: new AuditService({ getLastEvent: async () => null, insertEvent: async (r) => ({ ...r, id: 1 }) }),
+        profileOwners: ctx.agreementCtx.profileOwners,
       });
 
       // Inviter here is the creditor (default in createInvitation's helper); recipient is the debtor.

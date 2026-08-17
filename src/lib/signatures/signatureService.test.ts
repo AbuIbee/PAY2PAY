@@ -566,6 +566,7 @@ describe("SignatureService", () => {
         versions: ctx.agreementCtx.versions,
         application,
         audit: new AuditService(new InMemoryAmendmentAuditRepositoryForThisTest()),
+        profileOwners: ctx.agreementCtx.profileOwners,
       });
 
       const proposed = await amendmentService.proposeAmendment({
@@ -600,6 +601,103 @@ describe("SignatureService", () => {
       const stillThere = await ctx.agreementCtx.versions.findById(setup.versionId);
       expect(stillThere?.signedAt).toEqual(originalVersion?.signedAt);
       expect(stillThere?.documentHash).toBe(originalVersion?.documentHash);
+    });
+  });
+
+  /**
+   * PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md): before this, SignatureService
+   * never called NotificationService.notify at all, despite `agreement_signed` existing in the
+   * taxonomy since Sprint 17 for exactly this purpose. Uses its own local `notifiedCtx` (constructed
+   * with a real NotificationService) rather than the outer `beforeEach`'s, which omits it.
+   */
+  describe("PRSprint 13: notification wiring", () => {
+    async function setupNotified() {
+      const { createTestNotificationService } = await import("@/lib/notify/testFakes");
+      const notifyCtx = createTestNotificationService();
+      const notifiedCtx = createTestSignatureService(notifyCtx.notificationService);
+      const creditorUserId = randomUUID();
+      const debtorUserId = randomUUID();
+      const creditorProfileId = await seedPersonalParty(notifiedCtx, creditorUserId);
+      const debtorProfileId = await seedPersonalParty(notifiedCtx, debtorUserId);
+      const created = await notifiedCtx.agreementCtx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      await notifiedCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, creditorUserId);
+      await notifiedCtx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+      await notifiedCtx.agreementCtx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
+      const creditorSession = randomUUID();
+      const debtorSession = randomUUID();
+      await grantStepUp({ mfaCredentials: notifiedCtx.mfaCredentials, stepUps: notifiedCtx.stepUps }, creditorUserId, creditorSession);
+      await grantStepUp({ mfaCredentials: notifiedCtx.mfaCredentials, stepUps: notifiedCtx.stepUps }, debtorUserId, debtorSession);
+      await markFullyVerified(notifiedCtx, "personal", creditorProfileId);
+      await markFullyVerified(notifiedCtx, "personal", debtorProfileId);
+      return { notifiedCtx, notifyCtx, agreementId: created.agreement.id, creditorUserId, debtorUserId, creditorSession, debtorSession };
+    }
+
+    it("when only one party has signed, notifies the OTHER (unsigned) party — never the signer themself", async () => {
+      const { notifiedCtx, notifyCtx, agreementId, creditorUserId, debtorUserId, creditorSession } = await setupNotified();
+      await notifiedCtx.signatureService.sign({
+        agreementId,
+        actingUserId: creditorUserId,
+        actingSessionId: creditorSession,
+        authMethod: "totp",
+        consentVersion: "v1",
+        timezone: "UTC",
+        deviceInfo: null,
+        ipAddress: "203.0.113.10",
+      });
+      const debtorNotifications = await notifyCtx.notificationService.listForUser(debtorUserId);
+      expect(debtorNotifications.some((n) => n.notificationType === "agreement_counterparty_signed")).toBe(true);
+      const creditorNotifications = await notifyCtx.notificationService.listForUser(creditorUserId);
+      expect(creditorNotifications.some((n) => n.notificationType === "agreement_counterparty_signed")).toBe(false);
+    });
+
+    it("when both parties have signed, notifies BOTH parties of full execution", async () => {
+      const { notifiedCtx, notifyCtx, agreementId, creditorUserId, debtorUserId, creditorSession, debtorSession } = await setupNotified();
+      await notifiedCtx.signatureService.sign({
+        agreementId,
+        actingUserId: creditorUserId,
+        actingSessionId: creditorSession,
+        authMethod: "totp",
+        consentVersion: "v1",
+        timezone: "UTC",
+        deviceInfo: null,
+        ipAddress: "203.0.113.10",
+      });
+      await notifiedCtx.signatureService.sign({
+        agreementId,
+        actingUserId: debtorUserId,
+        actingSessionId: debtorSession,
+        authMethod: "totp",
+        consentVersion: "v1",
+        timezone: "UTC",
+        deviceInfo: null,
+        ipAddress: "203.0.113.20",
+      });
+      const creditorNotifications = await notifyCtx.notificationService.listForUser(creditorUserId);
+      const debtorNotifications = await notifyCtx.notificationService.listForUser(debtorUserId);
+      expect(creditorNotifications.some((n) => n.notificationType === "agreement_signed")).toBe(true);
+      expect(debtorNotifications.some((n) => n.notificationType === "agreement_signed")).toBe(true);
+    });
+
+    it("a notification-layer failure never fails the underlying signature (failure isolation)", async () => {
+      const { notifiedCtx, agreementId, creditorUserId, creditorSession } = await setupNotified();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (notifiedCtx.signatureService as any).deps.notifications = { notify: async () => { throw new Error("simulated_notify_outage"); } };
+      const result = await notifiedCtx.signatureService.sign({
+        agreementId,
+        actingUserId: creditorUserId,
+        actingSessionId: creditorSession,
+        authMethod: "totp",
+        consentVersion: "v1",
+        timezone: "UTC",
+        deviceInfo: null,
+        ipAddress: "203.0.113.10",
+      });
+      expect(result.signatureEvent.signerRole).toBe("creditor");
     });
   });
 });

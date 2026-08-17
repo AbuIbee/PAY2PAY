@@ -62,7 +62,8 @@ class InMemoryAuditEventRepositoryForSignatures implements AuditEventRepository 
  * exactly as production does (getSignatureService() and getAgreementService() both resolve through
  * the same singletons) — so a party/staff member seeded once is visible to both services.
  */
-export function createTestSignatureService() {
+/** `notifications`: optional (PRSprint 13, docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md) — SignatureServiceDeps.notifications is itself optional; most callers omit it. */
+export function createTestSignatureService(notifications?: import("@/lib/notify/notificationService").NotificationService) {
   const signatureEvents = new InMemorySignatureEventRepository();
   // PRSprint 12: shares its own `.events` array with the AgreementService context's atomic signing
   // path (InMemorySigningApplicationRepository) — see createTestAgreementService's own doc comment —
@@ -98,6 +99,7 @@ export function createTestSignatureService() {
     profileDisplay,
     storage,
     audit,
+    notifications,
   });
 
   return {

@@ -201,7 +201,12 @@ class InMemoryAuditEventRepositoryForAmendments implements AuditEventRepository 
  * instance set with the underlying agreement-engine test fakes — exactly as production does, and
  * mirroring every prior sprint's shared-context testFakes.ts pattern (e.g. `createTestAchServices`).
  */
-export function createTestAmendmentService() {
+/**
+ * `notifications`: optional — PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md)
+ * — most callers omit it entirely (AmendmentServiceDeps.notifications is itself optional), matching
+ * every other test context's identical pattern.
+ */
+export function createTestAmendmentService(notifications?: import("@/lib/notify/notificationService").NotificationService) {
   const agreementCtx = createTestAgreementService();
   const amendments = new InMemoryAmendmentRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForAmendments();
@@ -218,6 +223,8 @@ export function createTestAmendmentService() {
     versions: agreementCtx.versions,
     application,
     audit: new AuditService(auditRepo),
+    profileOwners: agreementCtx.profileOwners,
+    notifications,
   });
 
   return { agreementCtx, amendments, auditRepo, amendmentService };

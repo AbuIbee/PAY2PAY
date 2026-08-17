@@ -6,6 +6,7 @@ import { DrizzlePersonalProfileRepository } from "@/lib/auth/drizzlePersonalProf
 import { getMfaService } from "@/lib/auth/getMfaService";
 import { DrizzleProfileDisplayReader } from "@/lib/documents/drizzleProfileDisplayReader";
 import { getDocumentStorage } from "@/lib/documents/getDocumentStorage";
+import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { getVerificationService } from "@/lib/profiles/getVerificationService";
 import { getStaffService } from "@/lib/staff/getStaffService";
@@ -30,6 +31,7 @@ export function getSignatureService(): SignatureService {
       profileDisplay: new DrizzleProfileDisplayReader(),
       storage: getDocumentStorage(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
+      notifications: getNotificationService(),
     });
   }
   return cached;

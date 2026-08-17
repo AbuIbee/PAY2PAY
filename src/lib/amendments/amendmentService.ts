@@ -1,9 +1,12 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
-import type { ProfileKind } from "@/lib/profiles/verificationService";
+import { logger } from "@/lib/logger";
+import type { NotificationService } from "@/lib/notify/notificationService";
+import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import {
   buildTerms,
+  type AgreementRecord,
   type AgreementService,
   type AgreementTerms,
   type AgreementVersionRepository,
@@ -122,6 +125,10 @@ export interface AmendmentServiceDeps {
   versions: AgreementVersionRepository;
   application: AmendmentApplicationRepository;
   audit: AuditService;
+  /** PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md): resolves an amendment counterparty's account-owner user id — mirrors AgreementService's own identical dependency. */
+  profileOwners: ProfileOwnerReader;
+  /** Optional — mirrors AgreementServiceDeps's own identical `notifications?` precedent; every notification call here is wrapped in its own try/catch, so a notification-layer failure can never fail the amendment transition it's reporting on. */
+  notifications?: NotificationService;
 }
 
 export interface ProposeAmendmentInput {
@@ -183,7 +190,9 @@ export class AmendmentService {
       terms,
     });
 
-    await this.recordAudit(amendment, input.actingUserId, "amendment_proposed", { changeType: input.changeType });
+    const auditId = await this.recordAudit(amendment, input.actingUserId, "amendment_proposed", { changeType: input.changeType });
+    const counterpartyRole: PartyRole = role === "creditor" ? "debtor" : "creditor";
+    await this.notifyParty(detail.agreement, counterpartyRole, "amendment", { changeType: input.changeType }, auditId);
     return amendment;
   }
 
@@ -219,13 +228,17 @@ export class AmendmentService {
 
     if (input.decision === "accept") {
       const updated = await this.deps.amendments.updateStatus(amendment.id, "awaiting_signatures");
-      await this.recordAudit(updated, input.actingUserId, "amendment_accepted", null);
+      const auditId = await this.recordAudit(updated, input.actingUserId, "amendment_accepted", null);
+      const detail = await this.deps.agreementService.getAgreement(amendment.agreementId, input.actingUserId);
+      await this.notifyParty(detail.agreement, amendment.proposingPartyRole, "amendment_decided", { decision: "accepted" }, auditId);
       return updated;
     }
 
     if (input.decision === "reject") {
       const updated = await this.deps.amendments.recordRejection(amendment.id, input.reason ?? null);
-      await this.recordAudit(updated, input.actingUserId, "amendment_rejected", { reason: input.reason ?? null });
+      const auditId = await this.recordAudit(updated, input.actingUserId, "amendment_rejected", { reason: input.reason ?? null });
+      const detail = await this.deps.agreementService.getAgreement(amendment.agreementId, input.actingUserId);
+      await this.notifyParty(detail.agreement, amendment.proposingPartyRole, "amendment_decided", { decision: "rejected" }, auditId);
       return updated;
     }
 
@@ -251,7 +264,11 @@ export class AmendmentService {
       feeAllocation: input.counterTerms.feeAllocation,
       terms,
     });
-    await this.recordAudit(updated, input.actingUserId, "amendment_countered", null);
+    const auditId = await this.recordAudit(updated, input.actingUserId, "amendment_countered", null);
+    // The countering party (`role`) is now the amendment's own proposingPartyRole; notify whoever
+    // is *not* that role — the party who must review the new counter-terms.
+    const counterpartyRole: PartyRole = role === "creditor" ? "debtor" : "creditor";
+    await this.notifyParty(detail.agreement, counterpartyRole, "amendment", { changeType: amendment.changeType }, auditId);
     return updated;
   }
 
@@ -303,10 +320,15 @@ export class AmendmentService {
     const context = { ipAddress: input.ipAddress ?? null, deviceInfo: input.deviceInfo ?? null };
     const now = new Date();
     const signed = await this.deps.amendments.recordSignature(amendment.id, role, now);
-    await this.recordAudit(signed, input.actingUserId, "amendment_signed_by_party", { role }, context);
+    const signAuditId = await this.recordAudit(signed, input.actingUserId, "amendment_signed_by_party", { role }, context);
 
     const bothSigned = (role === "creditor" || signed.creditorSignedAt) && (role === "debtor" || signed.debtorSignedAt);
-    if (!bothSigned) return signed;
+    if (!bothSigned) {
+      const detail = await this.deps.agreementService.getAgreement(amendment.agreementId, input.actingUserId);
+      const otherRole: PartyRole = role === "creditor" ? "debtor" : "creditor";
+      await this.notifyParty(detail.agreement, otherRole, "agreement_counterparty_signed", { context: "amendment" }, signAuditId);
+      return signed;
+    }
 
     const locked = await this.deps.amendments.updateStatus(signed.id, "signed");
     await this.recordAudit(locked, input.actingUserId, "amendment_fully_signed", null, context);
@@ -363,7 +385,11 @@ export class AmendmentService {
       pauseAgreement: amendment.changeType === "temporary_pause",
     });
 
-    await this.recordAudit(applied, actingUserId, "amendment_applied", { resultingVersionId: agreementVersionId, versionNumber });
+    const auditId = await this.recordAudit(applied, actingUserId, "amendment_applied", { resultingVersionId: agreementVersionId, versionNumber });
+    await Promise.all([
+      this.notifyParty(detail.agreement, "creditor", "amendment_decided", { decision: "applied" }, auditId),
+      this.notifyParty(detail.agreement, "debtor", "amendment_decided", { decision: "applied" }, auditId),
+    ]);
     return applied;
   }
 
@@ -384,14 +410,15 @@ export class AmendmentService {
     return amendment;
   }
 
+  /** Returns the created audit event's own id — PRSprint 13 uses this as the notification dedupeKey's uniqueness marker, mirroring AgreementService.recordAudit's identical rationale (an amendment can legitimately cycle through counter-proposals, so a key scoped only to type+amendment+status would wrongly deduplicate away later, equally-legitimate rounds). */
   private async recordAudit(
     amendment: AmendmentRecord,
     actorUserId: string,
     action: string,
     newValue: unknown,
     context?: { ipAddress: string | null; deviceInfo: unknown },
-  ): Promise<void> {
-    await this.deps.audit.record({
+  ): Promise<number> {
+    const event = await this.deps.audit.record({
       actorUserId,
       actorRole: "agreement_party",
       profileKind: amendment.proposedByProfileKind,
@@ -410,5 +437,42 @@ export class AmendmentService {
       targetResourceType: "amendment",
       targetResourceId: amendment.id,
     });
+    return event.id;
+  }
+
+  /**
+   * PRSprint 13: notifies the given party role's account owner — mirrors
+   * AgreementService.notifyParty's identical shape/rationale (optional dependency, own try/catch,
+   * called only after the write it's reporting on already committed).
+   */
+  private async notifyParty(
+    agreement: AgreementRecord,
+    role: PartyRole,
+    notificationType: "amendment" | "amendment_decided" | "agreement_counterparty_signed",
+    payload: Record<string, unknown>,
+    uniqueId: number | string,
+  ): Promise<void> {
+    if (!this.deps.notifications) return;
+    try {
+      const profile =
+        role === "creditor"
+          ? { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId }
+          : { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId };
+      const recipientUserId = await this.deps.profileOwners.getOwnerUserId(profile.kind, profile.id);
+      if (!recipientUserId) return;
+      await this.deps.notifications.notify({
+        recipientUserId,
+        notificationType,
+        relatedAgreementId: agreement.id,
+        payload,
+        dedupeKey: `${notificationType}:${agreement.id}:amend:${uniqueId}:${recipientUserId}`,
+      });
+    } catch (error) {
+      logger.error("amendment_notification_failed", {
+        agreementId: agreement.id,
+        notificationType,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
