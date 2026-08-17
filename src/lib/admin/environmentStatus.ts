@@ -8,12 +8,15 @@ import { getServerEnv, type ServerEnv } from "@/config/env";
  * this module must never return, log, or expose an actual secret. It also must never claim a
  * capability is "live" that this codebase cannot actually reach: `getPaymentProvider()` and
  * `getKycProvider()` are unconditionally wired to their sandbox implementations (no live adapter
- * exists in this codebase yet — that is PRSprint 21's scope), and `notify/*Sender.ts` is
- * console-log-only (Sprint 17's own documented limitation) — so `paymentProvider`/`kycProvider`/
- * `emailDelivery`/`smsDelivery` below are fixed labels reflecting that reality by construction, not
- * environment-variable-driven toggles, so this view can never drift from what the code actually does.
+ * exists in this codebase yet — that is PRSprint 21's scope), and `smsDelivery` remains
+ * console-log-only (PRSprint 15's scope) — so `paymentProvider`/`kycProvider`/`smsDelivery` below stay
+ * fixed labels reflecting that reality by construction. `emailDelivery` is the one field PRSprint 14
+ * (docs/prsprints/PRSPRINT_14_PRODUCTION_EMAIL.md) makes genuinely conditional, mirroring exactly the
+ * same decision src/lib/notify/getEmailSender.ts makes at send time — this view can never drift from
+ * what the code actually does because it reads the identical inputs.
  */
 export type ProviderConfigStatus = "configured" | "not_configured";
+export type EmailDeliveryStatus = "resend" | "console_log_only_no_provider" | "console_log_only_kill_switch";
 
 export interface AdminEnvironmentStatus {
   appEnv: string;
@@ -22,9 +25,15 @@ export interface AdminEnvironmentStatus {
   documentStorage: ProviderConfigStatus;
   paymentProvider: "sandbox";
   kycProvider: "sandbox";
-  emailDelivery: "console_log_only";
+  emailDelivery: EmailDeliveryStatus;
   smsDelivery: "console_log_only";
   scheduledJobs: ProviderConfigStatus;
+}
+
+function computeEmailDeliveryStatus(env: ServerEnv): EmailDeliveryStatus {
+  if (!env.RESEND_API_KEY || !env.EMAIL_FROM_ADDRESS) return "console_log_only_no_provider";
+  if (!env.EMAIL_DELIVERY_ENABLED) return "console_log_only_kill_switch";
+  return "resend";
 }
 
 /** Pure classification function — kept separate from the process.env-reading singleton below so it can be unit-tested with constructed ServerEnv values, mirroring parseServerEnv/getServerEnv's own split in src/config/env.ts. */
@@ -36,7 +45,7 @@ export function computeEnvironmentStatus(env: ServerEnv): AdminEnvironmentStatus
     documentStorage: env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY ? "configured" : "not_configured",
     paymentProvider: "sandbox",
     kycProvider: "sandbox",
-    emailDelivery: "console_log_only",
+    emailDelivery: computeEmailDeliveryStatus(env),
     smsDelivery: "console_log_only",
     scheduledJobs: env.CRON_SECRET ? "configured" : "not_configured",
   };

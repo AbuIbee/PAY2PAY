@@ -123,6 +123,16 @@ export const notificationEvent = pgTable(
     attemptCount: integer("attempt_count").notNull().default(0),
     nextRetryAt: timestamp("next_retry_at", { withTimezone: true }),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    // PRSprint 14 (docs/prsprints/PRSPRINT_14_PRODUCTION_EMAIL.md): `sent_at` is when the email
+    // provider *accepted* the send (status "sent"); `delivered_at` above is now reserved for an
+    // actual provider-confirmed delivery webhook event (status "delivered") — provider acceptance is
+    // not inbox delivery (requirement #21). Both nullable/additive; every other channel (in_app, sms)
+    // is unaffected and keeps going straight to `delivered_at` on success exactly as before.
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    // The provider's own message id (e.g. Resend's `id`), used to correlate an inbound delivery
+    // webhook back to this row (see DrizzleNotificationEventRepository.findByProviderMessageId) —
+    // never a secret, safe to store and to surface to admins.
+    providerMessageId: text("provider_message_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     // Sprint 18B: the Notification Center's read/unread state. Null means unread. Additive,
     // nullable column — existing rows are simply unread until the recipient opens them, no backfill

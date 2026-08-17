@@ -1,7 +1,9 @@
 import "server-only";
+import { EmailDeliveryError } from "./emailDeliveryError";
 import type { EmailSender } from "./emailSender";
 import type { SmsSender } from "./smsSender";
 import { DEFAULT_CHANNELS, isCriticalNotificationType, type NotificationEventType } from "./eventTypes";
+import { ValidationError } from "@/lib/errors";
 import { NOTIFICATION_TEMPLATES } from "./templates";
 
 export type NotificationChannel = "email" | "sms" | "in_app";
@@ -21,7 +23,12 @@ export interface NotificationEventRecord {
   failureReason: string | null;
   attemptCount: number;
   nextRetryAt: Date | null;
+  /** PRSprint 14: when the provider *confirmed actual delivery* via webhook — see `sentAt` for when the provider merely accepted the send. Still used as-is (on insert) for the `in_app` channel, where existing is delivery. */
   deliveredAt: Date | null;
+  /** PRSprint 14 (docs/prsprints/PRSPRINT_14_PRODUCTION_EMAIL.md): when the email provider accepted the send. Null for channels/rows that never reached this state (in_app never sets it; sms doesn't use it yet — PRSprint 15). */
+  sentAt: Date | null;
+  /** The provider's own message id (e.g. Resend's `id`), used to correlate an inbound delivery webhook back to this row. Null until a real provider send succeeds. */
+  providerMessageId: string | null;
   createdAt: Date;
   /** Sprint 18B: null means unread — the Notification Center's read/unread state. */
   readAt: Date | null;
@@ -43,11 +50,17 @@ export interface NotificationEventRepository {
   findByDedupeKey(dedupeKey: string): Promise<NotificationEventRecord | null>;
   markDelivered(id: string, deliveredAt: Date | null): Promise<NotificationEventRecord>;
   markFailed(id: string, input: { failureReason: string; attemptCount: number; nextRetryAt: Date | null }): Promise<NotificationEventRecord>;
+  /** PRSprint 14: the email-specific success state — provider *accepted* the send, not yet confirmed delivered. See `markDelivered` for the latter, now driven only by a verified provider webhook. */
+  markSent(id: string, input: { sentAt: Date; providerMessageId: string | null }): Promise<NotificationEventRecord>;
+  /** PRSprint 14: how the delivery webhook (POST /api/webhooks/email/resend) correlates a provider event back to the row it belongs to. */
+  findByProviderMessageId(providerMessageId: string): Promise<NotificationEventRecord | null>;
   /** Cron-scan entry point — a periodic/administrative operation, not a per-request hot path, mirroring PaymentAttemptRepository.listAll's precedent. */
   findDueForRetry(now: Date, maxAttempts: number): Promise<NotificationEventRecord[]>;
   listForUser(recipientUserId: string): Promise<NotificationEventRecord[]>;
   /** Sprint 18B: no-op if already read. Scoping to recipientUserId (not just id) is the authorization boundary — a user can never mark another user's notification read. */
   markRead(id: string, recipientUserId: string, readAt: Date): Promise<NotificationEventRecord | null>;
+  /** PRSprint 14: admin-facing operational visibility (src/lib/admin/emailDeliveryAdminService.ts) — every channel, most-recent-first, capped by `limit`. Not scoped to one recipient (that's `listForUser`'s job); scoped instead by the admin capability gate in front of it. */
+  listRecentByChannel(channel: NotificationChannel, limit: number): Promise<NotificationEventRecord[]>;
 }
 
 /** Real implementation: DrizzleNotificationPreferenceRepository. */
@@ -103,6 +116,8 @@ export class NotificationService {
       emailSender: EmailSender;
       smsSender: SmsSender;
       contacts: UserContactReader;
+      /** PRSprint 14: base URL used to build the CTA link on an email notification, when the event has a `relatedAgreementId` to link to (see `buildCtaUrl`). Mirrors AgreementInvitationService/AuthService's own identical `appUrl` dependency. */
+      appUrl: string;
     },
     options: NotificationServiceOptions = {},
   ) {
@@ -191,6 +206,61 @@ export class NotificationService {
     return this.deps.events.markRead(notificationId, recipientUserId, new Date());
   }
 
+  /**
+   * PRSprint 14, requirement #34 (admin retry): re-attempts exactly one failed email delivery, on the
+   * caller's behalf — the caller (EmailDeliveryAdminService) is responsible for the capability check;
+   * this method only enforces that the record is actually in a retryable state, so calling it twice in
+   * a row (or on a row that has already since succeeded) is rejected rather than silently re-sending —
+   * "must remain idempotent," verbatim. Never creates a new notification_event row or a new business
+   * event — it operates on the existing one, re-rendering its template from the already-stored payload
+   * exactly like `retryDueNotifications` does for the cron path.
+   */
+  async redeliverFailedEvent(id: string): Promise<NotificationEventRecord> {
+    const record = await this.deps.events.findById(id);
+    if (!record) throw new ValidationError("Notification event not found.");
+    if (record.status !== "failed") {
+      throw new ValidationError("Only a failed notification event can be retried.");
+    }
+    const type = record.notificationType as NotificationEventType;
+    const template = NOTIFICATION_TEMPLATES[type];
+    const rendered = template ? template(record.payload) : { subject: "Notification", emailBody: "", smsBody: "", inAppBody: "" };
+    return this.deliver(record, rendered);
+  }
+
+  /**
+   * PRSprint 14, requirement #27: the only way a provider's delivery/bounce/complaint webhook is
+   * allowed to change a notification_event row's status — the webhook route
+   * (src/app/api/webhooks/email/resend/route.ts) verifies the provider's signature first, then looks
+   * the row up by `providerMessageId` (never trusts a client/provider-supplied notification_event id
+   * directly) and calls this. `delivered` is the only outcome that can still be retried later by
+   * definition (delivery already happened); `bounced`/`complained` stop retrying immediately — hammering
+   * a permanently-undeliverable or complained-about address is exactly what requirement #28/#29
+   * prohibits — without touching any other notification_event row for the same recipient, and without
+   * mutating anything on the business side (agreement/account state is never touched here).
+   */
+  async recordProviderDeliveryEvent(providerMessageId: string, outcome: "delivered" | "bounced" | "complained", occurredAt: Date): Promise<NotificationEventRecord | null> {
+    const record = await this.deps.events.findByProviderMessageId(providerMessageId);
+    if (!record) return null;
+    if (outcome === "delivered") {
+      return this.deps.events.markDelivered(record.id, occurredAt);
+    }
+    return this.deps.events.markFailed(record.id, {
+      failureReason: outcome === "bounced" ? "provider_bounced" : "provider_complaint",
+      attemptCount: record.attemptCount,
+      nextRetryAt: null,
+    });
+  }
+
+  /** PRSprint 14, requirement #33: minimal admin operational visibility — read-only, no payload beyond what the row already stores. Authorization lives in the caller (EmailDeliveryAdminService), not here. */
+  async listRecentEmailEvents(limit: number): Promise<NotificationEventRecord[]> {
+    return this.deps.events.listRecentByChannel("email", limit);
+  }
+
+  private buildCtaUrl(record: NotificationEventRecord): { ctaUrl: string; ctaText: string } | null {
+    if (!record.relatedAgreementId) return null;
+    return { ctaUrl: `${this.deps.appUrl}/agreements/detail?id=${record.relatedAgreementId}`, ctaText: "Review agreement" };
+  }
+
   private async resolveChannels(userId: string, type: NotificationEventType, critical: boolean): Promise<NotificationChannel[]> {
     const defaults = DEFAULT_CHANNELS[type];
     if (critical) return [...defaults];
@@ -214,8 +284,18 @@ export class NotificationService {
       if (record.channel === "email") {
         const email = await this.deps.contacts.getEmail(record.recipientUserId);
         if (!email) return record; // no contact info on file — recorded, left pending, not a failure.
-        await this.deps.emailSender.send({ to: email, subject: rendered.subject, body: rendered.emailBody });
-        return this.deps.events.markDelivered(record.id, new Date());
+        const cta = this.buildCtaUrl(record);
+        const result = await this.deps.emailSender.send({
+          to: email,
+          subject: rendered.subject,
+          body: rendered.emailBody,
+          ctaUrl: cta?.ctaUrl,
+          ctaText: cta?.ctaText,
+        });
+        // "sent" (provider accepted), not "delivered" — see enums.ts's notificationStatusEnum doc
+        // comment. Real delivery confirmation, if it comes, arrives later via the provider's webhook
+        // (recordProviderDeliveryEvent), never synchronously here.
+        return this.deps.events.markSent(record.id, { sentAt: new Date(), providerMessageId: result.providerMessageId });
       }
       // sms
       const phone = await this.deps.contacts.getPhone(record.recipientUserId);
@@ -223,8 +303,13 @@ export class NotificationService {
       await this.deps.smsSender.send({ to: phone, body: rendered.smsBody });
       return this.deps.events.markDelivered(record.id, new Date());
     } catch (error) {
+      // A non-retryable provider failure (invalid recipient, malformed request, provider
+      // misconfiguration) is dead-lettered immediately rather than exhausting the usual bounded-retry
+      // budget first — retrying an identical request against the same permanent rejection would only
+      // delay the terminal state, not change it (requirement #22).
+      const nonRetryable = error instanceof EmailDeliveryError && !error.retryable;
       const attemptCount = record.attemptCount + 1;
-      const exhausted = attemptCount >= this.maxAttempts;
+      const exhausted = nonRetryable || attemptCount >= this.maxAttempts;
       return this.deps.events.markFailed(record.id, {
         failureReason: error instanceof Error ? error.message : "unknown_delivery_error",
         attemptCount,

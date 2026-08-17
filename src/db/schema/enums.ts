@@ -520,11 +520,14 @@ export const notificationChannelEnum = pgEnum("notification_channel", ["email", 
  * Sprint 17: per-(recipient, notification_event row) delivery status — one row per channel per
  * logical event (see notificationEvent's own updated doc comment in paymentRetry.ts for why this
  * sprint fans a single `notify()` call out into multiple `notification_event` rows rather than
- * adding a channel-list column to one row). `sent` (handed to the provider) is kept distinct from
- * `delivered` (provider confirmed receipt) for email/SMS, even though this sandbox's providers
- * conflate the two today (no real delivery-receipt webhook exists yet, matching every prior sprint's
- * "sandbox/mock only" precedent) — `in_app` skips `sent` and goes straight from `pending` to
- * `delivered` on insert.
+ * adding a channel-list column to one row). `sent` (handed to the provider, provider accepted it) is
+ * kept distinct from `delivered` (provider confirmed actual receipt via webhook) — `in_app` skips
+ * `sent` and goes straight from `pending` to `delivered` on insert, since existing *is* delivery for
+ * that channel. PRSprint 14 (docs/prsprints/PRSPRINT_14_PRODUCTION_EMAIL.md) made this distinction
+ * real for `email`: `NotificationService.deliver()` now marks `sent` on provider acceptance and only
+ * a verified Resend delivery webhook (src/app/api/webhooks/email/resend/route.ts) advances a row to
+ * `delivered`. `sms` still conflates the two (no real SMS provider exists yet — PRSprint 15's scope),
+ * matching every prior sprint's "sandbox/mock only" precedent for that channel specifically.
  */
 export const notificationStatusEnum = pgEnum("notification_status", ["pending", "sent", "delivered", "failed"]);
 

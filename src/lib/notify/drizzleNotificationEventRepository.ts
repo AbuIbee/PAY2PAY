@@ -23,6 +23,8 @@ function toRecord(row: Row): NotificationEventRecord {
     attemptCount: row.attemptCount,
     nextRetryAt: row.nextRetryAt,
     deliveredAt: row.deliveredAt,
+    sentAt: row.sentAt,
+    providerMessageId: row.providerMessageId,
     createdAt: row.createdAt,
     readAt: row.readAt,
   };
@@ -55,6 +57,24 @@ export class DrizzleNotificationEventRepository implements NotificationEventRepo
     const db = getDb();
     const rows = await db.select().from(notificationEvent).where(eq(notificationEvent.dedupeKey, dedupeKey)).limit(1);
     return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  async findByProviderMessageId(providerMessageId: string): Promise<NotificationEventRecord | null> {
+    const db = getDb();
+    const rows = await db.select().from(notificationEvent).where(eq(notificationEvent.providerMessageId, providerMessageId)).limit(1);
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  async markSent(id: string, input: { sentAt: Date; providerMessageId: string | null }): Promise<NotificationEventRecord> {
+    const db = getDb();
+    const status: NotificationStatus = "sent";
+    const [row] = await db
+      .update(notificationEvent)
+      .set({ status, sentAt: input.sentAt, providerMessageId: input.providerMessageId, failureReason: null, nextRetryAt: null })
+      .where(eq(notificationEvent.id, id))
+      .returning();
+    if (!row) throw new ConfigurationError("notification_event markSent found no row");
+    return toRecord(row);
   }
 
   async markDelivered(id: string, deliveredAt: Date | null): Promise<NotificationEventRecord> {
@@ -111,5 +131,16 @@ export class DrizzleNotificationEventRepository implements NotificationEventRepo
       .where(and(eq(notificationEvent.id, id), eq(notificationEvent.recipientUserId, recipientUserId)))
       .returning();
     return row ? toRecord(row) : null;
+  }
+
+  async listRecentByChannel(channel: NotificationChannel, limit: number): Promise<NotificationEventRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(notificationEvent)
+      .where(eq(notificationEvent.channel, channel))
+      .orderBy(desc(notificationEvent.createdAt))
+      .limit(limit);
+    return rows.map(toRecord);
   }
 }

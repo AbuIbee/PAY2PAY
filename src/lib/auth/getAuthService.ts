@@ -2,7 +2,7 @@ import "server-only";
 import { getServerEnv } from "@/config/env";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
-import { ConsoleEmailSender } from "@/lib/notify/consoleEmailSender";
+import { getEmailSender } from "@/lib/notify/getEmailSender";
 import { AuthService } from "./authService";
 import { DrizzleEmailVerificationTokenRepository } from "./drizzleEmailVerificationTokenRepository";
 import { DrizzlePasswordResetTokenRepository } from "./drizzlePasswordResetTokenRepository";
@@ -21,8 +21,10 @@ let cached: AuthService | null = null;
  * routes that don't need auth (or the build/collection phase itself) never
  * require DATABASE_URL/AUTH_PASSWORD_PEPPER to be configured.
  *
- * ConsoleEmailSender is a deliberate placeholder — see its doc comment and
- * docs/AUTHENTICATION.md: no real email provider is integrated yet.
+ * The email sender comes from getEmailSender() (PRSprint 14,
+ * docs/prsprints/PRSPRINT_14_PRODUCTION_EMAIL.md) — real delivery once RESEND_API_KEY is configured,
+ * ConsoleEmailSender (log-only) otherwise. AuthService's own verification/password-reset link
+ * generation, token lifecycle, and session logic are entirely unchanged by this swap.
  */
 export function getAuthService(): AuthService {
   if (cached) return cached;
@@ -34,7 +36,7 @@ export function getAuthService(): AuthService {
     new DrizzleEmailVerificationTokenRepository(),
     new DrizzlePasswordResetTokenRepository(),
     new AuditService(new DrizzleAuditEventRepository()),
-    new ConsoleEmailSender(),
+    getEmailSender(),
     { pepper: AUTH_PASSWORD_PEPPER, sessionTtlMs: SESSION_TTL_MS, appUrl: APP_URL },
   );
   return cached;

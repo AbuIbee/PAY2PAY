@@ -90,6 +90,23 @@ describe("parseServerEnv", () => {
     expect(() => parseServerEnv({})).toThrow(EnvironmentValidationError);
   });
 
+  it("defaults EMAIL_FROM_NAME to PAY2PAY and EMAIL_DELIVERY_ENABLED to true when unset", () => {
+    const env = parseServerEnv(validEnv);
+    expect(env.EMAIL_FROM_NAME).toBe("PAY2PAY");
+    expect(env.EMAIL_DELIVERY_ENABLED).toBe(true);
+    expect(env.RESEND_API_KEY).toBeUndefined();
+    expect(env.EMAIL_FROM_ADDRESS).toBeUndefined();
+  });
+
+  it("coerces EMAIL_DELIVERY_ENABLED=\"false\" to the boolean false (the kill switch)", () => {
+    const env = parseServerEnv({ ...validEnv, EMAIL_DELIVERY_ENABLED: "false" });
+    expect(env.EMAIL_DELIVERY_ENABLED).toBe(false);
+  });
+
+  it("rejects an EMAIL_FROM_ADDRESS that isn't a valid email", () => {
+    expect(() => parseServerEnv({ ...validEnv, EMAIL_FROM_ADDRESS: "not-an-email" })).toThrow(EnvironmentValidationError);
+  });
+
   it("includes the offending field path in the error message", () => {
     expect.assertions(2);
     try {

@@ -63,6 +63,31 @@ const serverEnvSchema = z.object({
   // requirement). Optional at the schema level, mirroring PAYMENT_SANDBOX_WEBHOOK_SECRET above — the
   // route itself throws a clear ConfigurationError only when actually invoked without it configured.
   CRON_SECRET: z.string().min(16).optional(),
+  // PRSprint 14 (docs/prsprints/PRSPRINT_14_PRODUCTION_EMAIL.md): production email provider
+  // (Resend) configuration. Optional at the schema level, mirroring every other provider secret
+  // above — the app still starts with none of these configured; src/lib/notify/getEmailSender.ts
+  // falls back to ConsoleEmailSender (log-only) whenever RESEND_API_KEY is absent, so development,
+  // test, and any environment that hasn't been given a live key keep working exactly as before this
+  // PRSprint. Never logged, never returned from an API response, never written into a notification
+  // payload — src/lib/notify/resendEmailSender.ts is the only place RESEND_API_KEY is read.
+  RESEND_API_KEY: z.string().min(1).optional(),
+  // The verified sending address/display name shown to recipients. No default — a placeholder
+  // "from" address would be worse than failing closed, so ResendEmailSender throws a
+  // ConfigurationError if a send is attempted with RESEND_API_KEY set but this unset.
+  EMAIL_FROM_ADDRESS: z.string().email().optional(),
+  EMAIL_FROM_NAME: z.string().min(1).default("PAY2PAY"),
+  // HMAC secret Resend signs its delivery webhooks with (Svix-compatible: "whsec_" + base64),
+  // verified in src/lib/notify/verifyResendWebhookSignature.ts. Optional at the schema level; the
+  // webhook route itself throws a clear ConfigurationError only when actually invoked without it.
+  RESEND_WEBHOOK_SECRET: z.string().min(16).optional(),
+  // Global kill switch (Detailed Scope, PRSPRINT_14_PRODUCTION_EMAIL.md): set to "false" to force
+  // every outbound email back to ConsoleEmailSender (log-only, nothing actually sent) without
+  // removing RESEND_API_KEY or redeploying — an operational incident lever, not a feature flag.
+  // Defaults to enabled so provisioning RESEND_API_KEY alone is sufficient to go live.
+  EMAIL_DELIVERY_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

@@ -262,6 +262,8 @@ export class AgreementInvitationService {
           to: recipientEmail,
           subject: "You've received a payment plan proposal on PAY2PAY",
           body: `${senderName} has proposed a payment plan for you to review on PAY2PAY. Review it securely, no account required: ${link}\n\nThis link expires in 7 days.`,
+          ctaUrl: link,
+          ctaText: "Review the proposal",
         });
       }
       if (recipientPhone) {
@@ -456,6 +458,8 @@ export class AgreementInvitationService {
         to: invitation.recipientEmail,
         subject: "Reminder: you have a payment plan proposal on PAY2PAY",
         body: `${senderName} sent you a reminder about a payment plan proposal on PAY2PAY: ${link}\n\nThis link expires in 7 days.`,
+        ctaUrl: link,
+        ctaText: "Review the proposal",
       });
     }
     return { invitation: updated, rawToken, link };
