@@ -54,11 +54,15 @@ export class InMemoryRateLimitStore implements RateLimitStore {
   private buckets = new Map<string, { count: number; resetAt: number }>();
   /** PRSprint 11A: mirrors InMemoryEmailSender/InMemorySmsSender's own `failNext` convention — simulates the store itself erroring (e.g. a database outage), for testing checkRateLimit's fail-open behavior. */
   failNext = false;
+  /** PRSprint 12A: overrides the default simulated error, for testing describeStoreError's `.cause`-walking against a Postgres-shaped error specifically. */
+  failNextWith: Error | null = null;
 
   async incrementAndCheck(key: string, windowMs: number, now: number): Promise<number> {
     if (this.failNext) {
       this.failNext = false;
-      throw new Error("simulated_rate_limit_store_failure");
+      const error = this.failNextWith ?? new Error("simulated_rate_limit_store_failure");
+      this.failNextWith = null;
+      throw error;
     }
     const bucket = this.buckets.get(key);
     if (!bucket || bucket.resetAt <= now) {
@@ -104,6 +108,46 @@ function getDefaultStore(): RateLimitStore {
  * "blocked" log below) so the underlying storage problem stays observable and fixable, instead of
  * silently and invisibly blocking every login attempt.
  */
+/**
+ * PRSprint 12A (docs/prsprints/PRSPRINT_12A_PRODUCTION_DATABASE_RECONCILIATION.md): Drizzle wraps
+ * the underlying `postgres` driver error in its own Error whose top-level `.message` is just
+ * "Failed query: <sql text>" — the actually-useful Postgres error (SQLSTATE `code`, `detail`, `hint`,
+ * which table/column/constraint it names) lives on `.cause`, one level down, and PRSprint 11A's own
+ * report explicitly flagged that its log capture never surfaced it. Walks exactly one level of
+ * `.cause` (postgres.js does not nest deeper than this for a query error) and pulls out the fields
+ * that actually distinguish "relation does not exist" from "permission denied" from "check
+ * violation" etc., without ever including `.query`/`.parameters` (which can carry caller-supplied
+ * values like a raw rate-limit key) in what gets logged.
+ */
+function describeStoreError(error: unknown): Record<string, unknown> {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error ? error.cause : undefined;
+  if (!cause || typeof cause !== "object") return { error: message };
+  const c = cause as Partial<{
+    name: string;
+    message: string;
+    code: string;
+    detail: string;
+    hint: string;
+    table_name: string;
+    column_name: string;
+    constraint_name: string;
+    schema_name: string;
+  }>;
+  return {
+    error: message,
+    causeName: c.name,
+    causeMessage: c.message,
+    causeCode: c.code,
+    causeDetail: c.detail,
+    causeHint: c.hint,
+    causeTable: c.table_name,
+    causeColumn: c.column_name,
+    causeConstraint: c.constraint_name,
+    causeSchema: c.schema_name,
+  };
+}
+
 export async function checkRateLimit(
   key: string,
   limit: number,
@@ -115,10 +159,7 @@ export async function checkRateLimit(
   try {
     count = await getDefaultStore().incrementAndCheck(key, windowMs, now);
   } catch (error) {
-    logger.error("rate_limit_store_unavailable", {
-      namespace,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.error("rate_limit_store_unavailable", { namespace, ...describeStoreError(error) });
     return true;
   }
   const allowed = count <= limit;
