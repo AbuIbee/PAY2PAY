@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { agreementVersion } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -58,6 +58,16 @@ export class DrizzleAgreementVersionRepository implements AgreementVersionReposi
     const rows = await db.select().from(agreementVersion).where(eq(agreementVersion.id, id)).limit(1);
     const row = rows[0];
     return row ? toRecord(row) : null;
+  }
+
+  async listForAgreement(agreementId: string): Promise<AgreementVersionRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(agreementVersion)
+      .where(eq(agreementVersion.agreementId, agreementId))
+      .orderBy(asc(agreementVersion.versionNumber));
+    return rows.map(toRecord);
   }
 
   async updateTerms(

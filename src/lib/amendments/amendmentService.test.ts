@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
+import { AuditService } from "@/lib/audit/auditService";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
+import { AmendmentService } from "./amendmentService";
 import { createTestAmendmentService } from "./testFakes";
 
 function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
@@ -161,6 +163,78 @@ describe("AmendmentService", () => {
     expect(newVersion?.terms.installmentAmountMinorUnits).toBe(15_000);
     expect(newVersion?.signedAt).not.toBeNull();
     expect(newVersion?.documentHash).toBeTruthy();
+  });
+
+  /**
+   * PRSprint 11 (docs/prsprints/PRSPRINT_11_AGREEMENT_VERSIONING_AMENDMENTS_MUTUAL_APPROVAL.md)
+   * Hard Stop rule: "Stop if an amendment can partially apply." Every write `applyAmendment`
+   * performs (new version, its schedule, the agreement's current-version pointer/status, the
+   * amendment's own "applied" marker) now goes through exactly one call to
+   * `AmendmentApplicationRepository.applyAtomically`, itself one `db.transaction` in production
+   * (DrizzleAmendmentApplicationRepository) — so a failure there fails as a single, all-or-nothing
+   * unit, which a real Postgres transaction rolls back completely. This test proves the *service's*
+   * half of that guarantee: if the atomic write fails, the amendment is left exactly where it was
+   * before the attempt (still "signed", not stuck in some new corrupted in-between state), so a
+   * retry remains safe. (True DB rollback itself is a property of the transaction, not something an
+   * in-memory fake can simulate — this is that fake's own documented boundary.)
+   */
+  it("atomicity: if the atomic apply write fails, the amendment stays 'signed' (not corrupted into a partial state) and the agreement's current version is unchanged", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "reduced_installment",
+      reason: "Lost overtime hours",
+      proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+
+    const noopAudit = new AuditService({
+      getLastEvent: async () => null,
+      insertEvent: async (record) => ({ ...record, id: 1 }),
+    });
+    const failingService = new AmendmentService({
+      agreementService: ctx.agreementCtx.agreementService,
+      amendments: ctx.amendments,
+      versions: ctx.agreementCtx.versions,
+      application: { applyAtomically: async () => { throw new Error("simulated_transaction_failure"); } },
+      audit: noopAudit,
+    });
+
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+    await expect(
+      failingService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId }),
+    ).rejects.toThrow("simulated_transaction_failure");
+
+    const stuck = await ctx.amendments.findById(amendment.id);
+    expect(stuck?.status).toBe("signed"); // not "applied" — safe to retry, never left half-done
+    expect(stuck?.resultingVersionId).toBeNull();
+    const agreementAfter = await ctx.agreementCtx.agreements.findById(agreementId);
+    expect(agreementAfter?.currentVersionId).toBe(originalVersionId); // unchanged
+  });
+
+  it("historical versions retrievable: AgreementService.listVersionHistory returns both the original and the amended version, oldest first", async () => {
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "reduced_installment",
+      reason: "Lost overtime hours",
+      proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+    const applied = await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+
+    const history = await ctx.agreementCtx.agreementService.listVersionHistory(agreementId, creditorUserId);
+    expect(history).toHaveLength(2);
+    expect(history[0]!.id).toBe(originalVersionId);
+    expect(history[0]!.versionNumber).toBe(1);
+    expect(history[0]!.terms.installmentAmountMinorUnits).toBe(20_000);
+    expect(history[1]!.id).toBe(applied.resultingVersionId);
+    expect(history[1]!.versionNumber).toBe(2);
+    expect(history[1]!.terms.installmentAmountMinorUnits).toBe(15_000);
+
+    // A stranger cannot list this agreement's version history either.
+    await expect(ctx.agreementCtx.agreementService.listVersionHistory(agreementId, randomUUID())).rejects.toThrow(ForbiddenError);
   });
 
   it("original preserved: the original agreement_version is never mutated by an applied amendment", async () => {

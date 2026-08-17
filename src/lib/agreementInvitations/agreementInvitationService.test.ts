@@ -285,4 +285,64 @@ describe("AgreementInvitationService", () => {
       expect(view).not.toHaveProperty("recipientEmail");
     });
   });
+
+  describe("PRSprint 11 integration: an agreement created through this invitation flow can be amended normally afterward", () => {
+    it("propose -> accept -> sign an amendment against an invitation-created agreement, producing a second retrievable version", async () => {
+      const { rawToken } = await createInvitation();
+      const recipientUserId = randomUUID();
+      const recipientProfile = { kind: "personal" as const, id: randomUUID() };
+      ctx.agreementCtx.profileOwners.set("personal", recipientProfile.id, recipientUserId);
+      ctx.userEmails.register(recipientUserId, "recipient@example.com");
+      const { agreementId } = await ctx.invitationService.acceptPlan({
+        rawToken,
+        actingUserId: recipientUserId,
+        actingProfile: recipientProfile,
+      });
+      // acceptPlan lands the agreement at "awaiting_signatures" (the existing Sprint 6 signature
+      // flow takes over from there — see AgreementInvitationService's own doc comment); sign it
+      // fully here so amending it afterward reflects a realistic, fully-executed agreement.
+      await ctx.agreementCtx.agreementService.signAgreement(agreementId, inviterUserId);
+      await ctx.agreementCtx.agreementService.signAgreement(agreementId, recipientUserId);
+
+      // AmendmentService wired to the SAME underlying agreement context the invitation flow just
+      // wrote to — exactly how production shares one AgreementService singleton across every
+      // caller (getAgreementService()'s own memoization), proving an agreement born from PRSprint
+      // 10's flow is indistinguishable from any other to PRSprint 11's amendment machinery.
+      const { AmendmentService } = await import("@/lib/amendments/amendmentService");
+      const { InMemoryAmendmentRepository, InMemoryAmendmentApplicationRepository } = await import("@/lib/amendments/testFakes");
+      const { AuditService } = await import("@/lib/audit/auditService");
+      const amendments = new InMemoryAmendmentRepository();
+      const amendmentService = new AmendmentService({
+        agreementService: ctx.agreementCtx.agreementService,
+        amendments,
+        versions: ctx.agreementCtx.versions,
+        application: new InMemoryAmendmentApplicationRepository({
+          versions: ctx.agreementCtx.versions,
+          agreements: ctx.agreementCtx.agreements,
+          scheduleItems: ctx.agreementCtx.scheduleItems,
+          amendments,
+        }),
+        audit: new AuditService({ getLastEvent: async () => null, insertEvent: async (r) => ({ ...r, id: 1 }) }),
+      });
+
+      // Inviter here is the creditor (default in createInvitation's helper); recipient is the debtor.
+      const amendment = await amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "Requesting a lower payment",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 7_500 }),
+        actingUserId: recipientUserId,
+      });
+      expect(amendment.proposingPartyRole).toBe("debtor");
+
+      await amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: inviterUserId, decision: "accept" });
+      await amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: inviterUserId });
+      const applied = await amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: recipientUserId });
+      expect(applied.status).toBe("applied");
+
+      const history = await ctx.agreementCtx.agreementService.listVersionHistory(agreementId, inviterUserId);
+      expect(history).toHaveLength(2);
+      expect(history[1]!.terms.installmentAmountMinorUnits).toBe(7_500);
+    });
+  });
 });

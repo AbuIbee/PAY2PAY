@@ -112,6 +112,15 @@ export interface AgreementVersionRepository {
     terms: AgreementTerms;
   }): Promise<AgreementVersionRecord>;
   findById(id: string): Promise<AgreementVersionRecord | null>;
+  /**
+   * PRSprint 11 (docs/prsprints/PRSPRINT_11_AGREEMENT_VERSIONING_AMENDMENTS_MUTUAL_APPROVAL.md):
+   * "Historical agreement versions must remain retrievable" — every version row was already
+   * immutable and permanently kept (nothing here ever deletes or overwrites a prior version), but
+   * before this PRSprint there was no way to actually list them; only `findById` (a single,
+   * already-known id) existed. Ordered oldest-first (`versionNumber` ascending) to read as a
+   * natural history.
+   */
+  listForAgreement(agreementId: string): Promise<AgreementVersionRecord[]>;
   /** Only ever called while the version is unsigned (pre-signature counter loop) — see AgreementService.creditorDecide. */
   updateTerms(
     id: string,
@@ -443,6 +452,17 @@ export class AgreementService {
   async listAgreements(actingUserId: string, profile: ProfileRef): Promise<AgreementRecord[]> {
     await this.authorizeParty(actingUserId, profile, null);
     return this.deps.agreements.listForProfile(profile.kind, profile.id);
+  }
+
+  /**
+   * PRSprint 11: "historical agreement versions must remain retrievable" — same authorization as
+   * `getAgreement` (either party only), returning every version oldest-first rather than just the
+   * current one.
+   */
+  async listVersionHistory(agreementId: string, actingUserId: string): Promise<AgreementVersionRecord[]> {
+    const agreement = await this.requireAgreement(agreementId);
+    await this.authorizeEitherParty(agreement, actingUserId, null);
+    return this.deps.versions.listForAgreement(agreementId);
   }
 
   /**

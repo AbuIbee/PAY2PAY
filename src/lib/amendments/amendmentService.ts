@@ -4,13 +4,11 @@ import { ForbiddenError, ValidationError } from "@/lib/errors";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
 import {
   buildTerms,
-  type AgreementRepository,
   type AgreementService,
   type AgreementTerms,
   type AgreementVersionRepository,
   type DraftTermsInput,
   type FeeAllocation,
-  type InstallmentScheduleItemRepository,
   type PartyRole,
 } from "@/lib/agreements/agreementService";
 import { computeVersionHash } from "@/lib/agreements/documentHash";
@@ -84,12 +82,45 @@ export interface AmendmentRepository {
   recordApplied(id: string, resultingVersionId: string): Promise<AmendmentRecord>;
 }
 
+/**
+ * PRSprint 11 (docs/prsprints/PRSPRINT_11_AGREEMENT_VERSIONING_AMENDMENTS_MUTUAL_APPROVAL.md): the
+ * single atomic write path for applying a fully-signed amendment. Before this PRSprint,
+ * `applyAmendment` made 7 sequential, independent calls across 4 separate repositories
+ * (`versions.insert`, `scheduleItems.replaceForVersion`, `versions.recordSignature` x2,
+ * `versions.lock`, `agreements.setCurrentVersionId`, `agreements.updateStatus`,
+ * `amendments.recordApplied`) with no transaction spanning them — a crash or error partway through
+ * could leave a new `agreement_version` row created but never linked as current, or the agreement's
+ * current version advanced while the amendment itself still shows "signed" instead of "applied" —
+ * exactly the "an amendment can partially apply" condition this PRSprint's own Hard Stop rule names.
+ * Real implementation: DrizzleAmendmentApplicationRepository, which wraps every one of these writes
+ * in a single `db.transaction`, mirroring `DrizzleLedgerJournalEntryRepository.insert`'s identical
+ * "multi-table write that must succeed or fail as one unit" pattern (PRSprint 03's own audited
+ * precedent) — the one place in this codebase that already got this right.
+ */
+export interface AmendmentApplicationRepository {
+  applyAtomically(input: {
+    agreementId: string;
+    amendmentId: string;
+    versionNumber: number;
+    parentVersionId: string;
+    frequency: PaymentFrequency;
+    feeAllocation: FeeAllocation;
+    terms: AgreementTerms;
+    scheduleItems: { sequenceNumber: number; dueDate: string; amountMinorUnits: number }[];
+    creditorSignedAt: Date | null;
+    debtorSignedAt: Date | null;
+    documentHash: string;
+    signedAt: Date;
+    pauseAgreement: boolean;
+  }): Promise<{ agreementVersionId: string; amendment: AmendmentRecord }>;
+}
+
 export interface AmendmentServiceDeps {
   agreementService: AgreementService;
   amendments: AmendmentRepository;
+  /** Read-only here — `findById` alone, to compute the next version number. All writes go through `application` (see AmendmentApplicationRepository's own doc comment). */
   versions: AgreementVersionRepository;
-  agreements: AgreementRepository;
-  scheduleItems: InstallmentScheduleItemRepository;
+  application: AmendmentApplicationRepository;
   audit: AuditService;
 }
 
@@ -286,7 +317,13 @@ export class AmendmentService {
    * "Every accepted change creates a new immutable version" — the sole place a new `agreement_version`
    * is ever created from an amendment. The prior version is never edited: this only ever inserts a
    * new row, mirroring `AgreementService.createDraft`/`signAgreement`'s own version-creation exactly
-   * (same repositories, same schedule computation), so "original preserved" holds by construction.
+   * (same schedule computation), so "original preserved" holds by construction.
+   *
+   * PRSprint 11: every write below (new version, its schedule, the agreement's current-version
+   * pointer, its status, and the amendment's own "applied" marker) happens inside one call to
+   * `AmendmentApplicationRepository.applyAtomically` — see that interface's own doc comment for why
+   * this used to be 7 separate, non-transactional calls and what could go wrong if one failed
+   * partway through.
    */
   private async applyAmendment(amendment: AmendmentRecord, actingUserId: string): Promise<AmendmentRecord> {
     const detail = await this.deps.agreementService.getAgreement(amendment.agreementId, actingUserId);
@@ -298,6 +335,7 @@ export class AmendmentService {
       throw new ValidationError("This agreement's current version could not be found.");
     }
 
+    const versionNumber = currentVersion.versionNumber + 1;
     const computed = computeSchedule({
       currentPrincipalMinorUnits: amendment.terms.currentPrincipalMinorUnits,
       firstPaymentMinorUnits: amendment.terms.firstPaymentMinorUnits,
@@ -305,33 +343,27 @@ export class AmendmentService {
       frequency: amendment.frequency,
       firstPaymentDate: amendment.terms.firstPaymentDate,
     });
+    // Computable before the row exists — computeVersionHash only depends on agreementId/versionNumber/
+    // terms, never a DB-generated id — so the atomic write below can insert the version already locked.
+    const documentHash = computeVersionHash({ agreementId: amendment.agreementId, versionNumber, terms: amendment.terms });
 
-    const newVersion = await this.deps.versions.insert({
+    const { agreementVersionId, amendment: applied } = await this.deps.application.applyAtomically({
       agreementId: amendment.agreementId,
-      versionNumber: currentVersion.versionNumber + 1,
+      amendmentId: amendment.id,
+      versionNumber,
       parentVersionId: currentVersion.id,
-      isOriginal: false,
-      producedBy: "amendment",
       frequency: amendment.frequency,
       feeAllocation: amendment.feeAllocation,
       terms: amendment.terms,
+      scheduleItems: computed.items,
+      creditorSignedAt: amendment.creditorSignedAt,
+      debtorSignedAt: amendment.debtorSignedAt,
+      documentHash,
+      signedAt: amendment.signedAt ?? new Date(),
+      pauseAgreement: amendment.changeType === "temporary_pause",
     });
-    await this.deps.scheduleItems.replaceForVersion(newVersion.id, computed.items);
 
-    // The new version carries its own signature record too, for a self-contained history
-    // regardless of whether a version originated at initial signing or via amendment.
-    if (amendment.creditorSignedAt) await this.deps.versions.recordSignature(newVersion.id, "creditor", amendment.creditorSignedAt);
-    if (amendment.debtorSignedAt) await this.deps.versions.recordSignature(newVersion.id, "debtor", amendment.debtorSignedAt);
-    const documentHash = computeVersionHash({ agreementId: newVersion.agreementId, versionNumber: newVersion.versionNumber, terms: newVersion.terms });
-    await this.deps.versions.lock(newVersion.id, { documentHash, signedAt: amendment.signedAt ?? new Date() });
-
-    await this.deps.agreements.setCurrentVersionId(amendment.agreementId, newVersion.id);
-    if (amendment.changeType === "temporary_pause") {
-      await this.deps.agreements.updateStatus(amendment.agreementId, "paused_by_amendment");
-    }
-
-    const applied = await this.deps.amendments.recordApplied(amendment.id, newVersion.id);
-    await this.recordAudit(applied, actingUserId, "amendment_applied", { resultingVersionId: newVersion.id, versionNumber: newVersion.versionNumber });
+    await this.recordAudit(applied, actingUserId, "amendment_applied", { resultingVersionId: agreementVersionId, versionNumber });
     return applied;
   }
 
