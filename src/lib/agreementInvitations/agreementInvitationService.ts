@@ -4,6 +4,7 @@ import type { AgreementService, DraftTermsInput, PartyRole } from "@/lib/agreeme
 import { buildTerms } from "@/lib/agreements/agreementService";
 import { generateOpaqueToken, hashOpaqueToken } from "@/lib/auth/token";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { normalizeE164 } from "@/lib/phone";
 import type { EmailSender } from "@/lib/notify/emailSender";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { SmsSender } from "@/lib/notify/smsSender";
@@ -197,7 +198,14 @@ export class AgreementInvitationService {
     await this.authorizeParty(input.actingUserId, input.inviterProfile, "create_agreement");
 
     const recipientEmail = input.recipientEmail?.trim() ? normalizeEmail(input.recipientEmail) : null;
-    const recipientPhone = input.recipientPhone?.trim() || null;
+    // PRSprint 15 (docs/prsprints/PRSPRINT_15_PRODUCTION_SMS.md), requirement #7: normalized to E.164
+    // up front — a phone number stored in whatever format the inviter typed it would both fail at
+    // send time (Twilio requires E.164) and encourage the exact "multiple incompatible
+    // representations" requirement #7 warns against.
+    const recipientPhone = input.recipientPhone?.trim() ? normalizeE164(input.recipientPhone) : null;
+    if (input.recipientPhone?.trim() && !recipientPhone) {
+      throw new ValidationError("A valid recipient phone number is required (US numbers, or include a country code).");
+    }
     const recipientName = input.recipientName?.trim() || null;
     if (!recipientEmail && !recipientPhone && !recipientName) {
       throw new ValidationError("A recipient name, email, or phone number is required.");

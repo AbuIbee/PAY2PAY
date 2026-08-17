@@ -108,8 +108,9 @@ export class InMemoryStepUpVerificationRepository implements StepUpVerificationR
 export class InMemorySmsSender implements SmsSender {
   sent: { to: string; body: string }[] = [];
 
-  async send(input: { to: string; body: string }): Promise<void> {
+  async send(input: { to: string; body: string }): Promise<{ providerMessageId: string | null }> {
     this.sent.push(input);
+    return { providerMessageId: null };
   }
 
   lastCodeFor(to: string): string | undefined {

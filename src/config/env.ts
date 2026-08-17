@@ -100,6 +100,30 @@ const serverEnvSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // PRSprint 15 (docs/prsprints/PRSPRINT_15_PRODUCTION_SMS.md): production SMS provider (Twilio)
+  // configuration. Optional at the schema level, mirroring RESEND_API_KEY above — the app still
+  // starts with none of these configured; src/lib/notify/getSmsSender.ts falls back to
+  // ConsoleSmsSender (log-only) whenever TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN are absent. Never
+  // logged, never returned from an API response, never written into a notification payload —
+  // src/lib/notify/twilioSmsSender.ts is the only place TWILIO_AUTH_TOKEN is read.
+  TWILIO_ACCOUNT_SID: z.string().min(1).optional(),
+  TWILIO_AUTH_TOKEN: z.string().min(1).optional(),
+  // Either a Messaging Service SID (Twilio's recommended production pattern — supports A2P 10DLC
+  // sender pools/number rotation transparently) or a single From number. Messaging Service takes
+  // priority when both are set; TwilioSmsSender throws a clear ConfigurationError if a send is
+  // attempted with neither configured.
+  TWILIO_MESSAGING_SERVICE_SID: z.string().min(1).optional(),
+  TWILIO_FROM_NUMBER: z.string().min(1).optional(),
+  // HMAC-SHA1 signature verification for Twilio's inbound-message and status-callback webhooks
+  // (src/lib/notify/verifyTwilioWebhookSignature.ts) uses TWILIO_AUTH_TOKEN directly — Twilio has
+  // no separate webhook secret the way Resend does.
+  //
+  // Global kill switch, mirrors EMAIL_DELIVERY_ENABLED exactly — set to "false" to force every
+  // outbound SMS back to ConsoleSmsSender without removing credentials or redeploying.
+  SMS_DELIVERY_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 }).superRefine((data, ctx) => {
   // PRSprint 14 production defect fix: APP_URL's own default only makes sense in
   // development/test — a production deployment that ends up on this default means the

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EmailDeliveryError } from "./emailDeliveryError";
 import type { EmailSender } from "./emailSender";
+import { SmsDeliveryError } from "./smsDeliveryError";
 import type { SmsSender } from "./smsSender";
 import { NotificationService } from "./notificationService";
 import type {
@@ -9,6 +10,7 @@ import type {
   NotificationEventRepository,
   NotificationPreferenceRepository,
   NotificationServiceOptions,
+  SmsOptOutRepository,
   UserContactReader,
 } from "./notificationService";
 
@@ -198,13 +200,41 @@ export class InMemoryEmailSender implements EmailSender {
 export class InMemorySmsSender implements SmsSender {
   sent: { to: string; body: string }[] = [];
   failNext = false;
+  /** Mirrors InMemoryEmailSender's identical failNextRetryable convention. */
+  failNextRetryable: boolean | null = null;
+  private nextProviderMessageId: string | null = null;
 
-  async send(input: { to: string; body: string }): Promise<void> {
+  setNextProviderMessageId(id: string): void {
+    this.nextProviderMessageId = id;
+  }
+
+  async send(input: { to: string; body: string }): Promise<{ providerMessageId: string | null }> {
     if (this.failNext) {
       this.failNext = false;
+      const retryable = this.failNextRetryable;
+      this.failNextRetryable = null;
+      if (retryable !== null) {
+        throw new SmsDeliveryError("simulated_sms_send_failure", { retryable, category: retryable ? "timeout" : "invalid_number" });
+      }
       throw new Error("simulated_sms_send_failure");
     }
     this.sent.push(input);
+    const providerMessageId = this.nextProviderMessageId ?? randomUUID();
+    this.nextProviderMessageId = null;
+    return { providerMessageId };
+  }
+}
+
+export class InMemorySmsOptOutRepository implements SmsOptOutRepository {
+  private opted = new Set<string>();
+
+  async isOptedOut(phone: string): Promise<boolean> {
+    return this.opted.has(phone);
+  }
+
+  async recordOptOut(phone: string, source: "stop_keyword" | "provider_rejection" = "stop_keyword"): Promise<void> {
+    void source;
+    this.opted.add(phone);
   }
 }
 
@@ -214,7 +244,8 @@ export function createTestNotificationService(options?: NotificationServiceOptio
   const contacts = new InMemoryUserContactReader();
   const emailSender = new InMemoryEmailSender();
   const smsSender = new InMemorySmsSender();
+  const smsOptOuts = new InMemorySmsOptOutRepository();
   const appUrl = "https://app.test";
-  const notificationService = new NotificationService({ events, preferences, emailSender, smsSender, contacts, appUrl }, options);
-  return { events, preferences, contacts, emailSender, smsSender, appUrl, notificationService };
+  const notificationService = new NotificationService({ events, preferences, emailSender, smsSender, contacts, smsOptOuts, appUrl }, options);
+  return { events, preferences, contacts, emailSender, smsSender, smsOptOuts, appUrl, notificationService };
 }

@@ -29,3 +29,4 @@ export * from "./financialAccount";
 export * from "./adminOps";
 export * from "./rateLimit";
 export * from "./agreementInvitation";
+export * from "./smsOptOut";

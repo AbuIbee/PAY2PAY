@@ -27,6 +27,12 @@
  * send. Split into a read and a mutate capability, mirroring `place_retention_hold`/
  * `release_retention_hold`'s identical precedent, rather than one combined capability — a role can be
  * given visibility without also being given the ability to trigger a resend.
+ *
+ * `review_sms_delivery`/`retry_sms_delivery` (PRSprint 15,
+ * docs/prsprints/PRSPRINT_15_PRODUCTION_SMS.md, requirement #27/#28): the SMS-channel sibling of the
+ * two above, kept as separate capabilities rather than reusing the email ones — requirement #32's own
+ * "each channel needs independent delivery state... retries must be channel-specific" applies to
+ * authorization the same way it applies to the underlying data.
  */
 export const ADMIN_CAPABILITIES = [
   "suspend_account",
@@ -44,6 +50,8 @@ export const ADMIN_CAPABILITIES = [
   "release_retention_hold",
   "review_email_delivery",
   "retry_email_delivery",
+  "review_sms_delivery",
+  "retry_sms_delivery",
 ] as const;
 
 export type AdminCapability = (typeof ADMIN_CAPABILITIES)[number];
@@ -61,7 +69,7 @@ export type InternalAdminRole = "support" | "compliance" | "fraud_reviewer" | "a
  * capabilities are added.
  */
 export const DEFAULT_INTERNAL_ROLE_CAPABILITIES: Record<Exclude<InternalAdminRole, "admin">, readonly AdminCapability[]> = {
-  support: ["manage_support_case", "review_audit_logs", "review_payment_failures", "review_email_delivery", "retry_email_delivery"],
+  support: ["manage_support_case", "review_audit_logs", "review_payment_failures", "review_email_delivery", "retry_email_delivery", "review_sms_delivery", "retry_sms_delivery"],
   // "manage_appeal" sits with compliance, not support or fraud_reviewer — an appeal reviewer must
   // never be the same person who made the original restriction decision (see appeal.ts's own CHECK
   // constraint), and compliance is this codebase's natural independent-review role, distinct from

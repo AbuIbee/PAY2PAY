@@ -30,7 +30,7 @@ export class EmailDeliveryAdminService {
 
   async listRecent(actingUserId: string, actingRole: PlatformRole, limit: number = DEFAULT_LIST_LIMIT): Promise<NotificationEventRecord[]> {
     await this.deps.roles.requireCapability(actingUserId, actingRole, "review_email_delivery");
-    return this.deps.notifications.listRecentEmailEvents(limit);
+    return this.deps.notifications.listRecentByChannel("email", limit);
   }
 
   async retry(input: { notificationEventId: string; actingUserId: string; actingRole: PlatformRole }): Promise<NotificationEventRecord> {
