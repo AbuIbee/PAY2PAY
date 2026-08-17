@@ -228,4 +228,64 @@ export const NOTIFICATION_TEMPLATES: Record<NotificationEventType, NotificationT
       inAppBody: `Your proposal recipient has ${label}.`,
     };
   },
+  // PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md) — see eventTypes.ts's own
+  // doc comment for why these four exist.
+  agreement_action_required: (p) => {
+    const stage = str(p, "stage", "review");
+    const label =
+      stage === "acknowledge_debt"
+        ? "acknowledge the debt described in it"
+        : stage === "decide"
+          ? "review and decide on it"
+          : "review the new terms proposed for it";
+    return {
+      subject: "An agreement needs your attention",
+      emailBody: `An agreement on PAY2PAY needs you to ${label}.`,
+      smsBody: `PAY2PAY: an agreement needs you to ${label}.`,
+      inAppBody: `This agreement needs you to ${label}.`,
+    };
+  },
+  agreement_decided: (p) => {
+    const decision = str(p, "decision", "decided");
+    const accepted = decision === "accepted";
+    return {
+      subject: accepted ? "Your agreement was accepted" : "Your agreement was declined",
+      emailBody: accepted
+        ? "The other party accepted your agreement. It is now awaiting signatures."
+        : "The other party declined your agreement.",
+      smsBody: accepted ? "PAY2PAY: your agreement was accepted, awaiting signatures." : "PAY2PAY: your agreement was declined.",
+      inAppBody: accepted ? "Your agreement was accepted and is now awaiting signatures." : "Your agreement was declined.",
+    };
+  },
+  agreement_counterparty_signed: (p) => {
+    const isAmendment = str(p, "context", "agreement") === "amendment";
+    const noun = isAmendment ? "amendment" : "agreement";
+    return {
+      subject: `Your counterparty signed the ${noun} — your signature is needed`,
+      emailBody: `The other party has signed this ${noun}. Your signature is now needed to complete it.`,
+      smsBody: `PAY2PAY: your counterparty signed the ${noun} — your signature is needed.`,
+      inAppBody: `Your counterparty signed this ${noun}. Your signature is needed.`,
+    };
+  },
+  amendment_decided: (p) => {
+    const decision = str(p, "decision", "decided");
+    const subject =
+      decision === "accepted"
+        ? "Your amendment was accepted"
+        : decision === "rejected"
+          ? "Your amendment was declined"
+          : "Your amendment is now applied";
+    const body =
+      decision === "accepted"
+        ? "The other party accepted your proposed amendment."
+        : decision === "rejected"
+          ? "The other party declined your proposed amendment."
+          : "Your amendment has been fully signed and is now in effect on a new agreement version.";
+    return {
+      subject,
+      emailBody: body,
+      smsBody: `PAY2PAY: ${subject.toLowerCase()}.`,
+      inAppBody: body,
+    };
+  },
 };

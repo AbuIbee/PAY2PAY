@@ -198,6 +198,7 @@ describe("AmendmentService", () => {
       versions: ctx.agreementCtx.versions,
       application: { applyAtomically: async () => { throw new Error("simulated_transaction_failure"); } },
       audit: noopAudit,
+      profileOwners: ctx.agreementCtx.profileOwners,
     });
 
     await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
@@ -453,5 +454,122 @@ describe("AmendmentService", () => {
       "amendment_fully_signed",
       "amendment_applied",
     ]);
+  });
+
+  /**
+   * PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md): before this,
+   * AmendmentService never called NotificationService.notify at all, despite `amendment` existing in
+   * the taxonomy since Sprint 17 for exactly this purpose. Uses its own local `notifiedCtx`
+   * (constructed with a real NotificationService) rather than the outer `beforeEach`'s, which omits it.
+   */
+  describe("PRSprint 13: notification wiring", () => {
+    async function setupNotified() {
+      const { createTestNotificationService } = await import("@/lib/notify/testFakes");
+      const notifyCtx = createTestNotificationService();
+      const notifiedCtx = createTestAmendmentService(notifyCtx.notificationService);
+      const creditor = randomUUID();
+      const debtor = randomUUID();
+      const creditorProfileId = randomUUID();
+      const debtorProfileId = randomUUID();
+      notifiedCtx.agreementCtx.profileOwners.set("personal", creditorProfileId, creditor);
+      notifiedCtx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtor);
+      const created = await notifiedCtx.agreementCtx.agreementService.createDraft({
+        creatorUserId: creditor,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      await notifiedCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, creditor);
+      await notifiedCtx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtor);
+      await notifiedCtx.agreementCtx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditor, decision: "accept" });
+      await notifiedCtx.agreementCtx.agreementService.signAgreement(created.agreement.id, creditor);
+      await notifiedCtx.agreementCtx.agreementService.signAgreement(created.agreement.id, debtor);
+      return { notifiedCtx, notifyCtx, agreementId: created.agreement.id, creditor, debtor };
+    }
+
+    it("proposeAmendment notifies the counterparty (recipient resolution: proposer's opposite role)", async () => {
+      const { notifiedCtx, notifyCtx, agreementId, creditor, debtor } = await setupNotified();
+      await notifiedCtx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "Lost overtime hours",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+        actingUserId: debtor,
+      });
+      const creditorNotifications = await notifyCtx.notificationService.listForUser(creditor);
+      expect(creditorNotifications.some((n) => n.notificationType === "amendment")).toBe(true);
+      const debtorNotifications = await notifyCtx.notificationService.listForUser(debtor);
+      expect(debtorNotifications.some((n) => n.notificationType === "amendment")).toBe(false);
+    });
+
+    it("decideAmendment(accept) notifies the original proposer with decision=accepted", async () => {
+      const { notifiedCtx, notifyCtx, agreementId, creditor, debtor } = await setupNotified();
+      const amendment = await notifiedCtx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "x",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+        actingUserId: debtor,
+      });
+      await notifiedCtx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditor, decision: "accept" });
+      const debtorNotifications = await notifyCtx.notificationService.listForUser(debtor);
+      const decided = debtorNotifications.find((n) => n.notificationType === "amendment_decided");
+      expect(decided?.payload).toMatchObject({ decision: "accepted" });
+    });
+
+    it("decideAmendment(reject) notifies the original proposer with decision=rejected", async () => {
+      const { notifiedCtx, notifyCtx, agreementId, creditor, debtor } = await setupNotified();
+      const amendment = await notifiedCtx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "x",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+        actingUserId: debtor,
+      });
+      await notifiedCtx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditor, decision: "reject", reason: "no" });
+      const debtorNotifications = await notifyCtx.notificationService.listForUser(debtor);
+      const decided = debtorNotifications.find((n) => n.notificationType === "amendment_decided");
+      expect(decided?.payload).toMatchObject({ decision: "rejected" });
+    });
+
+    it("signAmendment: first signer notifies the other party; once both have signed, notifies both parties that the amendment is applied", async () => {
+      const { notifiedCtx, notifyCtx, agreementId, creditor, debtor } = await setupNotified();
+      const amendment = await notifiedCtx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "x",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+        actingUserId: debtor,
+      });
+      await notifiedCtx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditor, decision: "accept" });
+
+      await notifiedCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditor });
+      const debtorAfterFirstSign = await notifyCtx.notificationService.listForUser(debtor);
+      expect(debtorAfterFirstSign.some((n) => n.notificationType === "agreement_counterparty_signed")).toBe(true);
+
+      await notifiedCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtor });
+      const creditorFinal = await notifyCtx.notificationService.listForUser(creditor);
+      const debtorFinal = await notifyCtx.notificationService.listForUser(debtor);
+      expect(creditorFinal.some((n) => n.notificationType === "amendment_decided" && (n.payload as { decision?: string }).decision === "applied")).toBe(
+        true,
+      );
+      expect(debtorFinal.some((n) => n.notificationType === "amendment_decided" && (n.payload as { decision?: string }).decision === "applied")).toBe(
+        true,
+      );
+    });
+
+    it("a notification-layer failure never fails the underlying amendment transition (failure isolation)", async () => {
+      const { notifiedCtx, agreementId, debtor } = await setupNotified();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (notifiedCtx.amendmentService as any).deps.notifications = { notify: async () => { throw new Error("simulated_notify_outage"); } };
+      const amendment = await notifiedCtx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "x",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+        actingUserId: debtor,
+      });
+      expect(amendment.status).toBe("proposed");
+    });
   });
 });

@@ -171,6 +171,7 @@ export function createTestAgreementDisputeService() {
       amendments,
     }),
     audit: new AuditService(amendmentAuditRepo),
+    profileOwners: agreementCtx.profileOwners,
   });
 
   const evidence = new InMemoryEvidenceRepository();

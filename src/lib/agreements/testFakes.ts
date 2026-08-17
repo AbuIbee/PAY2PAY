@@ -279,7 +279,11 @@ class InMemoryAuditEventRepositoryForAgreements implements AuditEventRepository 
  * just wrote. Defaults to a private, throwaway array for every caller (e.g. agreementService.test.ts)
  * that never supplies evidence and doesn't care where it would go.
  */
-export function createTestAgreementService(signatureEvents: InMemorySignatureEventLike[] = []) {
+/** `notifications`: optional (PRSprint 13, docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md) — AgreementServiceDeps.notifications is itself optional, matching every other test context's identical pattern; most callers omit it. */
+export function createTestAgreementService(
+  signatureEvents: InMemorySignatureEventLike[] = [],
+  notifications?: import("@/lib/notify/notificationService").NotificationService,
+) {
   const agreements = new InMemoryAgreementRepository();
   const versions = new InMemoryAgreementVersionRepository();
   const parties = new InMemoryAgreementPartyRepository();
@@ -299,6 +303,7 @@ export function createTestAgreementService(signatureEvents: InMemorySignatureEve
     staffService: staffCtx.staffService,
     audit,
     signing,
+    notifications,
   });
 
   return { agreementService, agreements, versions, parties, scheduleItems, profileOwners, staffCtx, auditRepo, signing };

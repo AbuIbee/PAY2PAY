@@ -7,6 +7,8 @@ import { generateAgreementPdf, hashPdfContent } from "@/lib/documents/agreementP
 import type { DocumentStorage } from "@/lib/documents/documentStorage";
 import type { ProfileDisplayReader } from "@/lib/documents/profileDisplayReader";
 import { ConfigurationError, ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
+import { logger } from "@/lib/logger";
+import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { StaffService } from "@/lib/staff/staffService";
@@ -72,6 +74,13 @@ export interface SignatureServiceDeps {
   profileDisplay: ProfileDisplayReader;
   storage: DocumentStorage;
   audit: AuditService;
+  /**
+   * PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md): optional, mirroring
+   * AgreementServiceDeps's own identical `notifications?` precedent — every notification call this
+   * class makes is wrapped in its own try/catch (see `notifyCounterpartySigned`), so a
+   * notification-layer failure can never fail the signature it's reporting on.
+   */
+  notifications?: NotificationService;
 }
 
 export interface SignInput {
@@ -236,7 +245,84 @@ export class SignatureService {
       }
     }
 
+    // PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md): observes the signature
+    // that was already atomically committed above — never able to influence whether it happened.
+    // `signatureEvent.id` (this specific signature, not the agreement/version) is the dedupeKey's
+    // uniqueness marker, so a later, entirely separate signature on a *different* version (an
+    // amendment's own new version, e.g.) is never wrongly deduplicated against this one.
+    if (signResult.bothSigned) {
+      await this.notifyBothParties(detail.agreement, "agreement_signed", {}, signatureEvent.id);
+    } else {
+      const otherRole: PartyRole = role === "creditor" ? "debtor" : "creditor";
+      await this.notifyParty(detail.agreement, otherRole, "agreement_counterparty_signed", { context: "agreement" }, signatureEvent.id);
+    }
+
     return { signatureEvent, agreementStatus: signResult.agreementStatus, pdfGenerated };
+  }
+
+  /** Mirrors AgreementService.notifyParty's identical shape/rationale — see that method's own doc comment. */
+  private async notifyParty(
+    agreement: AgreementWithDetail["agreement"],
+    role: PartyRole,
+    notificationType: "agreement_counterparty_signed",
+    payload: Record<string, unknown>,
+    uniqueId: string,
+  ): Promise<void> {
+    if (!this.deps.notifications) return;
+    try {
+      const profile: ProfileRef =
+        role === "creditor"
+          ? { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId }
+          : { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId };
+      const recipientUserId = await this.deps.profileOwners.getOwnerUserId(profile.kind, profile.id);
+      if (!recipientUserId) return;
+      await this.deps.notifications.notify({
+        recipientUserId,
+        notificationType,
+        relatedAgreementId: agreement.id,
+        payload,
+        dedupeKey: `${notificationType}:${agreement.id}:sig:${uniqueId}:${recipientUserId}`,
+      });
+    } catch (error) {
+      logger.error("signature_notification_failed", {
+        agreementId: agreement.id,
+        notificationType,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async notifyBothParties(
+    agreement: AgreementWithDetail["agreement"],
+    notificationType: "agreement_signed",
+    payload: Record<string, unknown>,
+    uniqueId: string,
+  ): Promise<void> {
+    if (!this.deps.notifications) return;
+    try {
+      const [creditorUserId, debtorUserId] = await Promise.all([
+        this.deps.profileOwners.getOwnerUserId(agreement.creditorProfileKind, agreement.creditorProfileId),
+        this.deps.profileOwners.getOwnerUserId(agreement.debtorProfileKind, agreement.debtorProfileId),
+      ]);
+      const recipients = [creditorUserId, debtorUserId].filter((id): id is string => id !== null);
+      await Promise.all(
+        recipients.map((recipientUserId) =>
+          this.deps.notifications!.notify({
+            recipientUserId,
+            notificationType,
+            relatedAgreementId: agreement.id,
+            payload,
+            dedupeKey: `${notificationType}:${agreement.id}:sig:${uniqueId}:${recipientUserId}`,
+          }),
+        ),
+      );
+    } catch (error) {
+      logger.error("signature_notification_failed", {
+        agreementId: agreement.id,
+        notificationType,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async generatePdf(detail: AgreementWithDetail, ipAddress: string, deviceInfo: unknown): Promise<void> {

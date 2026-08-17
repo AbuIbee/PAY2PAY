@@ -1,6 +1,7 @@
 import "server-only";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
+import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { getStaffService } from "@/lib/staff/getStaffService";
 import { AgreementService } from "./agreementService";
@@ -24,6 +25,7 @@ export function getAgreementService(): AgreementService {
       staffService: getStaffService(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
       signing: new DrizzleSigningApplicationRepository(),
+      notifications: getNotificationService(),
     });
   }
   return cached;
