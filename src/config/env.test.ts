@@ -107,6 +107,35 @@ describe("parseServerEnv", () => {
     expect(() => parseServerEnv({ ...validEnv, EMAIL_FROM_ADDRESS: "not-an-email" })).toThrow(EnvironmentValidationError);
   });
 
+  it("PRSprint 14 production defect fix: rejects a localhost APP_URL when APP_ENV is production", () => {
+    expect(() => parseServerEnv({ ...validEnv, APP_ENV: "production", APP_URL: "http://localhost:3000" })).toThrow(EnvironmentValidationError);
+    expect(() => parseServerEnv({ ...validEnv, APP_ENV: "production", APP_URL: "http://127.0.0.1:3000" })).toThrow(EnvironmentValidationError);
+  });
+
+  it("the localhost-in-production error names APP_URL specifically", () => {
+    expect.assertions(1);
+    try {
+      parseServerEnv({ ...validEnv, APP_ENV: "production", APP_URL: "http://localhost:3000" });
+    } catch (error) {
+      expect((error as Error).message).toContain("APP_URL");
+    }
+  });
+
+  it("accepts the production default (no APP_URL override) precisely because it's still localhost — same failure mode as an explicit localhost value", () => {
+    expect(() => parseServerEnv({ ...validEnv, APP_ENV: "production" })).toThrow(EnvironmentValidationError);
+  });
+
+  it("accepts a real production APP_URL", () => {
+    const env = parseServerEnv({ ...validEnv, APP_ENV: "production", APP_URL: "https://paid2you.com" });
+    expect(env.APP_URL).toBe("https://paid2you.com");
+  });
+
+  it("does not reject a localhost APP_URL outside production (development/test/staging)", () => {
+    for (const appEnv of ["development", "test", "staging"] as const) {
+      expect(() => parseServerEnv({ ...validEnv, APP_ENV: appEnv, APP_URL: "http://localhost:3000" })).not.toThrow();
+    }
+  });
+
   it("includes the offending field path in the error message", () => {
     expect.assertions(2);
     try {

@@ -35,10 +35,22 @@ const serverEnvSchema = z.object({
     .string()
     .min(16, "AUTH_PASSWORD_PEPPER must be at least 16 characters"),
   // Base URL used to build links inside emails (verification, password
-  // reset) sent by src/lib/notify/*Sender.ts. Server-only: nothing renders
-  // this in a page, so it doesn't need a NEXT_PUBLIC_ prefix. Defaults to
-  // localhost for development convenience; must be set to the real deployed
-  // origin in preview/staging/production.
+  // reset, staff/agreement/relationship invitations, and every notification
+  // CTA link) — the one centralized source every link-building service reads
+  // via getServerEnv().APP_URL (never a per-request Host header, so no
+  // client-supplied value can ever substitute a different domain here).
+  // Server-only: nothing renders this in a page, so it doesn't need a
+  // NEXT_PUBLIC_ prefix. Defaults to localhost for development convenience;
+  // must be set to the real deployed origin in preview/staging/production.
+  //
+  // PRSprint 14 production defect (fixed): this variable was never actually
+  // provisioned in any Vercel environment, so production silently ran on the
+  // "http://localhost:3000" default — every production email's link pointed
+  // at localhost. The superRefine below turns that failure mode from silent
+  // (a broken link nobody notices until a user reports it) into loud (the
+  // app refuses to serve any request that touches getServerEnv() at all) —
+  // matching AUDIT_HASH_SECRET/AUTH_PASSWORD_PEPPER's existing "throw a clear
+  // error rather than silently degrade" precedent in this same file.
   APP_URL: z.string().url().default("http://localhost:3000"),
   // Sprint 6 (docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md): Supabase Storage
   // credentials for the private signed-agreement-PDF bucket. Optional at the environment-schema
@@ -88,6 +100,27 @@ const serverEnvSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+}).superRefine((data, ctx) => {
+  // PRSprint 14 production defect fix: APP_URL's own default only makes sense in
+  // development/test — a production deployment that ends up on this default means the
+  // real value was never provisioned, which previously fell through silently (see
+  // APP_URL's own doc comment above). Cross-field, so it has to live in superRefine
+  // rather than on the field's own schema, which can't see APP_ENV.
+  if (data.APP_ENV !== "production") return;
+  let hostname = "";
+  try {
+    hostname = new URL(data.APP_URL).hostname;
+  } catch {
+    // Unparseable already fails APP_URL's own z.string().url() check — nothing to add here.
+    return;
+  }
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["APP_URL"],
+      message: 'APP_URL resolves to localhost while APP_ENV is "production" — set APP_URL to the real production origin (e.g. https://paid2you.com) in this environment\'s configuration.',
+    });
+  }
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
