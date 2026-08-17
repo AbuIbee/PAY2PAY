@@ -4,7 +4,7 @@ import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { DrizzleSessionRepository } from "@/lib/auth/drizzleSessionRepository";
 import { getMfaService } from "@/lib/auth/getMfaService";
-import { ConsoleEmailSender } from "@/lib/notify/consoleEmailSender";
+import { getEmailSender } from "@/lib/notify/getEmailSender";
 import { DrizzleBusinessStaffMemberRepository } from "./drizzleBusinessStaffMemberRepository";
 import { DrizzleCustomRoleRepository } from "./drizzleCustomRoleRepository";
 import { DrizzleStaffInvitationRepository } from "./drizzleStaffInvitationRepository";
@@ -25,7 +25,7 @@ export function getStaffService(): StaffService {
     getMfaService(),
     new DrizzleUserEmailReader(),
     new AuditService(new DrizzleAuditEventRepository()),
-    new ConsoleEmailSender(),
+    getEmailSender(),
     { appUrl: APP_URL },
   );
   return cached;

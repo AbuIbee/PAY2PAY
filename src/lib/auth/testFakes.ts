@@ -235,10 +235,11 @@ export class InMemoryPasswordResetTokenRepository implements PasswordResetTokenR
 }
 
 export class InMemoryEmailSender implements EmailSender {
-  sent: { to: string; subject: string; body: string }[] = [];
+  sent: { to: string; subject: string; body: string; ctaUrl?: string; ctaText?: string }[] = [];
 
-  async send(input: { to: string; subject: string; body: string }): Promise<void> {
+  async send(input: { to: string; subject: string; body: string; ctaUrl?: string; ctaText?: string }): Promise<{ providerMessageId: string | null }> {
     this.sent.push(input);
+    return { providerMessageId: null };
   }
 
   /** Extracts the verification/reset token from the last email sent to `to` (the link is `.../<path>?token=<token>`). */

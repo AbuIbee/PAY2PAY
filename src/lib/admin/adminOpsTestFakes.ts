@@ -19,6 +19,7 @@ import { AdminCaseReviewService } from "./adminCaseReviewService";
 import type { AdminDisputeReader, VerificationStatusReader } from "./adminCaseReviewService";
 import type { AgreementDisputeRecord } from "@/lib/disputes/agreementDisputeService";
 import type { PaymentDisputeRecord } from "@/lib/disputes/paymentDisputeService";
+import { EmailDeliveryAdminService } from "./emailDeliveryAdminService";
 
 /** Test-only in-memory doubles for the Sprint 18 admin/support/appeals architecture, mirroring src/lib/relationships/testFakes.ts's pattern. */
 
@@ -348,6 +349,13 @@ export function createTestAdminOpsServices() {
     audit: new AuditService(appealAuditRepo),
   });
 
+  const emailDeliveryAuditRepo = new InMemoryAuditEventRepositoryForAdminOps();
+  const emailDeliveryAdminService = new EmailDeliveryAdminService({
+    notifications: notifyCtx.notificationService,
+    roles: adminRoleService,
+    audit: new AuditService(emailDeliveryAuditRepo),
+  });
+
   const verification = new InMemoryVerificationStatusReader();
   const disputes = new InMemoryAdminDisputeReader();
   const auditReader = { listForTarget: async (targetResourceType: string, targetResourceId: string) => [...roleAuditRepo.events, ...holdAuditRepo.events, ...restrictionAuditRepo.events, ...caseAuditRepo.events, ...appealAuditRepo.events].filter((e) => e.targetResourceType === targetResourceType && e.targetResourceId === targetResourceId) };
@@ -369,5 +377,6 @@ export function createTestAdminOpsServices() {
     verification,
     disputes,
     adminCaseReviewService,
+    emailDeliveryAdminService,
   };
 }

@@ -22,7 +22,7 @@ describe("NotificationService", () => {
     expect(inAppRecord.deliveredAt).not.toBeNull();
   });
 
-  it("attempts delivery via email and sms and marks delivered when contact info is present", async () => {
+  it("attempts delivery via email and sms and marks sent/delivered appropriately when contact info is present", async () => {
     const { notificationService, contacts, emailSender, smsSender } = createTestNotificationService();
     contacts.set("user-1", "user1@example.com");
     contacts.setPhone("user-1", "+15551234567");
@@ -36,7 +36,12 @@ describe("NotificationService", () => {
       { to: "user1@example.com", subject: "A payment did not go through", body: expect.stringContaining("insufficient_funds") },
     ]);
     expect(smsSender.sent).toEqual([{ to: "+15551234567", body: expect.stringContaining("insufficient_funds") }]);
-    expect(records.every((r) => r.status === "delivered")).toBe(true);
+    // PRSprint 14: email now reports "sent" (provider accepted) rather than "delivered" — actual
+    // delivery confirmation only ever arrives later, via a provider webhook. in_app/sms are unaffected.
+    const emailRecord = records.find((r) => r.channel === "email")!;
+    expect(emailRecord.status).toBe("sent");
+    expect(emailRecord.sentAt).not.toBeNull();
+    expect(records.filter((r) => r.channel !== "email").every((r) => r.status === "delivered")).toBe(true);
   });
 
   describe("critical preference override", () => {
@@ -185,7 +190,9 @@ describe("NotificationService", () => {
       expect(result.retried).toBe(1);
       expect(result.succeeded).toBe(1);
       const updated = await events.findById(record.id);
-      expect(updated?.status).toBe("delivered");
+      // PRSprint 14: email retries into "sent" (provider accepted), not "delivered" — see this
+      // file's other updated assertion above for the full rationale.
+      expect(updated?.status).toBe("sent");
       expect(emailSender.sent).toHaveLength(1);
     });
 
@@ -210,6 +217,145 @@ describe("NotificationService", () => {
 
       const secondPass = await notificationService.retryDueNotifications(new Date(now.getTime() + 100_000));
       expect(secondPass.retried).toBe(0); // excluded — attemptCount >= maxAttempts
+    });
+  });
+
+  describe("PRSprint 14: production email delivery", () => {
+    it("builds a CTA link to the related agreement and passes it to the email sender", async () => {
+      const { notificationService, contacts, emailSender, appUrl } = createTestNotificationService();
+      contacts.set("user-1", "user1@example.com");
+      await notificationService.notify({
+        recipientUserId: "user-1",
+        notificationType: "agreement_signed",
+        relatedAgreementId: "agreement-42",
+        payload: {},
+      });
+      expect(emailSender.sent).toHaveLength(1);
+      expect(emailSender.sent[0]?.ctaUrl).toBe(`${appUrl}/agreements/detail?id=agreement-42`);
+      expect(emailSender.sent[0]?.ctaText).toBeTruthy();
+    });
+
+    it("omits ctaUrl entirely when the event has no relatedAgreementId", async () => {
+      const { notificationService, contacts, emailSender } = createTestNotificationService();
+      contacts.set("user-1", "user1@example.com");
+      await notificationService.notify({ recipientUserId: "user-1", notificationType: "security_event", payload: { description: "New device sign-in" } });
+      expect(emailSender.sent).toHaveLength(1);
+      expect(emailSender.sent[0]?.ctaUrl).toBeUndefined();
+    });
+
+    it("a non-retryable EmailDeliveryError dead-letters immediately instead of exhausting the retry budget", async () => {
+      const { notificationService, contacts, emailSender, events } = createTestNotificationService({ retryDelayMs: 1000, maxAttempts: 5 });
+      contacts.set("user-1", "user1@example.com");
+      emailSender.failNext = true;
+      emailSender.failNextRetryable = false;
+
+      const [record] = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} });
+      if (!record) throw new Error("expected a record");
+      const updated = await events.findById(record.id);
+      expect(updated?.status).toBe("failed");
+      expect(updated?.attemptCount).toBe(1); // only the one attempt was ever made
+      expect(updated?.nextRetryAt).toBeNull(); // no further retry scheduled — dead-lettered on the first try
+    });
+
+    it("a retryable EmailDeliveryError still uses the normal bounded-retry/backoff path", async () => {
+      const { notificationService, contacts, emailSender, events } = createTestNotificationService({ retryDelayMs: 1000, maxAttempts: 5 });
+      contacts.set("user-1", "user1@example.com");
+      emailSender.failNext = true;
+      emailSender.failNextRetryable = true;
+
+      const [record] = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} });
+      if (!record) throw new Error("expected a record");
+      const updated = await events.findById(record.id);
+      expect(updated?.status).toBe("failed");
+      expect(updated?.attemptCount).toBe(1);
+      expect(updated?.nextRetryAt).not.toBeNull(); // retry is still scheduled — attempts remain
+    });
+
+    describe("recordProviderDeliveryEvent (webhook-driven)", () => {
+      it("marks a row delivered on a provider 'delivered' event, correlated by providerMessageId", async () => {
+        const { notificationService, contacts, emailSender, events } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        emailSender.setNextProviderMessageId("msg_123");
+        const [record] = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} });
+        if (!record) throw new Error("expected a record");
+        expect((await events.findById(record.id))?.status).toBe("sent");
+
+        const updated = await notificationService.recordProviderDeliveryEvent("msg_123", "delivered", new Date());
+        expect(updated?.status).toBe("delivered");
+        expect(updated?.deliveredAt).not.toBeNull();
+      });
+
+      it("marks a row permanently failed (no further retry) on a bounce, without touching other rows", async () => {
+        const { notificationService, contacts, emailSender, events } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        contacts.set("user-2", "user2@example.com");
+        emailSender.setNextProviderMessageId("msg_bounced");
+        const [record1] = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} });
+        emailSender.setNextProviderMessageId("msg_other");
+        const [record2] = await notificationService.notify({ recipientUserId: "user-2", notificationType: "payment_cleared", payload: {} });
+        if (!record1 || !record2) throw new Error("expected records");
+
+        const updated = await notificationService.recordProviderDeliveryEvent("msg_bounced", "bounced", new Date());
+        expect(updated?.status).toBe("failed");
+        expect(updated?.failureReason).toBe("provider_bounced");
+        expect(updated?.nextRetryAt).toBeNull();
+        // The other recipient's row is untouched.
+        expect((await events.findById(record2.id))?.status).toBe("sent");
+      });
+
+      it("marks a row permanently failed on a complaint", async () => {
+        const { notificationService, contacts, emailSender } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        emailSender.setNextProviderMessageId("msg_complained");
+        await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} });
+        const updated = await notificationService.recordProviderDeliveryEvent("msg_complained", "complained", new Date());
+        expect(updated?.status).toBe("failed");
+        expect(updated?.failureReason).toBe("provider_complaint");
+      });
+
+      it("returns null for an unknown providerMessageId instead of throwing", async () => {
+        const { notificationService } = createTestNotificationService();
+        const result = await notificationService.recordProviderDeliveryEvent("no-such-message", "delivered", new Date());
+        expect(result).toBeNull();
+      });
+    });
+
+    describe("redeliverFailedEvent (admin retry)", () => {
+      it("re-attempts a failed event and succeeds", async () => {
+        const { notificationService, contacts, emailSender, events } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        emailSender.failNext = true;
+        const [record] = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} });
+        if (!record) throw new Error("expected a record");
+        expect((await events.findById(record.id))?.status).toBe("failed");
+
+        const retried = await notificationService.redeliverFailedEvent(record.id);
+        expect(retried.status).toBe("sent");
+        expect(emailSender.sent).toHaveLength(1);
+      });
+
+      it("rejects a retry attempt on an event that is not currently failed (already succeeded)", async () => {
+        const { notificationService, contacts } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        const [record] = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} });
+        if (!record) throw new Error("expected a record");
+        expect(record.status).toBe("sent");
+        await expect(notificationService.redeliverFailedEvent(record.id)).rejects.toThrow();
+      });
+
+      it("rejects a retry attempt on an unknown id", async () => {
+        const { notificationService } = createTestNotificationService();
+        await expect(notificationService.redeliverFailedEvent("00000000-0000-0000-0000-000000000000")).rejects.toThrow();
+      });
+    });
+
+    it("listRecentEmailEvents returns only email-channel rows, most recent first", async () => {
+      const { notificationService, contacts } = createTestNotificationService();
+      contacts.set("user-1", "user1@example.com");
+      await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} }); // email + in_app
+      const recent = await notificationService.listRecentEmailEvents(10);
+      expect(recent.every((r) => r.channel === "email")).toBe(true);
+      expect(recent.length).toBeGreaterThan(0);
     });
   });
 });

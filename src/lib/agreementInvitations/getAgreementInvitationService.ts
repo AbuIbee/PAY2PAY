@@ -3,8 +3,8 @@ import { getServerEnv } from "@/config/env";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getAgreementService } from "@/lib/agreements/getAgreementService";
-import { ConsoleEmailSender } from "@/lib/notify/consoleEmailSender";
 import { ConsoleSmsSender } from "@/lib/notify/consoleSmsSender";
+import { getEmailSender } from "@/lib/notify/getEmailSender";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { DrizzleUserLookupReader } from "@/lib/relationships/drizzleUserLookupReader";
@@ -29,7 +29,7 @@ export function getAgreementInvitationService(): AgreementInvitationService {
       users: new DrizzleUserLookupReader(),
       userEmails: new DrizzleUserEmailReader(),
       notifications: getNotificationService(),
-      emailSender: new ConsoleEmailSender(),
+      emailSender: getEmailSender(),
       smsSender: new ConsoleSmsSender(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
       appUrl: APP_URL,

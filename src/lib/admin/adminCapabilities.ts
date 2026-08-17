@@ -20,6 +20,13 @@
  * (`AdminCaseReviewService.listAuditEventsForTarget`) applied to an agreement/payment target — every
  * payment failure is already an audited event (Sprint 13/17), so no separate dedicated read path was
  * built for it.
+ *
+ * `review_email_delivery`/`retry_email_delivery` (PRSprint 14,
+ * docs/prsprints/PRSPRINT_14_PRODUCTION_EMAIL.md, requirement #33/#34): minimal operational visibility
+ * into the notification-event outbox's email channel, and authority to re-attempt exactly one failed
+ * send. Split into a read and a mutate capability, mirroring `place_retention_hold`/
+ * `release_retention_hold`'s identical precedent, rather than one combined capability — a role can be
+ * given visibility without also being given the ability to trigger a resend.
  */
 export const ADMIN_CAPABILITIES = [
   "suspend_account",
@@ -35,6 +42,8 @@ export const ADMIN_CAPABILITIES = [
   "manage_appeal",
   "place_retention_hold",
   "release_retention_hold",
+  "review_email_delivery",
+  "retry_email_delivery",
 ] as const;
 
 export type AdminCapability = (typeof ADMIN_CAPABILITIES)[number];
@@ -52,7 +61,7 @@ export type InternalAdminRole = "support" | "compliance" | "fraud_reviewer" | "a
  * capabilities are added.
  */
 export const DEFAULT_INTERNAL_ROLE_CAPABILITIES: Record<Exclude<InternalAdminRole, "admin">, readonly AdminCapability[]> = {
-  support: ["manage_support_case", "review_audit_logs", "review_payment_failures"],
+  support: ["manage_support_case", "review_audit_logs", "review_payment_failures", "review_email_delivery", "retry_email_delivery"],
   // "manage_appeal" sits with compliance, not support or fraud_reviewer — an appeal reviewer must
   // never be the same person who made the original restriction decision (see appeal.ts's own CHECK
   // constraint), and compliance is this codebase's natural independent-review role, distinct from

@@ -75,6 +75,8 @@ export interface RelationshipInvitationServiceDeps {
   notifications: NotificationService;
   emailSender: EmailSender;
   audit: AuditService;
+  /** PRSprint 14 (docs/prsprints/PRSPRINT_14_PRODUCTION_EMAIL.md): base URL for the enrollment link sent to a not-yet-registered invitee — mirrors AgreementInvitationService's own identical `appUrl` dependency. */
+  appUrl: string;
 }
 
 /**
@@ -167,10 +169,17 @@ export class RelationshipInvitationService {
     }
 
     // New-user path — see this class's own doc comment for why this bypasses NotificationService.
+    // PRSprint 14: this previously embedded the bare raw token (`token=${rawToken}`) instead of a
+    // real link — fixed to match AgreementInvitationService/StaffService's own established
+    // `${appUrl}/...?token=...` pattern, since the token alone is not something a recipient can act
+    // on from an email client.
+    const link = `${this.deps.appUrl}/connections/accept?token=${rawToken}`;
     await this.deps.emailSender.send({
       to: input.inviteeEmail,
       subject: "You've been invited to a repayment relationship on PAY2PAY",
-      body: `You've been invited to a repayment relationship on PAY2PAY. Create an account to review and respond: token=${rawToken}`,
+      body: `You've been invited to a repayment relationship on PAY2PAY. Create an account to review and respond: ${link}\n\nThis link expires in 7 days.`,
+      ctaUrl: link,
+      ctaText: "Review the invitation",
     });
     await this.recordAudit(relationship.id, input.actingUserId, "RELATIONSHIP_INVITATION_SENT", { channel: "email_enrollment", invitationId: invitation.id });
     return { relationship, invitation, rawToken };

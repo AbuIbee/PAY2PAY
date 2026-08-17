@@ -561,6 +561,7 @@ export function createTestRelationshipServices() {
     notifications: notifyCtx.notificationService,
     emailSender,
     audit: new AuditService(invitationAuditRepo),
+    appUrl: "https://app.test",
   });
 
   const financialAccountAuditRepo = new InMemoryAuditEventRepositoryForRelationships();

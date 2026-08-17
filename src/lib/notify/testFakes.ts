@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { EmailDeliveryError } from "./emailDeliveryError";
 import type { EmailSender } from "./emailSender";
 import type { SmsSender } from "./smsSender";
 import { NotificationService } from "./notificationService";
@@ -34,6 +35,8 @@ export class InMemoryNotificationEventRepository implements NotificationEventRep
       attemptCount: 0,
       nextRetryAt: null,
       deliveredAt: null,
+      sentAt: null,
+      providerMessageId: null,
       createdAt: new Date(),
       readAt: null,
       ...input,
@@ -50,6 +53,20 @@ export class InMemoryNotificationEventRepository implements NotificationEventRep
   async findByDedupeKey(dedupeKey: string): Promise<NotificationEventRecord | null> {
     const id = this.byDedupeKey.get(dedupeKey);
     return id ? (this.byId.get(id) ?? null) : null;
+  }
+
+  async findByProviderMessageId(providerMessageId: string): Promise<NotificationEventRecord | null> {
+    return [...this.byId.values()].find((r) => r.providerMessageId === providerMessageId) ?? null;
+  }
+
+  async markSent(id: string, input: { sentAt: Date; providerMessageId: string | null }): Promise<NotificationEventRecord> {
+    const record = this.mustFind(id);
+    record.status = "sent";
+    record.sentAt = input.sentAt;
+    record.providerMessageId = input.providerMessageId;
+    record.failureReason = null;
+    record.nextRetryAt = null;
+    return record;
   }
 
   async markDelivered(id: string, deliveredAt: Date | null): Promise<NotificationEventRecord> {
@@ -87,6 +104,13 @@ export class InMemoryNotificationEventRepository implements NotificationEventRep
     if (!record || record.recipientUserId !== recipientUserId) return null;
     record.readAt = readAt;
     return record;
+  }
+
+  async listRecentByChannel(channel: NotificationChannel, limit: number): Promise<NotificationEventRecord[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.channel === channel)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
   }
 
   private mustFind(id: string): NotificationEventRecord {
@@ -144,15 +168,30 @@ export class InMemoryUserContactReader implements UserContactReader {
 }
 
 export class InMemoryEmailSender implements EmailSender {
-  sent: { to: string; subject: string; body: string }[] = [];
+  sent: { to: string; subject: string; body: string; ctaUrl?: string; ctaText?: string }[] = [];
   failNext = false;
+  /** When set, the next simulated failure throws EmailDeliveryError with this retryable flag instead of a plain Error — lets tests exercise both the bounded-retry path and the immediate-dead-letter path. */
+  failNextRetryable: boolean | null = null;
+  private nextProviderMessageId: string | null = null;
 
-  async send(input: { to: string; subject: string; body: string }): Promise<void> {
+  setNextProviderMessageId(id: string): void {
+    this.nextProviderMessageId = id;
+  }
+
+  async send(input: { to: string; subject: string; body: string; ctaUrl?: string; ctaText?: string }): Promise<{ providerMessageId: string | null }> {
     if (this.failNext) {
       this.failNext = false;
+      const retryable = this.failNextRetryable;
+      this.failNextRetryable = null;
+      if (retryable !== null) {
+        throw new EmailDeliveryError("simulated_email_send_failure", { retryable, category: retryable ? "timeout" : "invalid_recipient" });
+      }
       throw new Error("simulated_email_send_failure");
     }
     this.sent.push(input);
+    const providerMessageId = this.nextProviderMessageId ?? randomUUID();
+    this.nextProviderMessageId = null;
+    return { providerMessageId };
   }
 }
 
@@ -175,6 +214,7 @@ export function createTestNotificationService(options?: NotificationServiceOptio
   const contacts = new InMemoryUserContactReader();
   const emailSender = new InMemoryEmailSender();
   const smsSender = new InMemorySmsSender();
-  const notificationService = new NotificationService({ events, preferences, emailSender, smsSender, contacts }, options);
-  return { events, preferences, contacts, emailSender, smsSender, notificationService };
+  const appUrl = "https://app.test";
+  const notificationService = new NotificationService({ events, preferences, emailSender, smsSender, contacts, appUrl }, options);
+  return { events, preferences, contacts, emailSender, smsSender, appUrl, notificationService };
 }
