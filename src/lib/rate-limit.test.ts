@@ -62,6 +62,35 @@ describe("checkRateLimit", () => {
     errorSpy.mockRestore();
   });
 
+  /**
+   * PRSprint 12A (docs/prsprints/PRSPRINT_12A_PRODUCTION_DATABASE_RECONCILIATION.md): PRSprint 11A's
+   * own report explicitly flagged that Drizzle's top-level error message ("Failed query: <sql>")
+   * never surfaced the actual underlying Postgres error (SQLSTATE code, detail, which table/
+   * constraint) that lives one level down on `.cause` — this is exactly what live production log
+   * capture during this PRSprint needed and didn't have. Proves the fix logs it.
+   */
+  it("surfaces the underlying Postgres error's code/detail/table from .cause, not just Drizzle's generic wrapper message", async () => {
+    const store = resetRateLimits();
+    const causeError = Object.assign(new Error("relation \"rate_limit_bucket\" does not exist"), {
+      name: "PostgresError",
+      code: "42P01",
+      table_name: undefined,
+      detail: undefined,
+    });
+    store.failNext = true;
+    store.failNextWith = new Error("Failed query: INSERT INTO ...", { cause: causeError });
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+    await checkRateLimit("signup:ip:9.9.9.9", 10, 60_000, 1_000_000);
+    const [, context] = errorSpy.mock.calls[0]!;
+    expect(context).toMatchObject({
+      namespace: "signup",
+      causeName: "PostgresError",
+      causeCode: "42P01",
+      causeMessage: 'relation "rate_limit_bucket" does not exist',
+    });
+    errorSpy.mockRestore();
+  });
+
   it("recovers on the next call once the store stops failing — a single transient error does not permanently disable rate limiting", async () => {
     const store = resetRateLimits();
     store.failNext = true;
