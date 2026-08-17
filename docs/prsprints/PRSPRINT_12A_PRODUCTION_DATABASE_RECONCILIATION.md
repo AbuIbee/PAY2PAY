@@ -89,16 +89,29 @@ instruction not to assume the missing table was the only PRSprint 05 defect and 
 with evidence rather than merely asserting it.
 
 Investigating further: Drizzle's error wraps the underlying driver error in a top-level `.message` of
-`"Failed query: <sql text>"`, discarding the actually-diagnostic Postgres error (SQLSTATE `code`,
-`detail`, `hint`, offending table/constraint) one level down on `.cause` — the same gap PRSprint 11A's
-own report explicitly flagged as never having been surfaced. **Fixed**: `src/lib/rate-limit.ts`'s
-`checkRateLimit` now walks exactly one level of `.cause` and logs the underlying error's `code`,
-`detail`, `hint`, table/column/constraint name, and cause-level name/message alongside the existing
-top-level message — permanent, ongoing observability, not a one-time diagnostic hack. New test
-(`rate-limit.test.ts`) proves this extraction against a Postgres-shaped error. A second live log
-capture, performed after this fix deployed (see the Vercel Verification section for the exact
-captured evidence), pinpoints the real remaining cause precisely rather than leaving it as a
-"most plausible" inference.
+`"Failed query: <sql text>"`, discarding the actually-diagnostic underlying error (which PRSprint 11A's
+own report explicitly flagged as never having been surfaced) one level down on `.cause`. **Fixed**:
+`src/lib/rate-limit.ts`'s `checkRateLimit` now walks exactly one level of `.cause` and logs the
+underlying error's Postgres-shaped fields (`code`, `detail`, `hint`, table/column/constraint name) and
+cause-level name/message alongside the existing top-level message — permanent, ongoing observability,
+not a one-time diagnostic hack.
+
+**With that in place, a second live log capture after this fix deployed gave the real, definitive
+answer, and it was not what PRSprint 12's report inferred**: the underlying error was
+`TypeError [ERR_INVALID_ARG_TYPE]: The "string" argument must be of type string or an instance of
+Buffer or ArrayBuffer. Received an instance of Date` — a Node.js type error, not a Postgres error at
+all. Root cause: `DrizzleRateLimitStore.incrementAndCheck`'s upsert interpolates the *same* `Date`
+object instance into its `sql` template multiple times (`nowDate` four times, `newResetAt` twice),
+and something in the postgres.js/Drizzle parameter-serialization path chokes on a repeated `Date`
+reference. **Fixed**: the store now formats both timestamps once, as ISO-8601 strings, before
+interpolating them (Postgres parses ISO-8601 natively for `timestamp with time zone` columns, so
+behavior is unchanged) — sidestepping whatever internal step fails on a reused `Date` reference. New
+test (`rate-limit.test.ts`) inspects the actual bound parameters and proves none of them is a `Date`
+instance. This is the real, complete explanation for PRSprint 11A's original production incident: not
+solely a missing table (real, and now fixed), but a genuine, independent application-level bug that
+was masked behind Drizzle's generic error wrapper the entire time, and would have continued causing
+every rate-limit check to fail (safely, fail-open, thanks to PRSprint 11A's own fix — but still
+silently ineffective) even after the table existed.
 
 ## RLS verification
 
@@ -163,7 +176,7 @@ item for a dedicated future security-hardening PRSprint, not repaired here.
 
 - Typecheck (`tsc --noEmit`): clean.
 - Lint (targeted: `rate-limit.ts`, `rate-limit.test.ts`): clean.
-- Full test suite: 953/953 passed (up from 952 — 1 net new test, no regressions).
+- Full test suite: 954/954 passed (up from 952 — 2 net new tests, no regressions).
 - Production build: succeeded.
 - GitHub Actions CI on the PR, and the Supabase schema-drift check specifically (now expected to run
   for real and pass clean, since this PRSprint's own push-to-master is exactly what that check
