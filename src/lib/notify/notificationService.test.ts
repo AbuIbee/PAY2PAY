@@ -36,12 +36,18 @@ describe("NotificationService", () => {
       { to: "user1@example.com", subject: "A payment did not go through", body: expect.stringContaining("insufficient_funds") },
     ]);
     expect(smsSender.sent).toEqual([{ to: "+15551234567", body: expect.stringContaining("insufficient_funds") }]);
-    // PRSprint 14: email now reports "sent" (provider accepted) rather than "delivered" — actual
-    // delivery confirmation only ever arrives later, via a provider webhook. in_app/sms are unaffected.
+    // PRSprint 14/15: both email and sms now report "sent" (provider accepted) rather than
+    // "delivered" — actual delivery confirmation only ever arrives later, via each provider's own
+    // webhook. Only in_app (no external provider — existing is delivery) still goes straight to
+    // "delivered".
     const emailRecord = records.find((r) => r.channel === "email")!;
     expect(emailRecord.status).toBe("sent");
     expect(emailRecord.sentAt).not.toBeNull();
-    expect(records.filter((r) => r.channel !== "email").every((r) => r.status === "delivered")).toBe(true);
+    const smsRecord = records.find((r) => r.channel === "sms")!;
+    expect(smsRecord.status).toBe("sent");
+    expect(smsRecord.sentAt).not.toBeNull();
+    const inAppRecord = records.find((r) => r.channel === "in_app")!;
+    expect(inAppRecord.status).toBe("delivered");
   });
 
   describe("critical preference override", () => {
@@ -280,7 +286,7 @@ describe("NotificationService", () => {
         if (!record) throw new Error("expected a record");
         expect((await events.findById(record.id))?.status).toBe("sent");
 
-        const updated = await notificationService.recordProviderDeliveryEvent("msg_123", "delivered", new Date());
+        const updated = await notificationService.recordProviderDeliveryEvent("msg_123", "delivered", "", new Date());
         expect(updated?.status).toBe("delivered");
         expect(updated?.deliveredAt).not.toBeNull();
       });
@@ -295,7 +301,7 @@ describe("NotificationService", () => {
         const [record2] = await notificationService.notify({ recipientUserId: "user-2", notificationType: "payment_cleared", payload: {} });
         if (!record1 || !record2) throw new Error("expected records");
 
-        const updated = await notificationService.recordProviderDeliveryEvent("msg_bounced", "bounced", new Date());
+        const updated = await notificationService.recordProviderDeliveryEvent("msg_bounced", "failed", "provider_bounced", new Date());
         expect(updated?.status).toBe("failed");
         expect(updated?.failureReason).toBe("provider_bounced");
         expect(updated?.nextRetryAt).toBeNull();
@@ -308,14 +314,14 @@ describe("NotificationService", () => {
         contacts.set("user-1", "user1@example.com");
         emailSender.setNextProviderMessageId("msg_complained");
         await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} });
-        const updated = await notificationService.recordProviderDeliveryEvent("msg_complained", "complained", new Date());
+        const updated = await notificationService.recordProviderDeliveryEvent("msg_complained", "failed", "provider_complaint", new Date());
         expect(updated?.status).toBe("failed");
         expect(updated?.failureReason).toBe("provider_complaint");
       });
 
       it("returns null for an unknown providerMessageId instead of throwing", async () => {
         const { notificationService } = createTestNotificationService();
-        const result = await notificationService.recordProviderDeliveryEvent("no-such-message", "delivered", new Date());
+        const result = await notificationService.recordProviderDeliveryEvent("no-such-message", "delivered", "", new Date());
         expect(result).toBeNull();
       });
     });
@@ -349,12 +355,108 @@ describe("NotificationService", () => {
       });
     });
 
-    it("listRecentEmailEvents returns only email-channel rows, most recent first", async () => {
+    it("listRecentByChannel returns only rows for the requested channel, most recent first", async () => {
       const { notificationService, contacts } = createTestNotificationService();
       contacts.set("user-1", "user1@example.com");
       await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {} }); // email + in_app
-      const recent = await notificationService.listRecentEmailEvents(10);
+      const recent = await notificationService.listRecentByChannel("email", 10);
       expect(recent.every((r) => r.channel === "email")).toBe(true);
+      expect(recent.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("PRSprint 15: production SMS delivery", () => {
+    it("appends the agreement link to the SMS body when the event has a relatedAgreementId", async () => {
+      const { notificationService, contacts, smsSender, appUrl } = createTestNotificationService();
+      contacts.setPhone("user-1", "+15551234567");
+      await notificationService.notify({
+        recipientUserId: "user-1",
+        notificationType: "agreement_action_required",
+        relatedAgreementId: "agreement-42",
+        payload: {},
+      });
+      expect(smsSender.sent).toHaveLength(1);
+      expect(smsSender.sent[0]?.body).toContain(`${appUrl}/agreements/detail?id=agreement-42`);
+    });
+
+    it("never even attempts a send to an opted-out phone number", async () => {
+      const { notificationService, contacts, smsSender, smsOptOuts } = createTestNotificationService();
+      contacts.setPhone("user-1", "+15551234567");
+      await smsOptOuts.recordOptOut("+15551234567", "stop_keyword");
+      const records = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_failed", payload: {} });
+      const smsRecord = records.find((r) => r.channel === "sms")!;
+      expect(smsSender.sent).toHaveLength(0);
+      expect(smsRecord.status).toBe("failed");
+      expect(smsRecord.failureReason).toBe("recipient_opted_out");
+      expect(smsRecord.nextRetryAt).toBeNull();
+    });
+
+    it("a non-retryable SmsDeliveryError dead-letters immediately instead of exhausting the retry budget", async () => {
+      const { notificationService, contacts, smsSender, events } = createTestNotificationService({ retryDelayMs: 1000, maxAttempts: 5 });
+      contacts.setPhone("user-1", "+15551234567");
+      smsSender.failNext = true;
+      smsSender.failNextRetryable = false;
+
+      const records = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_failed", payload: {} });
+      const record = records.find((r) => r.channel === "sms")!;
+      const updated = await events.findById(record.id);
+      expect(updated?.status).toBe("failed");
+      expect(updated?.attemptCount).toBe(1);
+      expect(updated?.nextRetryAt).toBeNull();
+    });
+
+    it("a retryable SmsDeliveryError still uses the normal bounded-retry/backoff path", async () => {
+      const { notificationService, contacts, smsSender, events } = createTestNotificationService({ retryDelayMs: 1000, maxAttempts: 5 });
+      contacts.setPhone("user-1", "+15551234567");
+      smsSender.failNext = true;
+      smsSender.failNextRetryable = true;
+
+      const records = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_failed", payload: {} });
+      const record = records.find((r) => r.channel === "sms")!;
+      const updated = await events.findById(record.id);
+      expect(updated?.status).toBe("failed");
+      expect(updated?.nextRetryAt).not.toBeNull();
+    });
+
+    it("recordSmsOptOut is idempotent and only ever called by the inbound webhook route", async () => {
+      const { notificationService, smsOptOuts } = createTestNotificationService();
+      await notificationService.recordSmsOptOut("+15551234567");
+      await notificationService.recordSmsOptOut("+15551234567"); // repeated STOP reply — no error, no duplicate effect
+      expect(await smsOptOuts.isOptedOut("+15551234567")).toBe(true);
+    });
+
+    describe("recordProviderDeliveryEvent (sms channel)", () => {
+      it("marks an sms row delivered on a provider 'delivered' status callback", async () => {
+        const { notificationService, contacts, smsSender, events } = createTestNotificationService();
+        contacts.setPhone("user-1", "+15551234567");
+        smsSender.setNextProviderMessageId("SM_123");
+        const records = await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_failed", payload: {} });
+        const record = records.find((r) => r.channel === "sms")!;
+        expect((await events.findById(record.id))?.status).toBe("sent");
+
+        const updated = await notificationService.recordProviderDeliveryEvent("SM_123", "delivered", "", new Date());
+        expect(updated?.status).toBe("delivered");
+      });
+
+      it("marks an sms row permanently failed on an 'undelivered' status callback", async () => {
+        const { notificationService, contacts, smsSender } = createTestNotificationService();
+        contacts.setPhone("user-1", "+15551234567");
+        smsSender.setNextProviderMessageId("SM_undelivered");
+        await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_failed", payload: {} });
+
+        const updated = await notificationService.recordProviderDeliveryEvent("SM_undelivered", "failed", "provider_status_undelivered", new Date());
+        expect(updated?.status).toBe("failed");
+        expect(updated?.failureReason).toBe("provider_status_undelivered");
+        expect(updated?.nextRetryAt).toBeNull();
+      });
+    });
+
+    it("listRecentByChannel(\"sms\", ...) returns only sms-channel rows", async () => {
+      const { notificationService, contacts } = createTestNotificationService();
+      contacts.setPhone("user-1", "+15551234567");
+      await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_failed", payload: {} }); // email + sms + in_app
+      const recent = await notificationService.listRecentByChannel("sms", 10);
+      expect(recent.every((r) => r.channel === "sms")).toBe(true);
       expect(recent.length).toBeGreaterThan(0);
     });
   });

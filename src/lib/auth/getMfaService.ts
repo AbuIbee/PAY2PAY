@@ -1,7 +1,7 @@
 import "server-only";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
-import { ConsoleSmsSender } from "@/lib/notify/consoleSmsSender";
+import { getSmsSender } from "@/lib/notify/getSmsSender";
 import { DrizzleMfaChallengeRepository } from "./drizzleMfaChallengeRepository";
 import { DrizzleMfaCredentialRepository } from "./drizzleMfaCredentialRepository";
 import { DrizzleStepUpVerificationRepository } from "./drizzleStepUpVerificationRepository";
@@ -17,7 +17,7 @@ export function getMfaService(): MfaService {
       new DrizzleMfaChallengeRepository(),
       new DrizzleStepUpVerificationRepository(),
       new AuditService(new DrizzleAuditEventRepository()),
-      new ConsoleSmsSender(),
+      getSmsSender(),
     );
   }
   return cached;

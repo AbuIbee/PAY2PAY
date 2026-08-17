@@ -29,7 +29,7 @@ export class InMemoryEnvironmentStatusReader implements EnvironmentStatusReader 
     paymentProvider: "sandbox",
     kycProvider: "sandbox",
     emailDelivery: "console_log_only_no_provider",
-    smsDelivery: "console_log_only",
+    smsDelivery: "console_log_only_no_provider",
     scheduledJobs: "not_configured",
   };
 

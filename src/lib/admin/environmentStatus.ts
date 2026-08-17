@@ -8,15 +8,15 @@ import { getServerEnv, type ServerEnv } from "@/config/env";
  * this module must never return, log, or expose an actual secret. It also must never claim a
  * capability is "live" that this codebase cannot actually reach: `getPaymentProvider()` and
  * `getKycProvider()` are unconditionally wired to their sandbox implementations (no live adapter
- * exists in this codebase yet — that is PRSprint 21's scope), and `smsDelivery` remains
- * console-log-only (PRSprint 15's scope) — so `paymentProvider`/`kycProvider`/`smsDelivery` below stay
- * fixed labels reflecting that reality by construction. `emailDelivery` is the one field PRSprint 14
- * (docs/prsprints/PRSPRINT_14_PRODUCTION_EMAIL.md) makes genuinely conditional, mirroring exactly the
- * same decision src/lib/notify/getEmailSender.ts makes at send time — this view can never drift from
- * what the code actually does because it reads the identical inputs.
+ * exists in this codebase yet — that is PRSprint 21's scope) — so `paymentProvider`/`kycProvider`
+ * below stay fixed labels reflecting that reality by construction. `emailDelivery` (PRSprint 14) and
+ * `smsDelivery` (PRSprint 15) are both genuinely conditional, each mirroring exactly the same decision
+ * its own `get*Sender()` factory makes at send time — this view can never drift from what the code
+ * actually does because it reads the identical inputs.
  */
 export type ProviderConfigStatus = "configured" | "not_configured";
 export type EmailDeliveryStatus = "resend" | "console_log_only_no_provider" | "console_log_only_kill_switch";
+export type SmsDeliveryStatus = "twilio" | "console_log_only_no_provider" | "console_log_only_kill_switch";
 
 export interface AdminEnvironmentStatus {
   appEnv: string;
@@ -26,7 +26,7 @@ export interface AdminEnvironmentStatus {
   paymentProvider: "sandbox";
   kycProvider: "sandbox";
   emailDelivery: EmailDeliveryStatus;
-  smsDelivery: "console_log_only";
+  smsDelivery: SmsDeliveryStatus;
   scheduledJobs: ProviderConfigStatus;
 }
 
@@ -34,6 +34,13 @@ function computeEmailDeliveryStatus(env: ServerEnv): EmailDeliveryStatus {
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM_ADDRESS) return "console_log_only_no_provider";
   if (!env.EMAIL_DELIVERY_ENABLED) return "console_log_only_kill_switch";
   return "resend";
+}
+
+function computeSmsDeliveryStatus(env: ServerEnv): SmsDeliveryStatus {
+  const hasSender = Boolean(env.TWILIO_MESSAGING_SERVICE_SID || env.TWILIO_FROM_NUMBER);
+  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !hasSender) return "console_log_only_no_provider";
+  if (!env.SMS_DELIVERY_ENABLED) return "console_log_only_kill_switch";
+  return "twilio";
 }
 
 /** Pure classification function — kept separate from the process.env-reading singleton below so it can be unit-tested with constructed ServerEnv values, mirroring parseServerEnv/getServerEnv's own split in src/config/env.ts. */
@@ -46,7 +53,7 @@ export function computeEnvironmentStatus(env: ServerEnv): AdminEnvironmentStatus
     paymentProvider: "sandbox",
     kycProvider: "sandbox",
     emailDelivery: computeEmailDeliveryStatus(env),
-    smsDelivery: "console_log_only",
+    smsDelivery: computeSmsDeliveryStatus(env),
     scheduledJobs: env.CRON_SECRET ? "configured" : "not_configured",
   };
 }

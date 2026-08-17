@@ -51,7 +51,7 @@ const ADMIN_LINKS: NavLinkItem[] = [
   { href: "/admin/support", label: "Support queue" },
   { href: "/admin/restrictions", label: "Restrictions" },
   { href: "/admin/retention-holds", label: "Legal holds" },
-  { href: "/admin/notifications", label: "Email delivery" },
+  { href: "/admin/notifications", label: "Notification delivery" },
   { href: "/admin/appeals", label: "Appeals" },
   { href: "/admin/ledger", label: "Ledger" },
   { href: "/admin/audit", label: "Audit log" },

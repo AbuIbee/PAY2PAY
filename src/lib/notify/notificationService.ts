@@ -1,6 +1,7 @@
 import "server-only";
 import { EmailDeliveryError } from "./emailDeliveryError";
 import type { EmailSender } from "./emailSender";
+import { SmsDeliveryError } from "./smsDeliveryError";
 import type { SmsSender } from "./smsSender";
 import { DEFAULT_CHANNELS, isCriticalNotificationType, type NotificationEventType } from "./eventTypes";
 import { ValidationError } from "@/lib/errors";
@@ -70,10 +71,16 @@ export interface NotificationPreferenceRepository {
   listForUser(userId: string): Promise<{ notificationType: string; channel: NotificationChannel; enabled: boolean }[]>;
 }
 
-/** Real implementation: DrizzleUserContactReader (queries user_account.email/phone directly). */
+/** Real implementation: DrizzleUserContactReader (queries user_account.email directly; the phone lookup resolves through a verified SMS MFA credential — see that class's own doc comment). */
 export interface UserContactReader {
   getEmail(userId: string): Promise<string | null>;
   getPhone(userId: string): Promise<string | null>;
+}
+
+/** Real implementation: DrizzleSmsOptOutRepository. Keyed by the E.164 phone number itself, not a user id — see src/db/schema/smsOptOut.ts's own doc comment for why. */
+export interface SmsOptOutRepository {
+  isOptedOut(phone: string): Promise<boolean>;
+  recordOptOut(phone: string, source: "stop_keyword" | "provider_rejection"): Promise<void>;
 }
 
 export interface NotificationServiceOptions {
@@ -116,6 +123,8 @@ export class NotificationService {
       emailSender: EmailSender;
       smsSender: SmsSender;
       contacts: UserContactReader;
+      /** PRSprint 15: STOP-driven suppression — checked before every SMS send attempt. */
+      smsOptOuts: SmsOptOutRepository;
       /** PRSprint 14: base URL used to build the CTA link on an email notification, when the event has a `relatedAgreementId` to link to (see `buildCtaUrl`). Mirrors AgreementInvitationService/AuthService's own identical `appUrl` dependency. */
       appUrl: string;
     },
@@ -228,32 +237,39 @@ export class NotificationService {
   }
 
   /**
-   * PRSprint 14, requirement #27: the only way a provider's delivery/bounce/complaint webhook is
-   * allowed to change a notification_event row's status — the webhook route
-   * (src/app/api/webhooks/email/resend/route.ts) verifies the provider's signature first, then looks
-   * the row up by `providerMessageId` (never trusts a client/provider-supplied notification_event id
-   * directly) and calls this. `delivered` is the only outcome that can still be retried later by
-   * definition (delivery already happened); `bounced`/`complained` stop retrying immediately — hammering
-   * a permanently-undeliverable or complained-about address is exactly what requirement #28/#29
-   * prohibits — without touching any other notification_event row for the same recipient, and without
+   * PRSprint 14/15, requirement #27 (email)/#22 (SMS): the only way a provider's delivery-status
+   * webhook is allowed to change a notification_event row's status — the webhook route
+   * (src/app/api/webhooks/email/resend/route.ts, src/app/api/webhooks/sms/twilio/status/route.ts)
+   * verifies the provider's signature first, then looks the row up by `providerMessageId` (never
+   * trusts a client/provider-supplied notification_event id directly) and calls this, mapping its own
+   * provider-specific event name into the generic `outcome`/`failureReason` shape below. `delivered`
+   * is the only outcome that can still be retried later by definition (delivery already happened);
+   * `failed` stops retrying immediately — hammering a permanently-undeliverable/bounced/complained-
+   * about/opted-out destination is exactly what requirement #28/#29 (email) and #24/#25 (SMS)
+   * prohibit — without touching any other notification_event row for the same recipient, and without
    * mutating anything on the business side (agreement/account state is never touched here).
    */
-  async recordProviderDeliveryEvent(providerMessageId: string, outcome: "delivered" | "bounced" | "complained", occurredAt: Date): Promise<NotificationEventRecord | null> {
+  async recordProviderDeliveryEvent(providerMessageId: string, outcome: "delivered" | "failed", failureReason: string, occurredAt: Date): Promise<NotificationEventRecord | null> {
     const record = await this.deps.events.findByProviderMessageId(providerMessageId);
     if (!record) return null;
     if (outcome === "delivered") {
       return this.deps.events.markDelivered(record.id, occurredAt);
     }
     return this.deps.events.markFailed(record.id, {
-      failureReason: outcome === "bounced" ? "provider_bounced" : "provider_complaint",
+      failureReason,
       attemptCount: record.attemptCount,
       nextRetryAt: null,
     });
   }
 
-  /** PRSprint 14, requirement #33: minimal admin operational visibility — read-only, no payload beyond what the row already stores. Authorization lives in the caller (EmailDeliveryAdminService), not here. */
-  async listRecentEmailEvents(limit: number): Promise<NotificationEventRecord[]> {
-    return this.deps.events.listRecentByChannel("email", limit);
+  /** PRSprint 14/15, requirement #27/#33: minimal admin operational visibility — read-only, no payload beyond what the row already stores. Authorization lives in the caller (EmailDeliveryAdminService/SmsDeliveryAdminService), not here. */
+  async listRecentByChannel(channel: NotificationChannel, limit: number): Promise<NotificationEventRecord[]> {
+    return this.deps.events.listRecentByChannel(channel, limit);
+  }
+
+  /** PRSprint 15, requirement #24: called by the Twilio inbound-message webhook once a STOP-family keyword is verified — never by anything else, never on a client's direct say-so. */
+  async recordSmsOptOut(phone: string): Promise<void> {
+    await this.deps.smsOptOuts.recordOptOut(phone, "stop_keyword");
   }
 
   private buildCtaUrl(record: NotificationEventRecord): { ctaUrl: string; ctaText: string } | null {
@@ -299,15 +315,26 @@ export class NotificationService {
       }
       // sms
       const phone = await this.deps.contacts.getPhone(record.recipientUserId);
-      if (!phone) return record;
-      await this.deps.smsSender.send({ to: phone, body: rendered.smsBody });
-      return this.deps.events.markDelivered(record.id, new Date());
+      if (!phone) return record; // no verified SMS-capable phone on file — recorded, left pending, not a failure.
+      if (await this.deps.smsOptOuts.isOptedOut(phone)) {
+        // Never even attempt the send — requirement #24: "do not continue ordinary SMS delivery in
+        // violation of provider/carrier rules." Terminal, not retryable: opting back in (a fresh
+        // START reply) doesn't retroactively resurrect this specific already-suppressed attempt.
+        return this.deps.events.markFailed(record.id, { failureReason: "recipient_opted_out", attemptCount: record.attemptCount, nextRetryAt: null });
+      }
+      const cta = this.buildCtaUrl(record);
+      const smsBody = cta ? `${rendered.smsBody} ${cta.ctaUrl}` : rendered.smsBody;
+      const result = await this.deps.smsSender.send({ to: phone, body: smsBody });
+      // "sent" (provider accepted), not "delivered" — mirrors email's identical PRSprint 14
+      // correction. Real handset-delivery confirmation, if the provider offers one, arrives later via
+      // its own status-callback webhook (recordProviderDeliveryEvent), never synchronously here.
+      return this.deps.events.markSent(record.id, { sentAt: new Date(), providerMessageId: result.providerMessageId });
     } catch (error) {
       // A non-retryable provider failure (invalid recipient, malformed request, provider
-      // misconfiguration) is dead-lettered immediately rather than exhausting the usual bounded-retry
-      // budget first — retrying an identical request against the same permanent rejection would only
-      // delay the terminal state, not change it (requirement #22).
-      const nonRetryable = error instanceof EmailDeliveryError && !error.retryable;
+      // misconfiguration, opted-out destination) is dead-lettered immediately rather than exhausting
+      // the usual bounded-retry budget first — retrying an identical request against the same
+      // permanent rejection would only delay the terminal state, not change it (requirement #22/#25).
+      const nonRetryable = (error instanceof EmailDeliveryError || error instanceof SmsDeliveryError) && !error.retryable;
       const attemptCount = record.attemptCount + 1;
       const exhausted = nonRetryable || attemptCount >= this.maxAttempts;
       return this.deps.events.markFailed(record.id, {

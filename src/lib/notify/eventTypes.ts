@@ -134,9 +134,19 @@ export function isCriticalNotificationType(type: NotificationEventType): boolean
  * likely to find intrusive for routine contract-lifecycle updates.
  */
 export const DEFAULT_CHANNELS: Record<NotificationEventType, readonly NotificationChannel[]> = {
-  agreement_invitation: ["email", "in_app"],
+  // PRSprint 15 (docs/prsprints/PRSPRINT_15_PRODUCTION_SMS.md), requirement #13: `sms` added to
+  // exactly the non-critical types that are genuinely time-sensitive/action-required — a new
+  // proposal or a "your counterparty already acted, you're up next" moment, where the whole value of
+  // SMS (reaching someone who isn't actively checking email/the app right now) is highest. Every
+  // other non-critical type stays email+in_app only, preserving Sprint 17's own original reasoning
+  // ("SMS is the channel users are most likely to find intrusive for routine contract-lifecycle
+  // updates") for purely-informational "here's what happened" events (`agreement_decided`,
+  // `amendment_decided`, `agreement_invitation_response`, the `relationship_accepted/declined/
+  // activated` trio) and for `agreement_signed` itself (a confirmation, not something requiring
+  // action from the recipient).
+  agreement_invitation: ["email", "sms", "in_app"],
   agreement_signed: ["email", "in_app"],
-  amendment: ["email", "in_app"],
+  amendment: ["email", "sms", "in_app"],
   payment_scheduled: ["email", "in_app"],
   payment_processing: ["in_app"],
   payment_cleared: ["email", "in_app"],
@@ -152,7 +162,7 @@ export const DEFAULT_CHANNELS: Record<NotificationEventType, readonly Notificati
   staff_permissions: ["email", "in_app"],
   payout_account_change: ["email", "sms", "in_app"],
   account_restriction: ["email", "sms", "in_app"],
-  relationship_invitation: ["email", "in_app"],
+  relationship_invitation: ["email", "sms", "in_app"],
   relationship_accepted: ["email", "in_app"],
   relationship_declined: ["email", "in_app"],
   relationship_activated: ["email", "in_app"],
@@ -161,9 +171,9 @@ export const DEFAULT_CHANNELS: Record<NotificationEventType, readonly Notificati
   relationship_payout_account_replaced: ["email", "sms", "in_app"],
   appeal_decided: ["email", "sms", "in_app"],
   agreement_invitation_response: ["email", "in_app"],
-  agreement_action_required: ["email", "in_app"],
+  agreement_action_required: ["email", "sms", "in_app"],
   agreement_decided: ["email", "in_app"],
-  agreement_counterparty_signed: ["email", "in_app"],
+  agreement_counterparty_signed: ["email", "sms", "in_app"],
   amendment_decided: ["email", "in_app"],
 };
 

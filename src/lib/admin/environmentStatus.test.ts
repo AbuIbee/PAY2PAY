@@ -20,6 +20,11 @@ function baseEnv(overrides: Partial<ServerEnv> = {}): ServerEnv {
     EMAIL_FROM_NAME: "PAY2PAY",
     RESEND_WEBHOOK_SECRET: undefined,
     EMAIL_DELIVERY_ENABLED: true,
+    TWILIO_ACCOUNT_SID: undefined,
+    TWILIO_AUTH_TOKEN: undefined,
+    TWILIO_MESSAGING_SERVICE_SID: undefined,
+    TWILIO_FROM_NUMBER: undefined,
+    SMS_DELIVERY_ENABLED: true,
     ...overrides,
   };
 }
@@ -57,13 +62,41 @@ describe("computeEnvironmentStatus", () => {
     expect(computeEnvironmentStatus(baseEnv({ CRON_SECRET: "c".repeat(20) })).scheduledJobs).toBe("configured");
   });
 
-  it("always reports payment/KYC providers as sandbox and SMS as console_log_only, regardless of APP_ENV — this codebase has no live adapter for either of them yet", () => {
+  it("always reports payment/KYC providers as sandbox, regardless of APP_ENV — this codebase has no live adapter for either of them yet", () => {
     for (const appEnv of ["development", "test", "staging", "production"] as const) {
       const status = computeEnvironmentStatus(baseEnv({ APP_ENV: appEnv }));
       expect(status.paymentProvider).toBe("sandbox");
       expect(status.kycProvider).toBe("sandbox");
-      expect(status.smsDelivery).toBe("console_log_only");
     }
+  });
+
+  it("reports smsDelivery as console_log_only_no_provider when Twilio isn't fully configured", () => {
+    expect(computeEnvironmentStatus(baseEnv()).smsDelivery).toBe("console_log_only_no_provider");
+    expect(computeEnvironmentStatus(baseEnv({ TWILIO_ACCOUNT_SID: "AC" + "x".repeat(32) })).smsDelivery).toBe("console_log_only_no_provider");
+    expect(computeEnvironmentStatus(baseEnv({ TWILIO_ACCOUNT_SID: "AC" + "x".repeat(32), TWILIO_AUTH_TOKEN: "t".repeat(32) })).smsDelivery).toBe(
+      "console_log_only_no_provider",
+    ); // no sender (messaging service or from-number) configured
+  });
+
+  it("reports smsDelivery as twilio once account credentials and a sender are configured and the kill switch is on", () => {
+    const status = computeEnvironmentStatus(
+      baseEnv({ TWILIO_ACCOUNT_SID: "AC" + "x".repeat(32), TWILIO_AUTH_TOKEN: "t".repeat(32), TWILIO_FROM_NUMBER: "+15005550006" }),
+    );
+    expect(status.smsDelivery).toBe("twilio");
+  });
+
+  it("reports smsDelivery as twilio when a messaging service SID is configured instead of a from-number", () => {
+    const status = computeEnvironmentStatus(
+      baseEnv({ TWILIO_ACCOUNT_SID: "AC" + "x".repeat(32), TWILIO_AUTH_TOKEN: "t".repeat(32), TWILIO_MESSAGING_SERVICE_SID: "MG" + "x".repeat(32) }),
+    );
+    expect(status.smsDelivery).toBe("twilio");
+  });
+
+  it("reports smsDelivery as console_log_only_kill_switch when fully configured but the kill switch is off", () => {
+    const status = computeEnvironmentStatus(
+      baseEnv({ TWILIO_ACCOUNT_SID: "AC" + "x".repeat(32), TWILIO_AUTH_TOKEN: "t".repeat(32), TWILIO_FROM_NUMBER: "+15005550006", SMS_DELIVERY_ENABLED: false }),
+    );
+    expect(status.smsDelivery).toBe("console_log_only_kill_switch");
   });
 
   it("reports emailDelivery as console_log_only_no_provider when no Resend key/from-address is configured", () => {

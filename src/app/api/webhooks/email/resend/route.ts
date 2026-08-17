@@ -11,10 +11,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** The subset of Resend's webhook event types this route acts on — every other type (email.sent, email.delivery_delayed, email.opened, email.clicked, ...) is acknowledged with 200 and otherwise ignored. */
-const HANDLED_EVENT_TYPES: Record<string, "delivered" | "bounced" | "complained"> = {
-  "email.delivered": "delivered",
-  "email.bounced": "bounced",
-  "email.complained": "complained",
+const HANDLED_EVENT_TYPES: Record<string, { outcome: "delivered" | "failed"; failureReason: string }> = {
+  "email.delivered": { outcome: "delivered", failureReason: "" },
+  "email.bounced": { outcome: "failed", failureReason: "provider_bounced" },
+  "email.complained": { outcome: "failed", failureReason: "provider_complaint" },
 };
 
 /**
@@ -60,16 +60,16 @@ export function createEmailWebhookHandler(notifications: NotificationService) {
 
     const eventType = typeof parsed.type === "string" ? parsed.type : null;
     const emailId = typeof parsed.data?.email_id === "string" ? parsed.data.email_id : null;
-    const outcome = eventType ? HANDLED_EVENT_TYPES[eventType] : undefined;
+    const mapped = eventType ? HANDLED_EVENT_TYPES[eventType] : undefined;
 
-    if (!outcome || !emailId) {
+    if (!mapped || !emailId) {
       // Not a status change we track (or malformed data on an otherwise-verified event) — 200 so
       // Resend doesn't retry, no notification_event row is touched.
       return NextResponse.json({ status: "ignored" }, { status: 200 });
     }
 
     const occurredAt = typeof parsed.created_at === "string" && !Number.isNaN(Date.parse(parsed.created_at)) ? new Date(parsed.created_at) : new Date();
-    const updated = await notifications.recordProviderDeliveryEvent(emailId, outcome, occurredAt);
+    const updated = await notifications.recordProviderDeliveryEvent(emailId, mapped.outcome, mapped.failureReason, occurredAt);
     if (!updated) {
       // A verified event for a message id we have no record of — safe to acknowledge and ignore
       // rather than error (nothing to update, no forgeable side effect either way).
