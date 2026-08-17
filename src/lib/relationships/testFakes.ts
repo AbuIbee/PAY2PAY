@@ -6,6 +6,7 @@ import {
   InMemoryAgreementVersionRepository,
   InMemoryAgreementPartyRepository,
   InMemoryInstallmentScheduleItemRepository,
+  InMemorySigningApplicationRepository,
 } from "@/lib/agreements/testFakes";
 import { InMemoryProfileOwnerReader } from "@/lib/profiles/testFakes";
 import { createTestStaffService } from "@/lib/staff/testFakes";
@@ -501,6 +502,7 @@ export function createTestRelationshipServices() {
     profileOwners,
     staffService: staffCtx.staffService,
     audit: new AuditService(agreementAuditRepo),
+    signing: new InMemorySigningApplicationRepository(versions, agreements),
   });
 
   const participants = new InMemoryRelationshipParticipantRepository();

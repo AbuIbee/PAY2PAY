@@ -18,7 +18,7 @@ function toRecord(row: Row): AgreementPdfRecord {
 }
 
 export class DrizzleAgreementPdfRepository implements AgreementPdfRepository {
-  async insert(input: { agreementVersionId: string; storagePath: string; documentHash: string }): Promise<AgreementPdfRecord> {
+  async insert(input: { id?: string; agreementVersionId: string; storagePath: string; documentHash: string }): Promise<AgreementPdfRecord> {
     const db = getDb();
     const [row] = await db.insert(agreementPdf).values(input).returning();
     if (!row) throw new ConfigurationError("agreement_pdf insert returned no row");

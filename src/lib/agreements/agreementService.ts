@@ -4,7 +4,6 @@ import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
-import { computeVersionHash } from "./documentHash";
 import { computeSchedule } from "./schedule";
 import type { PaymentFrequency, ScheduleItem } from "./schedule";
 
@@ -141,6 +140,63 @@ export interface InstallmentScheduleItemRepository {
   listForVersion(versionId: string): Promise<ScheduleItem[]>;
 }
 
+/**
+ * PRSprint 12 (docs/prsprints/PRSPRINT_12_ELECTRONIC_SIGNATURES_PDFS_IMMUTABLE_RECORDS.md): evidence
+ * fields SignatureService captures alongside a signature. Defined here (not imported from
+ * signatureService.ts, which already imports from this file) rather than in signatureService.ts, so
+ * this file never depends on that one — the same one-way layering AgreementService/AmendmentService
+ * already established.
+ */
+export interface SigningEvidenceInput {
+  signerUserId: string;
+  signerProfileKind: ProfileKind;
+  signerProfileId: string;
+  signerRole: PartyRole;
+  signingAuthority: "account_owner" | "authorized_representative" | null;
+  signerTitle: string | null;
+  consentCaptured: boolean;
+  consentVersion: string;
+  authMethod: "totp" | "sms";
+  ipAddress: string;
+  deviceInfo: unknown;
+  timezone: string;
+  agreementHashAtSigning: string;
+}
+
+export interface SigningApplicationResult {
+  /** True if this role had already signed this version — the caller (signAgreement) turns this into the existing ValidationError, matching its pre-PRSprint-12 behavior exactly. */
+  alreadySigned: boolean;
+  bothSigned: boolean;
+  documentHash: string | null;
+  /** Present only when `evidence` was supplied and this call actually recorded a new signature. */
+  signatureEventId: string | null;
+}
+
+/**
+ * PRSprint 12: single, hand-written multi-table transaction — mirrors
+ * AmendmentApplicationRepository's own doc comment in amendmentService.ts and
+ * DrizzleAmendmentApplicationRepository's implementation exactly, for the identical reason. Before
+ * this, `signAgreement`'s completing signature made 2-4 independent, non-transactional writes
+ * (record this role's signature, lock the version, advance the agreement's status twice), and
+ * SignatureService made a *fifth*, entirely separate write (the signature_event evidence row) only
+ * after all of those had already committed — so a transient failure between any of those steps
+ * (the same category of failure PRSprint 11A found in production) could leave the agreement
+ * advanced with no evidence row for it, and a retry would then hit "already signed" forever, unable
+ * to ever complete. Real implementation (DrizzleSigningApplicationRepository) re-checks the role
+ * hasn't already signed *inside* the transaction (closing a concurrent-double-submit race the
+ * pre-PRSprint-12 read-then-write pattern was exposed to) and, when evidence is supplied, inserts
+ * signature_event in the same transaction as the version/agreement writes it's evidence for.
+ */
+export interface SigningApplicationRepository {
+  applySigningAtomically(input: {
+    agreementId: string;
+    agreementVersionId: string;
+    role: PartyRole;
+    signedAt: Date;
+    evidence: SigningEvidenceInput | null;
+  }): Promise<SigningApplicationResult>;
+}
+
 export interface AgreementServiceDeps {
   agreements: AgreementRepository;
   versions: AgreementVersionRepository;
@@ -149,6 +205,7 @@ export interface AgreementServiceDeps {
   profileOwners: ProfileOwnerReader;
   staffService: StaffService;
   audit: AuditService;
+  signing: SigningApplicationRepository;
 }
 
 export interface CreateDraftInput {
@@ -399,8 +456,27 @@ export class AgreementService {
    * Minimal Sprint-5 signing primitive — see this class's doc comment. Once both roles have
    * signed, the version locks (FR-AGR-006) and the agreement auto-advances to
    * first_payment_pending (docs/STATE_MACHINES.md §1: "Signed --> FirstPaymentPending: automatic").
+   * A thin wrapper over signAgreementWithEvidence with no evidence to record — see that method for
+   * the PRSprint 12 atomicity fix both share. Behavior/errors/audit records are byte-for-byte
+   * unchanged from before PRSprint 12.
    */
   async signAgreement(agreementId: string, actingUserId: string): Promise<void> {
+    await this.signAgreementWithEvidence(agreementId, actingUserId, null);
+  }
+
+  /**
+   * PRSprint 12 (docs/prsprints/PRSPRINT_12_ELECTRONIC_SIGNATURES_PDFS_IMMUTABLE_RECORDS.md):
+   * SignatureService's entry point — identical validation to signAgreement, but the completing
+   * signature's version/agreement writes and (when `evidence` is supplied) the signature_event
+   * evidence row are applied in one atomic transaction via `deps.signing`, instead of signAgreement's
+   * pre-PRSprint-12 sequence of independent writes followed by a *separate* evidence insert. See
+   * SigningApplicationRepository's own doc comment for exactly what risk this closes.
+   */
+  async signAgreementWithEvidence(
+    agreementId: string,
+    actingUserId: string,
+    evidence: SigningEvidenceInput | null,
+  ): Promise<{ signatureEventId: string | null; signedAt: Date; bothSigned: boolean; agreementStatus: AgreementStatus }> {
     const agreement = await this.requireAgreement(agreementId);
     const role = await this.authorizeEitherParty(agreement, actingUserId, null);
     this.requireStatus(agreement, "awaiting_signatures");
@@ -419,23 +495,33 @@ export class AgreementService {
     }
 
     const now = new Date();
-    await this.deps.versions.recordSignature(version.id, role, now);
+    const result = await this.deps.signing.applySigningAtomically({
+      agreementId: agreement.id,
+      agreementVersionId: version.id,
+      role,
+      signedAt: now,
+      evidence,
+    });
+    // The pre-transaction checks above already reject an already-signed role for the overwhelming
+    // common case; this re-check is the transaction's own defense against two requests racing past
+    // those checks concurrently (see SigningApplicationRepository's doc comment) — same error text
+    // either way, so callers/tests can't tell which check caught it.
+    if (result.alreadySigned) {
+      throw new ValidationError(
+        role === "creditor" ? "The creditor has already signed this agreement." : "The debtor has already signed this agreement.",
+      );
+    }
     await this.recordAudit(agreement.id, actingUserId, "agreement_signed_by_party", { role });
 
-    const refreshed = await this.requireVersion(version.id);
-    const bothSigned =
-      (role === "creditor" || refreshed.creditorSignedAt) && (role === "debtor" || refreshed.debtorSignedAt);
-    if (!bothSigned) return;
+    if (!result.bothSigned) {
+      return { signatureEventId: result.signatureEventId, signedAt: now, bothSigned: false, agreementStatus: agreement.status };
+    }
 
-    const documentHash = this.computeDocumentHash(refreshed);
-    await this.deps.versions.lock(version.id, { documentHash, signedAt: now });
-    await this.deps.agreements.updateStatus(agreement.id, "signed");
-    await this.recordAudit(agreement.id, actingUserId, "agreement_signed", { documentHash });
-
+    await this.recordAudit(agreement.id, actingUserId, "agreement_signed", { documentHash: result.documentHash });
     // Automatic per docs/STATE_MACHINES.md §1 — no payment is initiated (Sprint 5 doesn't
     // integrate payments); this is purely a status placeholder for Sprint 9+ to act on later.
-    await this.deps.agreements.updateStatus(agreement.id, "first_payment_pending");
     await this.recordAudit(agreement.id, actingUserId, "agreement_first_payment_pending", null);
+    return { signatureEventId: result.signatureEventId, signedAt: now, bothSigned: true, agreementStatus: "first_payment_pending" };
   }
 
   async getAgreement(agreementId: string, actingUserId: string): Promise<AgreementWithDetail> {
@@ -593,10 +679,6 @@ export class AgreementService {
     } else {
       await this.deps.staffService.requireActiveStaff(party.id, actingUserId);
     }
-  }
-
-  private computeDocumentHash(version: AgreementVersionRecord): string {
-    return computeVersionHash(version);
   }
 
   private async recordAudit(agreementId: string, actorUserId: string, action: string, newValue: unknown): Promise<void> {

@@ -13,7 +13,14 @@ interface UserDetail {
   lastLoginAt: string | null;
   personalProfileId: string | null;
   businessProfiles: { id: string; displayName: string; status: string }[];
-  agreements: { id: string; status: string; relationshipShape: string }[];
+  agreements: {
+    id: string;
+    status: string;
+    relationshipShape: string;
+    currentVersionNumber: number | null;
+    currentVersionSigned: boolean;
+    hasExecutedPdf: boolean;
+  }[];
 }
 
 type LoadStatus = "loading" | "ready" | "unauthorized" | "forbidden" | "error";
@@ -148,6 +155,9 @@ export function AdminUserDetail() {
           data.agreements.map((a) => (
             <p style={{ margin: 0 }} key={a.id}>
               {a.relationshipShape} — {a.status.replaceAll("_", " ")}
+              {a.currentVersionNumber !== null ? ` — v${a.currentVersionNumber}` : ""}
+              {a.currentVersionSigned ? " — signed" : " — not yet signed"}
+              {a.hasExecutedPdf ? " — executed PDF available" : ""}
             </p>
           ))
         )}
