@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { businessProfile } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
-import type { BusinessProfileRecord, BusinessProfileRepository } from "./businessProfileService";
+import type { BusinessProfileRecord, BusinessProfileRepository, BusinessProfileStatus } from "./businessProfileService";
 
 type Row = typeof businessProfile.$inferSelect;
 
@@ -53,5 +53,10 @@ export class DrizzleBusinessProfileRepository implements BusinessProfileReposito
     const db = getDb();
     const rows = await db.select().from(businessProfile).where(eq(businessProfile.ownerUserId, ownerUserId));
     return rows.map(toRecord);
+  }
+
+  async updateStatus(id: string, status: BusinessProfileStatus): Promise<void> {
+    const db = getDb();
+    await db.update(businessProfile).set({ status }).where(eq(businessProfile.id, id));
   }
 }

@@ -37,8 +37,17 @@ const ORGANIZATION_LINKS: NavLinkItem[] = [
   { href: "/organization/approvals", label: "Approvals" },
 ];
 
+/**
+ * PRSprint 11B (docs/prsprints/PRSPRINT_11B_ADMIN_CONSOLE_CONTROLLED_SUPPORT_ACCESS.md) fix: "/admin"
+ * was previously mislabeled "Users" here — it actually renders AdminDashboard (the overview page),
+ * not AdminUsers (the real search-by-email/id page, which lives at "/admin/users" and had no nav
+ * entry at all, making it unreachable except by typing the URL directly). Also adds "/admin/businesses"
+ * (new this PRSprint — see AdminBusinesses/AdminBusinessDetail).
+ */
 const ADMIN_LINKS: NavLinkItem[] = [
-  { href: "/admin", label: "Users" },
+  { href: "/admin", label: "Dashboard" },
+  { href: "/admin/users", label: "Users" },
+  { href: "/admin/businesses", label: "Businesses" },
   { href: "/admin/support", label: "Support queue" },
   { href: "/admin/restrictions", label: "Restrictions" },
   { href: "/admin/retention-holds", label: "Legal holds" },

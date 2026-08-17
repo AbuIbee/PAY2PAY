@@ -48,6 +48,20 @@ export function AdminUserDetail() {
       const who = (await whoAmIResponse.json()) as { platformRole: string };
       setIsOwner(who.platformRole === "platform_owner");
     }
+    // PRSprint 11B (docs/prsprints/PRSPRINT_11B_ADMIN_CONSOLE_CONTROLLED_SUPPORT_ACCESS.md): restore
+    // this page's own "End support view" control after a refresh, if the admin already has an
+    // active session open for this specific target — otherwise a reload silently lost track of it
+    // (the global AdminImpersonationBanner in the app shell still shows/ends it either way, but this
+    // page's own button should reflect reality too rather than falsely offering "Start" again).
+    const activeResponse = await fetch("/api/admin/impersonation/active");
+    if (activeResponse.ok) {
+      const activeBody = (await activeResponse.json()) as {
+        active: { impersonationSessionId: string; targetUserId: string } | null;
+      };
+      if (activeBody.active && activeBody.active.targetUserId === targetUserId) {
+        setImpersonationSessionId(activeBody.active.impersonationSessionId);
+      }
+    }
     setLoadStatus("ready");
   }, [targetUserId]);
 

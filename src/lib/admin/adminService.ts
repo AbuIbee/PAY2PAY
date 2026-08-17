@@ -2,6 +2,7 @@ import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
 import type { AccountClassification, PlatformRole, SessionRepository, UserAccountRepository } from "@/lib/auth/authService";
 import type { MfaService } from "@/lib/auth/mfaService";
+import type { BusinessProfileRepository, BusinessProfileStatus } from "@/lib/profiles/businessProfileService";
 import { ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import { isAdminRole, isOwnerRole } from "./capabilities";
 import type { AdminEnvironmentStatus, EnvironmentStatusReader } from "./environmentStatus";
@@ -76,6 +77,50 @@ export interface AdminImpersonationSessionRepository {
   insert(input: { adminUserId: string; targetUserId: string; reason: string }): Promise<AdminImpersonationSessionRecord>;
   findById(id: string): Promise<AdminImpersonationSessionRecord | null>;
   markEnded(id: string, endedAt: Date): Promise<void>;
+  /**
+   * PRSprint 11B (docs/prsprints/PRSPRINT_11B_ADMIN_CONSOLE_CONTROLLED_SUPPORT_ACCESS.md): before
+   * this, an impersonation session that outlived its originating browser tab (a refresh, a
+   * navigation away, a closed tab) became invisible to the UI — `impersonationSessionId` lived only
+   * in that page's React state — while staying open (`endedAt: null`) on the server indefinitely,
+   * with no way for the admin to rediscover or end it. That is exactly the "hidden persistent
+   * support session" this PRSprint's own Goal names as something the architecture must not allow.
+   * Used both to let the UI re-surface an admin's own still-open session after a reload, and by
+   * `startImpersonation` to refuse starting a second concurrent one.
+   */
+  findActiveForAdmin(adminUserId: string): Promise<AdminImpersonationSessionRecord | null>;
+}
+
+export interface AdminBusinessSummary {
+  id: string;
+  legalBusinessName: string;
+  displayName: string;
+  status: BusinessProfileStatus;
+  ownerUserId: string;
+  ownerEmail: string;
+  ownerPlatformRole: PlatformRole;
+  createdAt: Date;
+}
+
+export interface AdminBusinessMember {
+  userId: string;
+  email: string;
+  role: string;
+  isAuthorizedRepresentative: boolean;
+}
+
+export interface AdminBusinessDetail extends AdminBusinessSummary {
+  entityType: string;
+  country: string;
+  state: string;
+  members: AdminBusinessMember[];
+  agreements: { id: string; status: string; relationshipShape: string }[];
+}
+
+/** Real implementation: DrizzleAdminBusinessDirectoryReader. Read-only queries only — never mutates (mirrors AdminUserDirectoryReader's own doc comment). */
+export interface AdminBusinessDirectoryReader {
+  search(query: { name?: string; businessId?: string }): Promise<AdminBusinessSummary[]>;
+  getSummary(businessId: string): Promise<AdminBusinessSummary | null>;
+  getDetail(businessId: string): Promise<AdminBusinessDetail | null>;
 }
 
 interface ActingContext {
@@ -95,6 +140,11 @@ export interface AdminServiceDeps {
   directory: AdminUserDirectoryReader;
   impersonationSessions: AdminImpersonationSessionRepository;
   environmentStatus: EnvironmentStatusReader;
+  // PRSprint 11B: business-admin support. `businesses` is only ever used here for its
+  // `updateStatus` write (suspend/reactivate) — every read goes through the read-only
+  // `businessDirectory`, mirroring how `users`/`directory` are split for the same reason.
+  businesses: BusinessProfileRepository;
+  businessDirectory: AdminBusinessDirectoryReader;
 }
 
 /**
@@ -130,7 +180,7 @@ export class AdminService {
     this.requireAdmin(ctx.actingRole);
     const detail = await this.deps.directory.getDetail(targetUserId);
     if (!detail) throw new ValidationError("User not found.");
-    await this.recordAdminAudit(ctx, "admin_user_viewed", targetUserId, null, null);
+    await this.recordAdminAudit(ctx, "admin_user_viewed", "user_account", targetUserId, null, null);
     return detail;
   }
 
@@ -145,7 +195,7 @@ export class AdminService {
     // every existing session closes that gap (AuthService.validateSession also independently
     // rejects a non-active status as defense in depth, but this is the primary mechanism).
     await this.deps.sessions.revokeAllForUser(targetUserId);
-    await this.recordAdminAudit(ctx, "admin_user_suspended", targetUserId, reason, { status: "suspended" });
+    await this.recordAdminAudit(ctx, "admin_user_suspended", "user_account", targetUserId, reason, { status: "suspended" });
   }
 
   async reactivateUser(ctx: ActingContext, targetUserId: string, reason: string): Promise<void> {
@@ -155,7 +205,7 @@ export class AdminService {
       throw new ValidationError("This account is already active.");
     }
     await this.deps.users.updateStatus(targetUserId, "active");
-    await this.recordAdminAudit(ctx, "admin_user_reactivated", targetUserId, reason, { status: "active" });
+    await this.recordAdminAudit(ctx, "admin_user_reactivated", "user_account", targetUserId, reason, { status: "active" });
   }
 
   /**
@@ -170,7 +220,7 @@ export class AdminService {
     await this.authorizeMutableTarget(ctx, targetUserId);
     await this.requireFreshStepUp(ctx, "admin_sessions_revoke");
     await this.deps.sessions.revokeAllForUser(targetUserId);
-    await this.recordAdminAudit(ctx, "admin_sessions_revoked", targetUserId, reason, null);
+    await this.recordAdminAudit(ctx, "admin_sessions_revoked", "user_account", targetUserId, reason, null);
   }
 
   /**
@@ -196,7 +246,7 @@ export class AdminService {
       throw new ValidationError(`This account already has the "${newRole}" role.`);
     }
     await this.deps.users.updatePlatformRole(targetUserId, newRole);
-    await this.recordAdminAudit(ctx, "admin_role_changed", targetUserId, reason, {
+    await this.recordAdminAudit(ctx, "admin_role_changed", "user_account", targetUserId, reason, {
       previousRole: target.platformRole,
       newRole,
     });
@@ -212,7 +262,7 @@ export class AdminService {
       throw new ValidationError(`This account is already classified as "${classification}".`);
     }
     await this.deps.users.updateAccountClassification(targetUserId, classification);
-    await this.recordAdminAudit(ctx, "admin_classification_changed", targetUserId, null, {
+    await this.recordAdminAudit(ctx, "admin_classification_changed", "user_account", targetUserId, null, {
       previousClassification: target.accountClassification,
       newClassification: classification,
     });
@@ -234,6 +284,14 @@ export class AdminService {
     if (!reason.trim()) {
       throw new ValidationError("A reason is required to start a support view.");
     }
+    // PRSprint 11B: at most one active support view per admin at a time — see
+    // AdminImpersonationSessionRepository.findActiveForAdmin's doc comment for why an admin must
+    // end their current session before starting another, rather than silently accumulating several
+    // simultaneously-open ones.
+    const existingActive = await this.deps.impersonationSessions.findActiveForAdmin(ctx.actingUserId);
+    if (existingActive) {
+      throw new ValidationError("You already have an active support view. End it before starting another.");
+    }
     const detail = await this.deps.directory.getDetail(targetUserId);
     if (!detail) throw new ValidationError("User not found.");
     const session = await this.deps.impersonationSessions.insert({
@@ -241,7 +299,7 @@ export class AdminService {
       targetUserId,
       reason,
     });
-    await this.recordAdminAudit(ctx, "admin_impersonation_started", targetUserId, reason, {
+    await this.recordAdminAudit(ctx, "admin_impersonation_started", "user_account", targetUserId, reason, {
       impersonationSessionId: session.id,
       targetRole: target.platformRole,
     });
@@ -258,9 +316,26 @@ export class AdminService {
       throw new ValidationError("This support-view session has already ended.");
     }
     await this.deps.impersonationSessions.markEnded(session.id, new Date());
-    await this.recordAdminAudit(ctx, "admin_impersonation_ended", session.targetUserId, null, {
+    await this.recordAdminAudit(ctx, "admin_impersonation_ended", "user_account", session.targetUserId, null, {
       impersonationSessionId: session.id,
     });
+  }
+
+  /**
+   * PRSprint 11B: lets the UI re-surface an admin's own still-open support view after a page
+   * refresh or navigation elsewhere — see AdminImpersonationSessionRepository.findActiveForAdmin's
+   * doc comment. A read-only status poll, not a new access grant (the session was already audited
+   * when it started), so this deliberately does not itself write a new audit event on every check.
+   */
+  async getActiveImpersonation(
+    ctx: ActingContext,
+  ): Promise<{ impersonationSessionId: string; targetUserId: string; startedAt: Date; view: AdminUserDetail } | null> {
+    this.requireAdmin(ctx.actingRole);
+    const session = await this.deps.impersonationSessions.findActiveForAdmin(ctx.actingUserId);
+    if (!session) return null;
+    const view = await this.deps.directory.getDetail(session.targetUserId);
+    if (!view) return null;
+    return { impersonationSessionId: session.id, targetUserId: session.targetUserId, startedAt: session.startedAt, view };
   }
 
   private requireAdmin(role: PlatformRole): void {
@@ -332,9 +407,60 @@ export class AdminService {
     return target;
   }
 
+  async searchBusinesses(actingRole: PlatformRole, query: { name?: string; businessId?: string }): Promise<AdminBusinessSummary[]> {
+    this.requireAdmin(actingRole);
+    return this.deps.businessDirectory.search(query);
+  }
+
+  async getBusinessDetail(ctx: ActingContext, targetBusinessId: string): Promise<AdminBusinessDetail> {
+    this.requireAdmin(ctx.actingRole);
+    const detail = await this.deps.businessDirectory.getDetail(targetBusinessId);
+    if (!detail) throw new ValidationError("Business not found.");
+    await this.recordAdminAudit(ctx, "admin_business_viewed", "business_profile", targetBusinessId, null, null);
+    return detail;
+  }
+
+  async suspendBusiness(ctx: ActingContext, targetBusinessId: string, reason: string): Promise<void> {
+    const target = await this.authorizeMutableBusinessTarget(ctx, targetBusinessId);
+    await this.requireFreshStepUp(ctx, "admin_business_suspend");
+    if (target.status === "disabled") {
+      throw new ValidationError("This business is already suspended.");
+    }
+    await this.deps.businesses.updateStatus(targetBusinessId, "disabled");
+    await this.recordAdminAudit(ctx, "admin_business_suspended", "business_profile", targetBusinessId, reason, { status: "disabled" });
+  }
+
+  async reactivateBusiness(ctx: ActingContext, targetBusinessId: string, reason: string): Promise<void> {
+    const target = await this.authorizeMutableBusinessTarget(ctx, targetBusinessId);
+    await this.requireFreshStepUp(ctx, "admin_business_reactivate");
+    if (target.status === "active") {
+      throw new ValidationError("This business is already active.");
+    }
+    await this.deps.businesses.updateStatus(targetBusinessId, "active");
+    await this.recordAdminAudit(ctx, "admin_business_reactivated", "business_profile", targetBusinessId, reason, { status: "active" });
+  }
+
+  /**
+   * Business-target mirror of authorizeMutableTarget: a plain Platform Admin may only act on a
+   * business owned by an ordinary Member, never one owned by another Platform Admin or a Platform
+   * Owner — the same "no acting on a peer or superior's stuff" rule the user-targeting guard
+   * enforces, applied to the owner of the business rather than the business itself (a business has
+   * no platform role of its own).
+   */
+  private async authorizeMutableBusinessTarget(ctx: ActingContext, targetBusinessId: string): Promise<AdminBusinessSummary> {
+    this.requireAdmin(ctx.actingRole);
+    const target = await this.deps.businessDirectory.getSummary(targetBusinessId);
+    if (!target) throw new ValidationError("Business not found.");
+    if (!isOwnerRole(ctx.actingRole) && target.ownerPlatformRole !== "member") {
+      throw new ForbiddenError("Platform Admins may only act on businesses owned by a Member account.");
+    }
+    return target;
+  }
+
   private async recordAdminAudit(
     ctx: ActingContext,
     action: string,
+    targetResourceType: string,
     targetResourceId: string,
     reason: string | null,
     newValue: unknown,
@@ -355,7 +481,7 @@ export class AdminService {
       authStrength: null,
       relatedDocumentId: null,
       relatedCaseId: null,
-      targetResourceType: "user_account",
+      targetResourceType,
       targetResourceId,
     });
   }

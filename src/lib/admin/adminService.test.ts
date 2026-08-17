@@ -24,11 +24,24 @@ describe("AdminService", () => {
     return user;
   }
 
+  async function seedBusiness(ownerId: string) {
+    return ctx.businesses.insert({
+      ownerUserId: ownerId,
+      legalBusinessName: `Acme ${randomUUID()} LLC`,
+      displayName: "Acme",
+      entityType: "llc",
+      businessAddress: null,
+      country: "US",
+      state: "CA",
+    });
+  }
+
   describe("MEMBER cannot access admin UI/server operations", () => {
     it("rejects a member actor from every admin operation", async () => {
       const member = await seedUser("member");
       const target = await seedUser("member");
       const memberCtx = ctxFor(member.id, randomUUID(), "member");
+      const business = await seedBusiness(target.id);
 
       await expect(ctx.adminService.getDashboardOverview("member")).rejects.toThrow(ForbiddenError);
       await expect(ctx.adminService.searchUsers("member", {})).rejects.toThrow(ForbiddenError);
@@ -43,6 +56,10 @@ describe("AdminService", () => {
         ctx.adminService.changeAccountClassification(memberCtx, target.id, "internal"),
       ).rejects.toThrow(ForbiddenError);
       await expect(ctx.adminService.startImpersonation(memberCtx, target.id, "reason")).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.searchBusinesses("member", {})).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.getBusinessDetail(memberCtx, business.id)).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.suspendBusiness(memberCtx, business.id, "reason")).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.reactivateBusiness(memberCtx, business.id, "reason")).rejects.toThrow(ForbiddenError);
     });
   });
 
@@ -91,6 +108,93 @@ describe("AdminService", () => {
       const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
 
       await expect(ctx.adminService.suspendUser(adminCtx, otherAdmin.id, "reason")).rejects.toThrow(ForbiddenError);
+    });
+  });
+
+  describe("PRSprint 11B: PLATFORM_ADMIN business administration", () => {
+    it("can search, view, suspend, and reactivate a business owned by a Member", async () => {
+      const admin = await seedUser("platform_admin");
+      const owner = await seedUser("member");
+      const business = await seedBusiness(owner.id);
+      const sessionId = randomUUID();
+      const adminCtx = ctxFor(admin.id, sessionId, "platform_admin");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+
+      const found = await ctx.adminService.searchBusinesses("platform_admin", { businessId: business.id });
+      expect(found.map((b) => b.id)).toContain(business.id);
+
+      const detail = await ctx.adminService.getBusinessDetail(adminCtx, business.id);
+      expect(detail.status).toBe("active");
+      expect(detail.ownerEmail).toBe(owner.email);
+
+      await ctx.adminService.suspendBusiness(adminCtx, business.id, "policy violation");
+      expect((await ctx.businessDirectory.getSummary(business.id))?.status).toBe("disabled");
+
+      await ctx.adminService.reactivateBusiness(adminCtx, business.id, "resolved");
+      expect((await ctx.businessDirectory.getSummary(business.id))?.status).toBe("active");
+    });
+
+    it("cannot suspend a business owned by a Platform Admin or a Platform Owner", async () => {
+      const admin = await seedUser("platform_admin");
+      const otherAdmin = await seedUser("platform_admin");
+      const owner = await seedUser("platform_owner");
+      const adminOwnedBusiness = await seedBusiness(otherAdmin.id);
+      const ownerOwnedBusiness = await seedBusiness(owner.id);
+      const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
+
+      await expect(ctx.adminService.suspendBusiness(adminCtx, adminOwnedBusiness.id, "reason")).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.suspendBusiness(adminCtx, ownerOwnedBusiness.id, "reason")).rejects.toThrow(ForbiddenError);
+    });
+
+    it("rejects suspend/reactivate without a fresh step-up", async () => {
+      const admin = await seedUser("platform_admin");
+      const owner = await seedUser("member");
+      const business = await seedBusiness(owner.id);
+      const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
+      // Deliberately no grantStepUp call.
+
+      await expect(ctx.adminService.suspendBusiness(adminCtx, business.id, "reason")).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.reactivateBusiness(adminCtx, business.id, "reason")).rejects.toThrow(ForbiddenError);
+    });
+
+    it("Platform Owner can suspend a business regardless of who owns it", async () => {
+      const owner = await seedUser("platform_owner");
+      const otherAdmin = await seedUser("platform_admin");
+      const business = await seedBusiness(otherAdmin.id);
+      const sessionId = randomUUID();
+      const ownerCtx = ctxFor(owner.id, sessionId, "platform_owner");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, owner.id, sessionId);
+
+      await ctx.adminService.suspendBusiness(ownerCtx, business.id, "policy");
+      expect((await ctx.businessDirectory.getSummary(business.id))?.status).toBe("disabled");
+    });
+
+    it("rejects acting on an already-suspended/already-active business", async () => {
+      const admin = await seedUser("platform_admin");
+      const owner = await seedUser("member");
+      const business = await seedBusiness(owner.id);
+      const sessionId = randomUUID();
+      const adminCtx = ctxFor(admin.id, sessionId, "platform_admin");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+
+      await expect(ctx.adminService.reactivateBusiness(adminCtx, business.id, "reason")).rejects.toThrow(ValidationError);
+      await ctx.adminService.suspendBusiness(adminCtx, business.id, "reason");
+      await expect(ctx.adminService.suspendBusiness(adminCtx, business.id, "reason again")).rejects.toThrow(ValidationError);
+    });
+
+    it("records suspend/reactivate as audit events against the business_profile target", async () => {
+      const admin = await seedUser("platform_admin");
+      const owner = await seedUser("member");
+      const business = await seedBusiness(owner.id);
+      const sessionId = randomUUID();
+      const adminCtx = ctxFor(admin.id, sessionId, "platform_admin");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+
+      await ctx.adminService.suspendBusiness(adminCtx, business.id, "policy");
+      const event = ctx.auditRepo.events.find((e) => e.action === "admin_business_suspended");
+      expect(event?.targetResourceType).toBe("business_profile");
+      expect(event?.targetResourceId).toBe(business.id);
+      expect(event?.reason).toBe("policy");
     });
   });
 
@@ -164,6 +268,33 @@ describe("AdminService", () => {
       const ownerCtx = ctxFor(owner.id, randomUUID(), "platform_owner");
 
       await expect(ctx.adminService.suspendUser(ownerCtx, otherOwner.id, "reason")).rejects.toThrow(ForbiddenError);
+    });
+
+    /**
+     * PRSprint 11B negative-security matrix item "suspended admin loses appropriate access" /
+     * "revoked session cannot continue admin activity": suspending a Platform Admin (something only
+     * a Platform Owner may do — authorizeMutableTarget) must immediately revoke every one of that
+     * admin's existing sessions, not just prevent future logins — proven directly here rather than
+     * only inferred from the identical, already-covered member-suspension test above.
+     */
+    it("suspending a Platform Admin revokes every one of their existing sessions immediately", async () => {
+      const owner = await seedUser("platform_owner");
+      const admin = await seedUser("platform_admin");
+      const adminSession = await ctx.sessions.insert({
+        userId: admin.id,
+        sessionTokenHash: "admin-session-hash",
+        expiresAt: new Date(Date.now() + 60_000),
+        ipAddress: null,
+        userAgent: null,
+      });
+      const ownerSessionId = randomUUID();
+      const ownerCtx = ctxFor(owner.id, ownerSessionId, "platform_owner");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, owner.id, ownerSessionId);
+
+      await ctx.adminService.suspendUser(ownerCtx, admin.id, "policy violation");
+
+      const stillActive = await ctx.sessions.listActiveForUser(admin.id, new Date());
+      expect(stillActive.map((s) => s.id)).not.toContain(adminSession.id);
     });
   });
 
@@ -262,6 +393,50 @@ describe("AdminService", () => {
       await expect(ctx.adminService.endImpersonation(otherAdminCtx, result.impersonationSessionId)).rejects.toThrow(
         ForbiddenError,
       );
+    });
+
+    /**
+     * PRSprint 11B: closes the "hidden persistent support session" gap named in this PRSprint's
+     * Goal — before this, an admin could start any number of concurrent support views (each staying
+     * open, endedAt: null, indefinitely) with no way to ever rediscover most of them from the UI.
+     * Now at most one may be open per admin at a time.
+     */
+    it("rejects starting a second support view while one is already active, and getActiveImpersonation surfaces it", async () => {
+      const admin = await seedUser("platform_admin");
+      const targetA = await seedUser("member");
+      const targetB = await seedUser("member");
+      const sessionId = randomUUID();
+      const adminCtx = ctxFor(admin.id, sessionId, "platform_admin");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+
+      const first = await ctx.adminService.startImpersonation(adminCtx, targetA.id, "checking a ticket");
+
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+      await expect(ctx.adminService.startImpersonation(adminCtx, targetB.id, "second ticket")).rejects.toThrow(
+        ValidationError,
+      );
+
+      const active = await ctx.adminService.getActiveImpersonation(adminCtx);
+      expect(active?.impersonationSessionId).toBe(first.impersonationSessionId);
+      expect(active?.targetUserId).toBe(targetA.id);
+
+      await ctx.adminService.endImpersonation(adminCtx, first.impersonationSessionId);
+      expect(await ctx.adminService.getActiveImpersonation(adminCtx)).toBeNull();
+
+      // Now that the first has ended, a new one may start.
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+      const second = await ctx.adminService.startImpersonation(adminCtx, targetB.id, "second ticket, retried");
+      expect(second.impersonationSessionId).not.toBe(first.impersonationSessionId);
+    });
+
+    it("getActiveImpersonation returns null for an admin with no open support view, and rejects a non-admin caller", async () => {
+      const admin = await seedUser("platform_admin");
+      const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
+      expect(await ctx.adminService.getActiveImpersonation(adminCtx)).toBeNull();
+
+      const member = await seedUser("member");
+      const memberCtx = ctxFor(member.id, randomUUID(), "member");
+      await expect(ctx.adminService.getActiveImpersonation(memberCtx)).rejects.toThrow(ForbiddenError);
     });
   });
 
