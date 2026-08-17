@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logger } from "@/lib/logger";
 import { checkRateLimit, resetRateLimits, InMemoryRateLimitStore, DrizzleRateLimitStore } from "./rate-limit";
 
 describe("checkRateLimit", () => {
@@ -32,6 +33,42 @@ describe("checkRateLimit", () => {
     await checkRateLimit("a", 1, 60_000, now);
     expect(await checkRateLimit("a", 1, 60_000, now)).toBe(false);
     expect(await checkRateLimit("b", 1, 60_000, now)).toBe(true);
+  });
+
+  /**
+   * PRSprint 11A (docs/prsprints/PRSPRINT_11A_LOGIN_AUTHENTICATION_REGRESSION_REMEDIATION.md): proves
+   * the fail-open fix that restores login/signup availability when the rate_limit_bucket store itself
+   * errors (the actual production root cause of the reported login regression — see that PRSprint's
+   * doc for the full trace). Before this fix, a store error propagated straight out of checkRateLimit
+   * and every route that calls it unconditionally before doing anything else — most critically login
+   * and signup — returned a 500 instead of ever reaching password verification.
+   */
+  it("fails open (allows the request) when the store itself throws, instead of propagating the error", async () => {
+    const store = resetRateLimits();
+    store.failNext = true;
+    await expect(checkRateLimit("login:ip:1.2.3.4", 10, 60_000, 1_000_000)).resolves.toBe(true);
+  });
+
+  it("logs the store failure at error level, distinct from the normal rate_limit_exceeded warn log, and does not leak the raw key", async () => {
+    const store = resetRateLimits();
+    store.failNext = true;
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+    await checkRateLimit("login:ip:1.2.3.4", 10, 60_000, 1_000_000);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const [message, context] = errorSpy.mock.calls[0]!;
+    expect(message).toBe("rate_limit_store_unavailable");
+    expect(context).toMatchObject({ namespace: "login" });
+    expect(JSON.stringify(context)).not.toContain("1.2.3.4");
+    errorSpy.mockRestore();
+  });
+
+  it("recovers on the next call once the store stops failing — a single transient error does not permanently disable rate limiting", async () => {
+    const store = resetRateLimits();
+    store.failNext = true;
+    const now = 1_000_000;
+    expect(await checkRateLimit("k", 1, 60_000, now)).toBe(true); // store failure, fails open
+    expect(await checkRateLimit("k", 1, 60_000, now)).toBe(true); // store healthy again, first real increment
+    expect(await checkRateLimit("k", 1, 60_000, now)).toBe(false); // over the limit now, correctly blocked
   });
 });
 

@@ -52,8 +52,14 @@ export class DrizzleRateLimitStore implements RateLimitStore {
 /** Test-only in-memory store — same semantics as DrizzleRateLimitStore, without a database, for fast unit tests of the limit/window logic itself. Concurrency-safety is a property of the real store's single atomic SQL statement, argued in this file's module doc comment and covered by DrizzleRateLimitStore's own dedicated test asserting it issues exactly one atomic upsert statement, not a separate read-then-write. */
 export class InMemoryRateLimitStore implements RateLimitStore {
   private buckets = new Map<string, { count: number; resetAt: number }>();
+  /** PRSprint 11A: mirrors InMemoryEmailSender/InMemorySmsSender's own `failNext` convention — simulates the store itself erroring (e.g. a database outage), for testing checkRateLimit's fail-open behavior. */
+  failNext = false;
 
   async incrementAndCheck(key: string, windowMs: number, now: number): Promise<number> {
+    if (this.failNext) {
+      this.failNext = false;
+      throw new Error("simulated_rate_limit_store_failure");
+    }
     const bucket = this.buckets.get(key);
     if (!bucket || bucket.resetAt <= now) {
       this.buckets.set(key, { count: 1, resetAt: now + windowMs });
@@ -83,6 +89,20 @@ function getDefaultStore(): RateLimitStore {
  * window. Logs a structured, PII-free abuse event (namespace only — the part of `key` before its
  * first `:`, never the full key, which may embed an email/IP/phone) whenever a request is blocked,
  * so abuse is observable without putting the identifier itself in logs.
+ *
+ * PRSprint 11A (docs/prsprints/PRSPRINT_11A_LOGIN_AUTHENTICATION_REGRESSION_REMEDIATION.md): this
+ * used to let a failure from the store itself (e.g. the `rate_limit_bucket` write erroring for a
+ * database-level reason unrelated to any caller's own request) propagate straight out of
+ * `checkRateLimit` — which every authenticated *and* unauthenticated write route, most critically
+ * login and signup, calls unconditionally before doing anything else. A rate-limit *storage*
+ * problem therefore took down the entire application's ability to log in or sign up, not just
+ * rate-limiting itself — a self-inflicted outage far worse than the abuse-prevention gap it's
+ * trading against. Rate limiting is a defense-in-depth control, not the primary authentication/
+ * authorization boundary (that remains password verification + session validation, both entirely
+ * unaffected by this change) — so it now fails *open* on a store error: the request is allowed
+ * through, and the failure is logged at `error` level (distinct from the normal `warn`-level
+ * "blocked" log below) so the underlying storage problem stays observable and fixable, instead of
+ * silently and invisibly blocking every login attempt.
  */
 export async function checkRateLimit(
   key: string,
@@ -90,16 +110,32 @@ export async function checkRateLimit(
   windowMs: number,
   now: number = Date.now(),
 ): Promise<boolean> {
-  const count = await getDefaultStore().incrementAndCheck(key, windowMs, now);
+  const namespace = key.split(":")[0];
+  let count: number;
+  try {
+    count = await getDefaultStore().incrementAndCheck(key, windowMs, now);
+  } catch (error) {
+    logger.error("rate_limit_store_unavailable", {
+      namespace,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return true;
+  }
   const allowed = count <= limit;
   if (!allowed) {
-    const namespace = key.split(":")[0];
     logger.warn("rate_limit_exceeded", { namespace, limit, windowMs });
   }
   return allowed;
 }
 
-/** Test-only escape hatch: swaps in a fresh in-memory store so tests never touch a real database and each test starts with clean rate-limit state. */
-export function resetRateLimits(): void {
-  testStoreOverride = new InMemoryRateLimitStore();
+/**
+ * Test-only escape hatch: swaps in a fresh in-memory store so tests never touch a real database and
+ * each test starts with clean rate-limit state. Returns the new store instance so a test can also
+ * reach into it directly — e.g. setting `failNext = true` to simulate a store-level failure and
+ * assert checkRateLimit's fail-open behavior (PRSprint 11A).
+ */
+export function resetRateLimits(): InMemoryRateLimitStore {
+  const store = new InMemoryRateLimitStore();
+  testStoreOverride = store;
+  return store;
 }
