@@ -166,6 +166,46 @@ describe("DrizzleRateLimitStore", () => {
     },
   );
 
+  /**
+   * PRSprint 12A (docs/prsprints/PRSPRINT_12A_PRODUCTION_DATABASE_RECONCILIATION.md): live
+   * production log capture (once checkRateLimit's new `.cause`-walking exposed it — see that
+   * file's own test) found this exact query's real, precise runtime failure was never about
+   * the table or RLS at all: a Node `TypeError [ERR_INVALID_ARG_TYPE]` because the *same* `Date`
+   * object instance was interpolated multiple times into one `sql` template (nowDate ×4,
+   * newResetAt ×2). Proves the fix: every timestamp parameter bound into this query is a plain
+   * ISO-8601 string, never a `Date` instance.
+   */
+  it("binds every timestamp parameter as an ISO-8601 string, never a raw Date instance (the actual live production failure this PRSprint traced and fixed)", async () => {
+    const boundValues: unknown[] = [];
+    const fakeDb = {
+      execute: async (query: { queryChunks: unknown[] }) => {
+        for (const chunk of query.queryChunks) {
+          // Drizzle's `sql` template tag pushes each interpolated value into queryChunks directly
+          // (not wrapped) alongside StringChunk objects (recognizable by a `.value: string[]` of
+          // literal SQL text) for the surrounding SQL text — so a chunk that *isn't* StringChunk-
+          // shaped *is* itself a raw bound parameter value (string/number/Date/etc).
+          const candidate = chunk as { value?: unknown };
+          const isStringChunk =
+            typeof chunk === "object" && chunk !== null && Array.isArray(candidate.value) && candidate.value.every((v) => typeof v === "string");
+          if (!isStringChunk) {
+            boundValues.push(chunk);
+          }
+        }
+        return [{ count: 1 }];
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    const store = new DrizzleRateLimitStore(fakeDb);
+    await store.incrementAndCheck("k", 60_000, 1_000_000);
+
+    const timestampValues = boundValues.filter((v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v));
+    expect(timestampValues.length).toBeGreaterThan(0);
+    for (const value of boundValues) {
+      expect(value instanceof Date).toBe(false);
+    }
+  });
+
   it("returns the count from the upsert's RETURNING clause", async () => {
     const fakeDb = {
       execute: async () => [{ count: 7 }],

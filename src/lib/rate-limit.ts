@@ -32,15 +32,24 @@ export class DrizzleRateLimitStore implements RateLimitStore {
   constructor(private readonly db: Database) {}
 
   async incrementAndCheck(key: string, windowMs: number, now: number): Promise<number> {
-    const nowDate = new Date(now);
-    const newResetAt = new Date(now + windowMs);
+    // PRSprint 12A (docs/prsprints/PRSPRINT_12A_PRODUCTION_DATABASE_RECONCILIATION.md): live
+    // production log capture (with the newly-added .cause-walking in checkRateLimit) found this
+    // query's *actual* live failure was never about the table/RLS at all — it was a Node
+    // `TypeError [ERR_INVALID_ARG_TYPE]: ... Received an instance of Date`, because this query
+    // interpolates the *same* Date object instance multiple times (nowDate appears 4 times,
+    // newResetAt twice) into one `sql` template. Passing pre-formatted ISO-8601 strings instead of
+    // raw Date objects sidesteps whatever internal value-deduplication/hashing step chokes on a
+    // repeated Date reference — Postgres parses ISO-8601 natively for `timestamp with time zone`
+    // columns, so behavior is unchanged, only the wire representation of these two parameters is.
+    const nowIso = new Date(now).toISOString();
+    const newResetAtIso = new Date(now + windowMs).toISOString();
     const rows = await this.db.execute<{ count: number }>(sql`
       INSERT INTO "rate_limit_bucket" ("key", "count", "reset_at", "updated_at")
-      VALUES (${key}, 1, ${newResetAt}, ${nowDate})
+      VALUES (${key}, 1, ${newResetAtIso}, ${nowIso})
       ON CONFLICT ("key") DO UPDATE SET
-        "count" = CASE WHEN "rate_limit_bucket"."reset_at" <= ${nowDate} THEN 1 ELSE "rate_limit_bucket"."count" + 1 END,
-        "reset_at" = CASE WHEN "rate_limit_bucket"."reset_at" <= ${nowDate} THEN ${newResetAt} ELSE "rate_limit_bucket"."reset_at" END,
-        "updated_at" = ${nowDate}
+        "count" = CASE WHEN "rate_limit_bucket"."reset_at" <= ${nowIso} THEN 1 ELSE "rate_limit_bucket"."count" + 1 END,
+        "reset_at" = CASE WHEN "rate_limit_bucket"."reset_at" <= ${nowIso} THEN ${newResetAtIso} ELSE "rate_limit_bucket"."reset_at" END,
+        "updated_at" = ${nowIso}
       RETURNING "count"
     `);
     const row = rows[0];
