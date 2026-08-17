@@ -49,11 +49,31 @@ export interface AdminUserSummary {
   lastLoginAt: Date | null;
 }
 
+/**
+ * PRSprint 12 (docs/prsprints/PRSPRINT_12_ELECTRONIC_SIGNATURES_PDFS_IMMUTABLE_RECORDS.md)
+ * requirement #22 ("Admin Console... visibility into executed agreements and signature/audit
+ * information"): read-only summary — before this, admin's own agreement lists (on both a user's and
+ * a business's detail page) showed only id/status/relationshipShape, with no way to see which
+ * version is current, whether it's signed, or whether an executed PDF exists, without leaving the
+ * admin console entirely. Sourced the same way every other admin read is (a dedicated read-only
+ * directory-reader query against `agreement`/`agreement_version`/`agreement_pdf` directly) — never
+ * through AgreementService/SignatureService, preserving this file's own "no method capable of
+ * mutating agreement data" guarantee, which is about *access*, not *visibility*.
+ */
+export interface AdminAgreementSummary {
+  id: string;
+  status: string;
+  relationshipShape: string;
+  currentVersionNumber: number | null;
+  currentVersionSigned: boolean;
+  hasExecutedPdf: boolean;
+}
+
 export interface AdminUserDetail extends AdminUserSummary {
   emailVerifiedAt: Date | null;
   personalProfileId: string | null;
   businessProfiles: { id: string; displayName: string; status: string }[];
-  agreements: { id: string; status: string; relationshipShape: string }[];
+  agreements: AdminAgreementSummary[];
 }
 
 /** Real implementation: DrizzleAdminUserDirectoryReader. Read-only queries only — never mutates. */
@@ -113,7 +133,7 @@ export interface AdminBusinessDetail extends AdminBusinessSummary {
   country: string;
   state: string;
   members: AdminBusinessMember[];
-  agreements: { id: string; status: string; relationshipShape: string }[];
+  agreements: AdminAgreementSummary[];
 }
 
 /** Real implementation: DrizzleAdminBusinessDirectoryReader. Read-only queries only — never mutates (mirrors AdminUserDirectoryReader's own doc comment). */

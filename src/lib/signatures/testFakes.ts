@@ -30,8 +30,8 @@ export class InMemorySignatureEventRepository implements SignatureEventRepositor
 export class InMemoryAgreementPdfRepository implements AgreementPdfRepository {
   byVersionId = new Map<string, AgreementPdfRecord>();
 
-  async insert(input: { agreementVersionId: string; storagePath: string; documentHash: string }): Promise<AgreementPdfRecord> {
-    const record: AgreementPdfRecord = { id: randomUUID(), generatedAt: new Date(), ...input };
+  async insert(input: { id?: string; agreementVersionId: string; storagePath: string; documentHash: string }): Promise<AgreementPdfRecord> {
+    const record: AgreementPdfRecord = { generatedAt: new Date(), ...input, id: input.id ?? randomUUID() };
     this.byVersionId.set(input.agreementVersionId, record);
     return record;
   }
@@ -63,7 +63,13 @@ class InMemoryAuditEventRepositoryForSignatures implements AuditEventRepository 
  * the same singletons) — so a party/staff member seeded once is visible to both services.
  */
 export function createTestSignatureService() {
-  const agreementCtx = createTestAgreementService();
+  const signatureEvents = new InMemorySignatureEventRepository();
+  // PRSprint 12: shares its own `.events` array with the AgreementService context's atomic signing
+  // path (InMemorySigningApplicationRepository) — see createTestAgreementService's own doc comment —
+  // so SignatureService's reads here (generatePdf's listForVersion, this file's own assertions) see
+  // the evidence the atomic apply wrote, matching how production's SignatureService and
+  // AgreementService resolve through the same singletons.
+  const agreementCtx = createTestAgreementService(signatureEvents.events);
   const { mfaService, credentials: mfaCredentials, stepUps } = createTestMfaService();
   const verificationRecords = new InMemoryIdentityVerificationRecordRepository();
   const verificationAuditRepo = new InMemoryAuditEventRepositoryForSignatures();
@@ -74,7 +80,6 @@ export function createTestSignatureService() {
     new AuditService(verificationAuditRepo),
   );
   const personalProfiles = new InMemoryPersonalProfileRepository();
-  const signatureEvents = new InMemorySignatureEventRepository();
   const agreementPdfs = new InMemoryAgreementPdfRepository();
   const profileDisplay = new InMemoryProfileDisplayReader();
   const storage = new InMemoryDocumentStorage();

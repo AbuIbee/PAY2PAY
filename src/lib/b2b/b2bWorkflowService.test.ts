@@ -7,7 +7,8 @@ import { createTestMfaService } from "@/lib/auth/mfaTestFakes";
 import { grantStepUp } from "@/lib/staff/testFakes";
 import { InMemoryDocumentStorage, InMemoryProfileDisplayReader } from "@/lib/documents/testFakes";
 import { SignatureService } from "@/lib/signatures/signatureService";
-import { InMemoryAgreementPdfRepository, InMemorySignatureEventRepository } from "@/lib/signatures/testFakes";
+import type { SignatureEventRepository } from "@/lib/signatures/signatureService";
+import { InMemoryAgreementPdfRepository } from "@/lib/signatures/testFakes";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { createTestB2BWorkflowService, markBusinessFullyVerified, markProfileFullyVerified } from "./testFakes";
 
@@ -165,7 +166,17 @@ describe("B2BWorkflowService", () => {
       // Build a SignatureService sharing this test's agreementCtx/profileOwners/staffService/verification.
       const personalProfiles = new InMemoryPersonalProfileRepository();
       const { mfaService, credentials: mfaCredentials, stepUps } = createTestMfaService();
-      const signatureEvents = new InMemorySignatureEventRepository();
+      // PRSprint 12: reads from ctx.agreementCtx's own InMemorySigningApplicationRepository.signatureEvents
+      // array directly — see that class's own doc comment — rather than an InMemorySignatureEventRepository
+      // constructed independently, which would never see the evidence rows the atomic signing path
+      // (inside ctx.agreementCtx.agreementService) actually writes.
+      const signatureEvents: SignatureEventRepository = {
+        insert: () => {
+          throw new Error("not used — evidence is written atomically inside AgreementService.signAgreementWithEvidence");
+        },
+        listForVersion: async (agreementVersionId) =>
+          ctx.agreementCtx.signing.signatureEvents.filter((e) => e.agreementVersionId === agreementVersionId),
+      };
       const signatureService = new SignatureService({
         agreementService: ctx.agreementCtx.agreementService,
         mfa: mfaService,

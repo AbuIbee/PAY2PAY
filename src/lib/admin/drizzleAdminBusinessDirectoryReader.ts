@@ -2,6 +2,7 @@ import "server-only";
 import { and, eq, ilike, isNull, or, type SQL } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { agreement, businessProfile, businessStaffMember, userAccount } from "@/db/schema";
+import { summarizeAgreementsForAdmin } from "./adminAgreementSummary";
 import type { AdminBusinessDetail, AdminBusinessDirectoryReader, AdminBusinessSummary } from "./adminService";
 
 /**
@@ -53,7 +54,13 @@ export class DrizzleAdminBusinessDirectoryReader implements AdminBusinessDirecto
       .where(and(eq(businessStaffMember.businessProfileId, businessId), isNull(businessStaffMember.removedAt)));
 
     const agreementRows = await db
-      .select({ id: agreement.id, status: agreement.status, creditorProfileKind: agreement.creditorProfileKind, debtorProfileKind: agreement.debtorProfileKind })
+      .select({
+        id: agreement.id,
+        status: agreement.status,
+        creditorProfileKind: agreement.creditorProfileKind,
+        debtorProfileKind: agreement.debtorProfileKind,
+        currentVersionId: agreement.currentVersionId,
+      })
       .from(agreement)
       .where(
         or(
@@ -68,18 +75,7 @@ export class DrizzleAdminBusinessDirectoryReader implements AdminBusinessDirecto
       country: businessRow.country,
       state: businessRow.state,
       members: memberRows,
-      agreements: agreementRows.map((row) => ({
-        id: row.id,
-        status: row.status,
-        relationshipShape:
-          row.creditorProfileKind === "personal" && row.debtorProfileKind === "personal"
-            ? "P2P"
-            : row.creditorProfileKind === "business" && row.debtorProfileKind === "personal"
-              ? "B2C"
-              : row.creditorProfileKind === "personal" && row.debtorProfileKind === "business"
-                ? "C2B"
-                : "B2B",
-      })),
+      agreements: await summarizeAgreementsForAdmin(agreementRows),
     };
   }
 

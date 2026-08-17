@@ -8,6 +8,7 @@ import { DrizzleAgreementPartyRepository } from "./drizzleAgreementPartyReposito
 import { DrizzleAgreementRepository } from "./drizzleAgreementRepository";
 import { DrizzleAgreementVersionRepository } from "./drizzleAgreementVersionRepository";
 import { DrizzleInstallmentScheduleItemRepository } from "./drizzleInstallmentScheduleItemRepository";
+import { DrizzleSigningApplicationRepository } from "./drizzleSigningApplicationRepository";
 
 let cached: AgreementService | null = null;
 
@@ -22,6 +23,7 @@ export function getAgreementService(): AgreementService {
       profileOwners: new DrizzleProfileOwnerReader(),
       staffService: getStaffService(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
+      signing: new DrizzleSigningApplicationRepository(),
     });
   }
   return cached;

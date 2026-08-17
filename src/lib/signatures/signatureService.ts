@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import type { AuditService } from "@/lib/audit/auditService";
 import type { MfaMethod, MfaService } from "@/lib/auth/mfaService";
 import type { PersonalProfileRepository } from "@/lib/auth/authService";
@@ -49,7 +50,13 @@ export interface AgreementPdfRecord {
 
 /** Real implementation: DrizzleAgreementPdfRepository. */
 export interface AgreementPdfRepository {
-  insert(input: { agreementVersionId: string; storagePath: string; documentHash: string }): Promise<AgreementPdfRecord>;
+  /**
+   * PRSprint 12 (docs/prsprints/PRSPRINT_12_ELECTRONIC_SIGNATURES_PDFS_IMMUTABLE_RECORDS.md): `id` is
+   * optional so SignatureService can generate the execution/document identifier *before* rendering
+   * the PDF (so the id can be printed inside the document itself — see generatePdf) and have this
+   * insert use that same id, rather than only learning the id after the row already exists.
+   */
+  insert(input: { id?: string; agreementVersionId: string; storagePath: string; documentHash: string }): Promise<AgreementPdfRecord>;
   findByVersion(agreementVersionId: string): Promise<AgreementPdfRecord | null>;
 }
 
@@ -154,12 +161,13 @@ export class SignatureService {
 
     const agreementHashAtSigning = computeVersionHash(detail.version);
 
-    // Sprint 5's unchanged, tested state machine — throws if the agreement isn't in
-    // awaiting_signatures, if this role already signed, or if the caller isn't a party at all.
-    await this.deps.agreementService.signAgreement(input.agreementId, input.actingUserId);
-
-    const signatureEvent = await this.deps.signatureEvents.insert({
-      agreementVersionId: detail.version.id,
+    // PRSprint 12 (docs/prsprints/PRSPRINT_12_ELECTRONIC_SIGNATURES_PDFS_IMMUTABLE_RECORDS.md):
+    // Sprint 5's state machine (still unchanged in every other respect — throws if the agreement
+    // isn't in awaiting_signatures, if this role already signed, or if the caller isn't a party at
+    // all) and this signature_event evidence row are now recorded atomically in one transaction —
+    // see AgreementService.signAgreementWithEvidence and SigningApplicationRepository's own doc
+    // comments for exactly what non-atomic risk this closes.
+    const signResult = await this.deps.agreementService.signAgreementWithEvidence(input.agreementId, input.actingUserId, {
       signerUserId: input.actingUserId,
       signerProfileKind: party.kind,
       signerProfileId: party.id,
@@ -174,6 +182,27 @@ export class SignatureService {
       timezone: input.timezone,
       agreementHashAtSigning,
     });
+    if (!signResult.signatureEventId) {
+      throw new ConfigurationError("Signing succeeded but no signature_event id was returned.");
+    }
+    const signatureEvent: SignatureEventRecord = {
+      id: signResult.signatureEventId,
+      agreementVersionId: detail.version.id,
+      signerUserId: input.actingUserId,
+      signerProfileKind: party.kind,
+      signerProfileId: party.id,
+      signerRole: role,
+      signingAuthority,
+      signerTitle,
+      consentCaptured: true,
+      consentVersion: input.consentVersion,
+      authMethod: input.authMethod,
+      ipAddress: input.ipAddress,
+      deviceInfo: input.deviceInfo ?? null,
+      timezone: input.timezone,
+      agreementHashAtSigning,
+      signedAt: signResult.signedAt,
+    };
 
     await this.deps.audit.record({
       actorUserId: input.actingUserId,
@@ -193,15 +222,21 @@ export class SignatureService {
       relatedCaseId: null,
     });
 
-    const refreshed = await this.deps.agreementService.getAgreement(input.agreementId, input.actingUserId);
     let pdfGenerated = false;
-    const existingPdf = await this.deps.agreementPdfs.findByVersion(detail.version.id);
-    if (refreshed.version.signedAt && !existingPdf) {
-      await this.generatePdf(refreshed, input.ipAddress, input.deviceInfo);
-      pdfGenerated = true;
+    if (signResult.bothSigned) {
+      // PDF generation reads storage/schedule content the atomic signing apply above doesn't
+      // return — a fresh read here is fine (never used to *decide* whether both parties have
+      // signed; signResult.bothSigned, returned from inside the same transaction as the write, is
+      // authoritative for that).
+      const refreshed = await this.deps.agreementService.getAgreement(input.agreementId, input.actingUserId);
+      const existingPdf = await this.deps.agreementPdfs.findByVersion(detail.version.id);
+      if (!existingPdf) {
+        await this.generatePdf(refreshed, input.ipAddress, input.deviceInfo);
+        pdfGenerated = true;
+      }
     }
 
-    return { signatureEvent, agreementStatus: refreshed.agreement.status, pdfGenerated };
+    return { signatureEvent, agreementStatus: signResult.agreementStatus, pdfGenerated };
   }
 
   private async generatePdf(detail: AgreementWithDetail, ipAddress: string, deviceInfo: unknown): Promise<void> {
@@ -220,6 +255,11 @@ export class SignatureService {
       })),
     );
 
+    // PRSprint 12: generated up front so it can be printed inside the document itself (see
+    // AgreementPdfRepository.insert's own doc comment), and so the "generated at" timestamp is
+    // trusted server time, never anything client-supplied.
+    const executionId = randomUUID();
+    const generatedAt = new Date();
     const bytes = await generateAgreementPdf({
       agreementId: detail.agreement.id,
       versionNumber: detail.version.versionNumber,
@@ -233,11 +273,18 @@ export class SignatureService {
       schedule: detail.schedule,
       signatures,
       documentHash: detail.version.documentHash ?? "",
+      executionId,
+      generatedAt,
+      // Sequential by construction (AmendmentService.applyAmendment always creates versionNumber =
+      // parent.versionNumber + 1, never a gap) — avoids an extra lookup for the parent's own number.
+      amendmentReference: detail.version.isOriginal
+        ? null
+        : { versionNumber: detail.version.versionNumber, parentVersionNumber: detail.version.versionNumber - 1 },
     });
     const documentHash = hashPdfContent(bytes);
     const path = `${detail.agreement.id}/${versionId}.pdf`;
     await this.deps.storage.uploadPrivate({ path, content: bytes, contentType: "application/pdf" });
-    await this.deps.agreementPdfs.insert({ agreementVersionId: versionId, storagePath: path, documentHash });
+    await this.deps.agreementPdfs.insert({ id: executionId, agreementVersionId: versionId, storagePath: path, documentHash });
 
     await this.deps.audit.record({
       actorUserId: null,

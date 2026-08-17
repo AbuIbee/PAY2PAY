@@ -2,6 +2,7 @@ import "server-only";
 import { and, eq, or } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { agreement, businessProfile, personalProfile, userAccount } from "@/db/schema";
+import { summarizeAgreementsForAdmin } from "./adminAgreementSummary";
 import type { AdminUserDetail, AdminUserDirectoryReader, AdminUserSummary } from "./adminService";
 
 type UserAccountRow = typeof userAccount.$inferSelect;
@@ -82,7 +83,13 @@ export class DrizzleAdminUserDirectoryReader implements AdminUserDirectoryReader
     const agreementRows =
       ownedProfileConditions.length > 0
         ? await db
-            .select({ id: agreement.id, status: agreement.status, creditorProfileKind: agreement.creditorProfileKind, debtorProfileKind: agreement.debtorProfileKind })
+            .select({
+              id: agreement.id,
+              status: agreement.status,
+              creditorProfileKind: agreement.creditorProfileKind,
+              debtorProfileKind: agreement.debtorProfileKind,
+              currentVersionId: agreement.currentVersionId,
+            })
             .from(agreement)
             .where(or(...ownedProfileConditions))
         : [];
@@ -92,18 +99,7 @@ export class DrizzleAdminUserDirectoryReader implements AdminUserDirectoryReader
       emailVerifiedAt: userRow.emailVerifiedAt,
       personalProfileId,
       businessProfiles: businessRows,
-      agreements: agreementRows.map((row) => ({
-        id: row.id,
-        status: row.status,
-        relationshipShape:
-          row.creditorProfileKind === "personal" && row.debtorProfileKind === "personal"
-            ? "P2P"
-            : row.creditorProfileKind === "business" && row.debtorProfileKind === "personal"
-              ? "B2C"
-              : row.creditorProfileKind === "personal" && row.debtorProfileKind === "business"
-                ? "C2B"
-                : "B2B",
-      })),
+      agreements: await summarizeAgreementsForAdmin(agreementRows),
     };
   }
 }

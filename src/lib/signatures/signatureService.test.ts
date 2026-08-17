@@ -1,9 +1,28 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
+import { AmendmentService } from "@/lib/amendments/amendmentService";
+import { InMemoryAmendmentApplicationRepository, InMemoryAmendmentRepository } from "@/lib/amendments/testFakes";
+import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
 import { hashPdfContent } from "@/lib/documents/agreementPdf";
 import { createTestSignatureService, grantStepUp, markFullyVerified, seedPersonalParty } from "./testFakes";
+
+/** Minimal local fake — this test file's amendment-interaction test is the only caller. */
+class InMemoryAmendmentAuditRepositoryForThisTest implements AuditEventRepository {
+  events: AuditEventRecord[] = [];
+  private nextId = 1;
+
+  async getLastEvent(): Promise<AuditEventRecord | null> {
+    return this.events.at(-1) ?? null;
+  }
+
+  async insertEvent(record: Omit<AuditEventRecord, "id">): Promise<AuditEventRecord> {
+    const stored: AuditEventRecord = { ...record, id: this.nextId++ };
+    this.events.push(stored);
+    return stored;
+  }
+}
 
 function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
   return {
@@ -61,6 +80,35 @@ describe("SignatureService", () => {
   async function readySigner(userId: string, sessionId: string, personalProfileId: string) {
     await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, userId, sessionId);
     await markFullyVerified(ctx, "personal", personalProfileId);
+  }
+
+  async function signBothParties() {
+    const setup = await setupPersonalAwaitingSignatures();
+    const creditorSession = randomUUID();
+    const debtorSession = randomUUID();
+    await readySigner(setup.creditorUserId, creditorSession, setup.creditorProfileId);
+    await readySigner(setup.debtorUserId, debtorSession, setup.debtorProfileId);
+    await ctx.signatureService.sign({
+      agreementId: setup.agreementId,
+      actingUserId: setup.creditorUserId,
+      actingSessionId: creditorSession,
+      authMethod: "totp",
+      consentVersion: CONSENT,
+      timezone: TZ,
+      deviceInfo: null,
+      ipAddress: "203.0.113.10",
+    });
+    await ctx.signatureService.sign({
+      agreementId: setup.agreementId,
+      actingUserId: setup.debtorUserId,
+      actingSessionId: debtorSession,
+      authMethod: "sms",
+      consentVersion: CONSENT,
+      timezone: TZ,
+      deviceInfo: null,
+      ipAddress: "203.0.113.20",
+    });
+    return setup;
   }
 
   describe("signature authorization", () => {
@@ -354,35 +402,6 @@ describe("SignatureService", () => {
   });
 
   describe("PDF generated / hash stability / document access isolation", () => {
-    async function signBothParties() {
-      const setup = await setupPersonalAwaitingSignatures();
-      const creditorSession = randomUUID();
-      const debtorSession = randomUUID();
-      await readySigner(setup.creditorUserId, creditorSession, setup.creditorProfileId);
-      await readySigner(setup.debtorUserId, debtorSession, setup.debtorProfileId);
-      await ctx.signatureService.sign({
-        agreementId: setup.agreementId,
-        actingUserId: setup.creditorUserId,
-        actingSessionId: creditorSession,
-        authMethod: "totp",
-        consentVersion: CONSENT,
-        timezone: TZ,
-        deviceInfo: null,
-        ipAddress: "203.0.113.10",
-      });
-      await ctx.signatureService.sign({
-        agreementId: setup.agreementId,
-        actingUserId: setup.debtorUserId,
-        actingSessionId: debtorSession,
-        authMethod: "sms",
-        consentVersion: CONSENT,
-        timezone: TZ,
-        deviceInfo: null,
-        ipAddress: "203.0.113.20",
-      });
-      return setup;
-    }
-
     it("generates exactly one PDF whose stored hash matches its stored bytes", async () => {
       const setup = await signBothParties();
       const pdfRecord = await ctx.agreementPdfs.findByVersion(setup.versionId);
@@ -456,6 +475,131 @@ describe("SignatureService", () => {
       expect(version?.terms.installmentAmountMinorUnits).toBe(20_000);
       expect(version?.signedAt).not.toBeNull();
       expect(version?.documentHash).toBeTruthy();
+    });
+  });
+
+  /**
+   * PRSprint 12 (docs/prsprints/PRSPRINT_12_ELECTRONIC_SIGNATURES_PDFS_IMMUTABLE_RECORDS.md)
+   * requirement #8: double-click/retry/replay must not create multiple legitimate signatures.
+   */
+  describe("idempotency / double-sign protection", () => {
+    it("a second sign call from the same party after their own signature is cleanly rejected, and only one signature_event exists for that role", async () => {
+      const setup = await setupPersonalAwaitingSignatures();
+      const sessionId = randomUUID();
+      await readySigner(setup.creditorUserId, sessionId, setup.creditorProfileId);
+      const signOnce = () =>
+        ctx.signatureService.sign({
+          agreementId: setup.agreementId,
+          actingUserId: setup.creditorUserId,
+          actingSessionId: sessionId,
+          authMethod: "totp",
+          consentVersion: CONSENT,
+          timezone: TZ,
+          deviceInfo: null,
+          ipAddress: "203.0.113.10",
+        });
+
+      await signOnce();
+      // Simulates a double-click/browser-retry/replayed request: the same party submits again.
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, setup.creditorUserId, sessionId);
+      await expect(signOnce()).rejects.toThrow(ValidationError);
+
+      const events = await ctx.signatureEvents.listForVersion(setup.versionId);
+      expect(events.filter((e) => e.signerRole === "creditor")).toHaveLength(1);
+    });
+
+    it("repeated duplicate submissions never advance the agreement past its correct signature state", async () => {
+      const setup = await setupPersonalAwaitingSignatures();
+      const sessionId = randomUUID();
+      await readySigner(setup.creditorUserId, sessionId, setup.creditorProfileId);
+      const signOnce = () =>
+        ctx.signatureService.sign({
+          agreementId: setup.agreementId,
+          actingUserId: setup.creditorUserId,
+          actingSessionId: sessionId,
+          authMethod: "totp",
+          consentVersion: CONSENT,
+          timezone: TZ,
+          deviceInfo: null,
+          ipAddress: "203.0.113.10",
+        });
+
+      await signOnce();
+      for (let i = 0; i < 3; i += 1) {
+        await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, setup.creditorUserId, sessionId);
+        await expect(signOnce()).rejects.toThrow(ValidationError);
+      }
+
+      const agreement = await ctx.agreementCtx.agreements.findById(setup.agreementId);
+      expect(agreement?.status).toBe("awaiting_signatures"); // still only one party has signed
+      const pdf = await ctx.agreementPdfs.findByVersion(setup.versionId);
+      expect(pdf).toBeNull(); // no PDF generated from a single-party signature
+    });
+  });
+
+  /**
+   * PRSprint 12 requirement #20/#34: a signature on one agreement version must never carry forward
+   * to a later version produced by an amendment. Exercises the real cross-service integration
+   * (SignatureService for the original version, AmendmentService for the amendment) rather than
+   * asserting only against raw repository state.
+   */
+  describe("amendment interaction: signatures do not carry forward across versions", () => {
+    it("version 1's signature evidence stays tied to version 1 after an amendment creates version 2, and version 2 starts requiring its own fresh approval", async () => {
+      const setup = await signBothParties();
+      const originalVersion = await ctx.agreementCtx.versions.findById(setup.versionId);
+      expect(originalVersion?.signedAt).not.toBeNull();
+
+      // Shares ctx.agreementCtx's own versions/agreements/scheduleItems repos (not a fresh, separate
+      // createTestAmendmentService() context) so the amendment operates on the *same* agreement this
+      // test already signed via SignatureService — mirroring how production's AmendmentService and
+      // SignatureService both resolve through the same getAgreementService() singleton.
+      const amendments = new InMemoryAmendmentRepository();
+      const application = new InMemoryAmendmentApplicationRepository({
+        versions: ctx.agreementCtx.versions,
+        agreements: ctx.agreementCtx.agreements,
+        scheduleItems: ctx.agreementCtx.scheduleItems,
+        amendments,
+      });
+      const amendmentService = new AmendmentService({
+        agreementService: ctx.agreementCtx.agreementService,
+        amendments,
+        versions: ctx.agreementCtx.versions,
+        application,
+        audit: new AuditService(new InMemoryAmendmentAuditRepositoryForThisTest()),
+      });
+
+      const proposed = await amendmentService.proposeAmendment({
+        agreementId: setup.agreementId,
+        actingUserId: setup.debtorUserId,
+        changeType: "reduced_installment",
+        reason: "Reduced hours at work",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      });
+      await amendmentService.decideAmendment({ amendmentId: proposed.id, actingUserId: setup.creditorUserId, decision: "accept" });
+      const afterCreditorSign = await amendmentService.signAmendment({ amendmentId: proposed.id, actingUserId: setup.creditorUserId });
+      expect(afterCreditorSign.status).not.toBe("applied"); // only one of two amendment signatures so far
+      const applied = await amendmentService.signAmendment({ amendmentId: proposed.id, actingUserId: setup.debtorUserId });
+      expect(applied.status).toBe("applied");
+      const newVersionId = applied.resultingVersionId!;
+      expect(newVersionId).not.toBe(setup.versionId);
+
+      // Version 1's own signature_event rows are untouched — still exactly the two recorded when it
+      // was originally signed, still pointing at version 1's id specifically.
+      const version1Events = await ctx.signatureEvents.listForVersion(setup.versionId);
+      expect(version1Events).toHaveLength(2);
+      expect(version1Events.every((e) => e.agreementVersionId === setup.versionId)).toBe(true);
+
+      // No signature_event exists for version 2 through SignatureService's own evidence trail —
+      // version 2's "signed" state came from the amendment's own approval, a different, version-2-
+      // scoped signing act, never from version 1's signature_event rows being copied or reused.
+      const version2Events = await ctx.signatureEvents.listForVersion(newVersionId);
+      expect(version2Events).toHaveLength(0);
+
+      // Version 1 remains, unchanged, permanently retrievable — the prior signed record was
+      // preserved, not overwritten.
+      const stillThere = await ctx.agreementCtx.versions.findById(setup.versionId);
+      expect(stillThere?.signedAt).toEqual(originalVersion?.signedAt);
+      expect(stillThere?.documentHash).toBe(originalVersion?.documentHash);
     });
   });
 });
