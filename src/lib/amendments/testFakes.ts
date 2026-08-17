@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
-import type { AgreementTerms, FeeAllocation, PartyRole } from "@/lib/agreements/agreementService";
+import type { AgreementRepository, AgreementTerms, AgreementVersionRepository, FeeAllocation, InstallmentScheduleItemRepository, PartyRole } from "@/lib/agreements/agreementService";
 import type { PaymentFrequency } from "@/lib/agreements/schedule";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
 import { AmendmentService } from "./amendmentService";
-import type { AmendmentChangeType, AmendmentRecord, AmendmentRepository, AmendmentStatus } from "./amendmentService";
+import type { AmendmentApplicationRepository, AmendmentChangeType, AmendmentRecord, AmendmentRepository, AmendmentStatus } from "./amendmentService";
 
 /** Test-only in-memory double for AmendmentRepository, mirroring every other module's testFakes.ts pattern in this codebase. */
 export class InMemoryAmendmentRepository implements AmendmentRepository {
@@ -122,6 +122,65 @@ export class InMemoryAmendmentRepository implements AmendmentRepository {
   }
 }
 
+/**
+ * PRSprint 11 (docs/prsprints/PRSPRINT_11_AGREEMENT_VERSIONING_AMENDMENTS_MUTUAL_APPROVAL.md):
+ * test-only double for AmendmentApplicationRepository. In-process JS has no crash-partway-through
+ * scenario to simulate, so this fake's own "atomicity" isn't the thing under test — it exists so
+ * every existing assertion that reads `agreementCtx.agreements`/`agreementCtx.versions` directly
+ * keeps seeing the same shared, already-established in-memory state, by delegating to those same
+ * repositories' own existing methods in the identical sequence the production Drizzle
+ * implementation performs inside its single transaction.
+ */
+export class InMemoryAmendmentApplicationRepository implements AmendmentApplicationRepository {
+  constructor(
+    private readonly deps: {
+      versions: AgreementVersionRepository;
+      agreements: AgreementRepository;
+      scheduleItems: InstallmentScheduleItemRepository;
+      amendments: AmendmentRepository;
+    },
+  ) {}
+
+  async applyAtomically(input: {
+    agreementId: string;
+    amendmentId: string;
+    versionNumber: number;
+    parentVersionId: string;
+    frequency: PaymentFrequency;
+    feeAllocation: FeeAllocation;
+    terms: AgreementTerms;
+    scheduleItems: { sequenceNumber: number; dueDate: string; amountMinorUnits: number }[];
+    creditorSignedAt: Date | null;
+    debtorSignedAt: Date | null;
+    documentHash: string;
+    signedAt: Date;
+    pauseAgreement: boolean;
+  }): Promise<{ agreementVersionId: string; amendment: AmendmentRecord }> {
+    const newVersion = await this.deps.versions.insert({
+      agreementId: input.agreementId,
+      versionNumber: input.versionNumber,
+      parentVersionId: input.parentVersionId,
+      isOriginal: false,
+      producedBy: "amendment",
+      frequency: input.frequency,
+      feeAllocation: input.feeAllocation,
+      terms: input.terms,
+    });
+    await this.deps.scheduleItems.replaceForVersion(newVersion.id, input.scheduleItems);
+    if (input.creditorSignedAt) await this.deps.versions.recordSignature(newVersion.id, "creditor", input.creditorSignedAt);
+    if (input.debtorSignedAt) await this.deps.versions.recordSignature(newVersion.id, "debtor", input.debtorSignedAt);
+    await this.deps.versions.lock(newVersion.id, { documentHash: input.documentHash, signedAt: input.signedAt });
+
+    await this.deps.agreements.setCurrentVersionId(input.agreementId, newVersion.id);
+    if (input.pauseAgreement) {
+      await this.deps.agreements.updateStatus(input.agreementId, "paused_by_amendment");
+    }
+
+    const amendment = await this.deps.amendments.recordApplied(input.amendmentId, newVersion.id);
+    return { agreementVersionId: newVersion.id, amendment };
+  }
+}
+
 class InMemoryAuditEventRepositoryForAmendments implements AuditEventRepository {
   events: AuditEventRecord[] = [];
   private nextId = 1;
@@ -146,13 +205,18 @@ export function createTestAmendmentService() {
   const agreementCtx = createTestAgreementService();
   const amendments = new InMemoryAmendmentRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForAmendments();
+  const application = new InMemoryAmendmentApplicationRepository({
+    versions: agreementCtx.versions,
+    agreements: agreementCtx.agreements,
+    scheduleItems: agreementCtx.scheduleItems,
+    amendments,
+  });
 
   const amendmentService = new AmendmentService({
     agreementService: agreementCtx.agreementService,
     amendments,
     versions: agreementCtx.versions,
-    agreements: agreementCtx.agreements,
-    scheduleItems: agreementCtx.scheduleItems,
+    application,
     audit: new AuditService(auditRepo),
   });
 

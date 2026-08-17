@@ -97,6 +97,12 @@ export class InMemoryAgreementVersionRepository implements AgreementVersionRepos
     return this.byId.get(id) ?? null;
   }
 
+  async listForAgreement(agreementId: string): Promise<AgreementVersionRecord[]> {
+    return [...this.byId.values()]
+      .filter((v) => v.agreementId === agreementId)
+      .sort((a, b) => a.versionNumber - b.versionNumber);
+  }
+
   async updateTerms(
     id: string,
     input: { frequency: PaymentFrequency; feeAllocation: FeeAllocation; terms: AgreementTerms },

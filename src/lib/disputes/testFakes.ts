@@ -3,7 +3,7 @@ import { AuditService, type AuditEventRecord, type AuditEventRepository } from "
 import type { PartyRole } from "@/lib/agreements/agreementService";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { AmendmentService } from "@/lib/amendments/amendmentService";
-import { InMemoryAmendmentRepository } from "@/lib/amendments/testFakes";
+import { InMemoryAmendmentApplicationRepository, InMemoryAmendmentRepository } from "@/lib/amendments/testFakes";
 import { EvidenceService } from "@/lib/evidence/evidenceService";
 import { BasicFileValidator } from "@/lib/evidence/fileValidator";
 import { InMemoryEvidenceRepository } from "@/lib/evidence/testFakes";
@@ -164,8 +164,12 @@ export function createTestAgreementDisputeService() {
     agreementService: agreementCtx.agreementService,
     amendments,
     versions: agreementCtx.versions,
-    agreements: agreementCtx.agreements,
-    scheduleItems: agreementCtx.scheduleItems,
+    application: new InMemoryAmendmentApplicationRepository({
+      versions: agreementCtx.versions,
+      agreements: agreementCtx.agreements,
+      scheduleItems: agreementCtx.scheduleItems,
+      amendments,
+    }),
     audit: new AuditService(amendmentAuditRepo),
   });
 
