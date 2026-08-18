@@ -26,6 +26,8 @@ function toRecord(row: Row): PaymentAttemptRecord {
     payoutInitiatedAt: row.payoutInitiatedAt,
     installmentScheduleItemId: row.installmentScheduleItemId,
     paymentMethod: row.paymentMethod,
+    recordedByUserId: row.recordedByUserId,
+    recipientConfirmedAt: row.recipientConfirmedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -45,6 +47,7 @@ export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository
     installmentScheduleItemId?: string | null;
     initialStatus?: PaymentAttemptStatus;
     paymentMethod?: PaymentMethod | null;
+    recordedByUserId?: string | null;
   }): Promise<PaymentAttemptRecord> {
     const db = getDb();
     const { initialStatus, ...rest } = input;
@@ -68,6 +71,17 @@ export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository
       .where(eq(paymentAttempt.id, id))
       .returning();
     if (!row) throw new ConfigurationError("payment_attempt update returned no row");
+    return toRecord(row);
+  }
+
+  async confirmManualPayment(id: string, confirmedAt: Date): Promise<PaymentAttemptRecord> {
+    const db = getDb();
+    const [row] = await db
+      .update(paymentAttempt)
+      .set({ recipientConfirmedAt: confirmedAt, updatedAt: new Date() })
+      .where(eq(paymentAttempt.id, id))
+      .returning();
+    if (!row) throw new ConfigurationError("payment_attempt confirmManualPayment found no row");
     return toRecord(row);
   }
 

@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { boolean, check, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { agreement, installmentScheduleItem } from "./agreement";
 import { paymentAttemptStatusEnum, paymentMethodEnum, profileKindEnum } from "./enums";
+import { userAccount } from "./identity";
 
 /**
  * Sprint 9 (docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md) payment-provider
@@ -55,6 +56,18 @@ export const paymentAttempt = pgTable(
     // used. Nullable — every pre-Sprint-12 row never set this. See enums.ts's paymentMethodEnum doc
     // comment for why this exists as its own column rather than being inferred from status values.
     paymentMethod: paymentMethodEnum("payment_method"),
+    // PRSprint 18 (docs/prsprints/PRSPRINT_18_PARTIAL_PAYMENTS_OVERPAYMENTS_COMPLETION_RULES.md)
+    // addition: which party recorded a "manual_off_platform" attempt (see paymentMethodEnum's
+    // updated doc comment) — never set for a provider-routed (ach/debit_card) attempt, since those
+    // are always recorded by PaymentService itself, not attributed to one party's own action.
+    // Nullable — every pre-PRSprint-18 row has no recorder to attribute.
+    recordedByUserId: uuid("recorded_by_user_id").references(() => userAccount.id),
+    // PRSprint 18: "optional recipient confirmation for manual payment" — purely evidentiary; the
+    // manual payment already counts toward the agreement's balance the moment it's recorded (see
+    // PaymentService.recordManualOffPlatformPayment's doc comment for why confirmation is never a
+    // gate on that). Nullable — unconfirmed by default, and never applicable to a provider-routed
+    // attempt (a real processor's own webhook is already that attempt's confirmation).
+    recipientConfirmedAt: timestamp("recipient_confirmed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

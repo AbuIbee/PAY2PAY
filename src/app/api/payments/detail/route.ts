@@ -28,6 +28,8 @@ export function createPaymentDetailHandler(authService: AuthService, paymentServ
         agreementId: record.agreementId,
         providerName: record.providerName,
         paymentMethod: record.paymentMethod,
+        recordedByUserId: record.recordedByUserId,
+        recipientConfirmedAt: record.recipientConfirmedAt,
         failureReason: record.failureReason,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,

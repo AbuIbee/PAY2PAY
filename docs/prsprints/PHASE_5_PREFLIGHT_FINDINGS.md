@@ -154,6 +154,25 @@ not introduce row-level client access.
 - Tenant isolation: RLS + revoke-all + service-layer authorization (§5) — Phase 5 must not weaken this
   or introduce a client-reachable financial table.
 
+## 9a. Addendum — pre-existing schema-tracking drift discovered during PRSprint 18
+
+Running `drizzle-kit generate` for PRSprint 18's schema change (see §PRSprint 18 completion report)
+surfaced that `drizzle/migrations`' own snapshot history was missing two changes that already exist in
+both `src/db/schema/*.ts` and the real deployed database: the PRSprint 15 `sms_opt_out` table and the
+PRSprint 14 `notification_event.sent_at`/`provider_message_id` columns. Both were correctly hand-authored
+directly under `supabase/migrations/` at the time (`20260818090000_prsprint15_sms_opt_out.sql`,
+the PRSprint 14 migration) and applied to production, but `drizzle-kit generate` was apparently never
+re-run afterward to capture them into `drizzle/migrations`' own snapshot/journal. The auto-generated
+PRSprint 18 migration file therefore initially included duplicate `CREATE TABLE "sms_opt_out"` /
+`ALTER TABLE "notification_event" ADD COLUMN ...` statements that would fail against the real database
+(objects already exist there). Fixed by hand-editing the generated SQL file down to only the genuine
+PRSprint 18 statements (the `payment_method` enum value and `payment_attempt`'s two new columns) — the
+regenerated `meta/0027_snapshot.json` itself is still correct (it reflects the current, accurate full
+schema state), only the incremental SQL file needed trimming.
+**Not fixed as part of this phase** (out of Phase 5's scope — schema-drift-prevention tooling is
+PRSprint 30's named scope): recorded here per the "do not silently hide findings" rule so PRSprint 30
+has this concrete, already-diagnosed example when it runs.
+
 ## 9. Execution order for this phase (per the Phase 5 kickoff's pass-gate requirement)
 
 17 (hardening + tests for existing engine + the csvImport boundary test) -> verify -> 18 (completion

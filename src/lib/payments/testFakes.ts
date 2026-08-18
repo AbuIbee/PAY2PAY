@@ -5,7 +5,17 @@ import type { NotificationService } from "@/lib/notify/notificationService";
 import { createTestVerificationService } from "@/lib/profiles/testFakes";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import { PaymentService } from "./paymentService";
-import type { AgreementPartiesReader, PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus, PaymentMethod } from "./paymentService";
+import type {
+  AgreementBalanceReader,
+  AgreementCompletionChecker,
+  AgreementPartiesReader,
+  LedgerPoster,
+  ManualPaymentInstallmentHook,
+  PaymentAttemptRecord,
+  PaymentAttemptRepository,
+  PaymentAttemptStatus,
+  PaymentMethod,
+} from "./paymentService";
 import type { ProfileRef } from "./paymentProvider";
 import { PaymentWebhookService } from "./paymentWebhookService";
 import type { FailedPaymentWorkflow, PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
@@ -30,13 +40,14 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     installmentScheduleItemId?: string | null;
     initialStatus?: PaymentAttemptStatus;
     paymentMethod?: PaymentMethod | null;
+    recordedByUserId?: string | null;
   }): Promise<PaymentAttemptRecord> {
     if (this.idempotencyKeys.has(input.idempotencyKey)) {
       throw new Error("duplicate idempotency key");
     }
     this.idempotencyKeys.add(input.idempotencyKey);
     const now = new Date();
-    const { initialStatus, installmentScheduleItemId, paymentMethod, ...rest } = input;
+    const { initialStatus, installmentScheduleItemId, paymentMethod, recordedByUserId, ...rest } = input;
     const record: PaymentAttemptRecord = {
       id: randomUUID(),
       status: initialStatus ?? "pending",
@@ -46,6 +57,8 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
       payoutInitiatedAt: null,
       installmentScheduleItemId: installmentScheduleItemId ?? null,
       paymentMethod: paymentMethod ?? null,
+      recordedByUserId: recordedByUserId ?? null,
+      recipientConfirmedAt: null,
       createdAt: now,
       updatedAt: now,
       ...rest,
@@ -64,6 +77,14 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     record.status = status;
     if (fields.providerPaymentId !== undefined) record.providerPaymentId = fields.providerPaymentId;
     if (fields.failureReason !== undefined) record.failureReason = fields.failureReason;
+    record.updatedAt = new Date();
+    return record;
+  }
+
+  async confirmManualPayment(id: string, confirmedAt: Date): Promise<PaymentAttemptRecord> {
+    const record = this.byId.get(id);
+    if (!record) throw new Error("payment_attempt not found");
+    record.recipientConfirmedAt = confirmedAt;
     record.updatedAt = new Date();
     return record;
   }
@@ -159,8 +180,19 @@ class InMemoryAuditEventRepositoryForPayments implements AuditEventRepository {
 
 const TEST_WEBHOOK_SECRET = "test-sandbox-payment-webhook-secret";
 
-/** Builds a full PaymentService test context sharing the same underlying VerificationService/profileOwners instances, exactly as production does. */
-export function createTestPaymentService() {
+/**
+ * Builds a full PaymentService test context sharing the same underlying VerificationService/
+ * profileOwners instances, exactly as production does. PRSprint 18: `balances`/`ledger`/`completion`/
+ * `installmentHook` are optional — every pre-PRSprint-18 call site omitting them is unaffected (the
+ * overpayment check and completion/manual-payment features simply don't run); pass them (e.g. from
+ * `createFullLedgerTestContext`) to exercise those PRSprint 18 behaviors.
+ */
+export function createTestPaymentService(options?: {
+  balances?: AgreementBalanceReader;
+  ledger?: LedgerPoster;
+  completion?: AgreementCompletionChecker;
+  installmentHook?: ManualPaymentInstallmentHook;
+}) {
   const verificationCtx = createTestVerificationService();
   const provider = new SandboxPaymentProvider(TEST_WEBHOOK_SECRET);
   const payments = new InMemoryPaymentAttemptRepository();
@@ -174,6 +206,10 @@ export function createTestPaymentService() {
     payments,
     audit: new AuditService(auditRepo),
     agreements,
+    balances: options?.balances,
+    ledger: options?.ledger,
+    completion: options?.completion,
+    installmentHook: options?.installmentHook,
   });
 
   return { verificationCtx, provider, payments, auditRepo, agreements, paymentService };
@@ -224,6 +260,8 @@ export function createTestPaymentWebhookService(
   /** Sprint 17 review-pass addition: optional, so every pre-Sprint-17 call site is unaffected. */
   notifications?: NotificationService,
   profileOwners?: ProfileOwnerReader,
+  /** PRSprint 18: optional, so every pre-PRSprint-18 call site is unaffected. */
+  completion?: AgreementCompletionChecker,
 ) {
   const events = new InMemoryPaymentWebhookEventRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForPayments();
@@ -236,6 +274,7 @@ export function createTestPaymentWebhookService(
     failedPaymentWorkflow,
     notifications,
     profileOwners,
+    completion,
   });
   return { events, auditRepo, ledgerCtx, paymentWebhookService };
 }

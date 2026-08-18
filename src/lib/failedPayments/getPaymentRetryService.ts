@@ -18,6 +18,15 @@ export function getPaymentRetryService(): PaymentRetryService {
       initiators: {
         ach: getAchPaymentService(),
         debit_card: getDebitCardPaymentService(),
+        // PRSprint 18: a manual_off_platform attempt is created directly as "succeeded" (see
+        // paymentService.ts's recordManualOffPlatformPayment) — it never fails and is never eligible
+        // for an automatic retry, so this initiator exists only for Record<PaymentMethod, ...>
+        // exhaustiveness and should structurally never be invoked.
+        manual_off_platform: {
+          async createManualPayment() {
+            throw new Error("A manual off-platform payment can never fail and is never eligible for an automatic retry.");
+          },
+        },
       },
       profileOwners: new DrizzleProfileOwnerReader(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
