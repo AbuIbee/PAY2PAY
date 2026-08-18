@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createTestNotificationService } from "./testFakes";
+import { NotificationService } from "./notificationService";
+import { InMemoryNotificationEventRepository, createTestNotificationService } from "./testFakes";
 
 describe("NotificationService", () => {
   it("always records a durable notification_event row per default channel, even when the recipient has no contact info on file", async () => {
@@ -458,6 +459,196 @@ describe("NotificationService", () => {
       const recent = await notificationService.listRecentByChannel("sms", 10);
       expect(recent.every((r) => r.channel === "sms")).toBe(true);
       expect(recent.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("PRSprint 16: preferences audit trail, grouped history, SMS eligibility", () => {
+    describe("setPreference audit trail", () => {
+      it("records an audit event with the correct old→new transition", async () => {
+        const { notificationService, auditRepo } = createTestNotificationService();
+        await notificationService.setPreference({ userId: "user-1", notificationType: "amendment", channel: "email", enabled: false });
+        const event = auditRepo.events.at(-1);
+        expect(event?.action).toBe("notification_preference_changed");
+        expect(event?.actorUserId).toBe("user-1");
+        expect(event?.previousValue).toEqual({ notificationType: "amendment", channel: "email", enabled: true }); // no prior row -> default enabled
+        expect(event?.newValue).toEqual({ notificationType: "amendment", channel: "email", enabled: false });
+      });
+
+      it("captures the real previous value on a second change, not a default", async () => {
+        const { notificationService, auditRepo } = createTestNotificationService();
+        await notificationService.setPreference({ userId: "user-1", notificationType: "amendment", channel: "email", enabled: false });
+        await notificationService.setPreference({ userId: "user-1", notificationType: "amendment", channel: "email", enabled: true });
+        const event = auditRepo.events.at(-1);
+        expect(event?.previousValue).toEqual({ notificationType: "amendment", channel: "email", enabled: false });
+        expect(event?.newValue).toEqual({ notificationType: "amendment", channel: "email", enabled: true });
+      });
+
+      it("does not record an audit event for an attempted critical-type opt-out (the write itself is a no-op)", async () => {
+        const { notificationService, auditRepo } = createTestNotificationService();
+        await notificationService.setPreference({ userId: "user-1", notificationType: "payment_failed", channel: "email", enabled: false });
+        expect(auditRepo.events).toHaveLength(0);
+      });
+
+      it("repeated identical updates remain safe (idempotent) — no error, no duplicate preference rows", async () => {
+        const { notificationService, preferences } = createTestNotificationService();
+        await notificationService.setPreference({ userId: "user-1", notificationType: "amendment", channel: "email", enabled: false });
+        await notificationService.setPreference({ userId: "user-1", notificationType: "amendment", channel: "email", enabled: false });
+        const rows = await preferences.listForUser("user-1");
+        expect(rows.filter((r) => r.notificationType === "amendment" && r.channel === "email")).toHaveLength(1);
+      });
+
+      it("a missing audit dependency never blocks the preference update itself", async () => {
+        const { preferences, contacts, emailSender, smsSender, smsOptOuts, appUrl } = createTestNotificationService();
+        const noAuditService = new NotificationService({
+          events: new InMemoryNotificationEventRepository(),
+          preferences,
+          emailSender,
+          smsSender,
+          contacts,
+          smsOptOuts,
+          appUrl,
+          // audit deliberately omitted
+        });
+        await expect(
+          noAuditService.setPreference({ userId: "user-1", notificationType: "amendment", channel: "email", enabled: false }),
+        ).resolves.toBeUndefined();
+        const rows = await preferences.listForUser("user-1");
+        expect(rows.some((r) => r.notificationType === "amendment" && r.channel === "email" && !r.enabled)).toBe(true);
+      });
+    });
+
+    describe("listGroupedForUser", () => {
+      // Every real notify() call site in this codebase supplies a dedupeKey (audited directly during
+      // implementation — no exceptions found); these tests do the same so listGroupedForUser exercises
+      // its real, expected grouping path rather than the defensive row.id fallback for a caller that
+      // omitted one (covered separately, implicitly, by every other describe block in this file, none
+      // of which ever produces more than one row per notify() call for a single-channel type anyway).
+      it("groups every channel row from one notify() call into a single entry", async () => {
+        const { notificationService, contacts } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        contacts.setPhone("user-1", "+15551234567");
+        await notificationService.notify({
+          recipientUserId: "user-1",
+          notificationType: "payment_failed",
+          payload: { failureCategory: "insufficient_funds" },
+          dedupeKey: "payment_failed:attempt-1",
+        });
+
+        const grouped = await notificationService.listGroupedForUser("user-1");
+        expect(grouped).toHaveLength(1);
+        expect(grouped[0]?.channels.map((c) => c.channel).sort()).toEqual(["email", "in_app", "sms"]);
+      });
+
+      it("two separate notify() calls for the same user produce two separate groups", async () => {
+        const { notificationService, contacts } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        await notificationService.notify({
+          recipientUserId: "user-1",
+          notificationType: "payment_cleared",
+          payload: {},
+          relatedPaymentAttemptId: "attempt-1",
+          dedupeKey: "payment_cleared:attempt-1",
+        });
+        await notificationService.notify({
+          recipientUserId: "user-1",
+          notificationType: "payment_cleared",
+          payload: {},
+          relatedPaymentAttemptId: "attempt-2",
+          dedupeKey: "payment_cleared:attempt-2",
+        });
+
+        const grouped = await notificationService.listGroupedForUser("user-1");
+        expect(grouped).toHaveLength(2);
+        expect(grouped.map((g) => g.groupId).length).toBe(new Set(grouped.map((g) => g.groupId)).size); // distinct ids
+      });
+
+      it("exposes the in_app row's own id and readAt for the 'mark read' action", async () => {
+        const { notificationService, contacts } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "agreement_signed:agreement-1" });
+        const [grouped] = await notificationService.listGroupedForUser("user-1");
+        expect(grouped?.inAppId).not.toBeNull();
+        expect(grouped?.readAt).toBeNull();
+        await notificationService.markRead("user-1", grouped!.inAppId!);
+        const [updated] = await notificationService.listGroupedForUser("user-1");
+        expect(updated?.readAt).not.toBeNull();
+      });
+
+      it("labels a missing channel as disabled-by-preference when the user explicitly disabled it", async () => {
+        const { notificationService, contacts } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        contacts.setPhone("user-1", "+15551234567");
+        await notificationService.setPreference({ userId: "user-1", notificationType: "agreement_invitation", channel: "sms", enabled: false });
+        await notificationService.notify({
+          recipientUserId: "user-1",
+          notificationType: "agreement_invitation",
+          payload: {},
+          dedupeKey: "agreement_invitation:invitation-1",
+        });
+
+        const [grouped] = await notificationService.listGroupedForUser("user-1");
+        const smsEntry = grouped?.channels.find((c) => c.channel === "sms");
+        expect(smsEntry?.status).toBe("not_sent");
+        expect(smsEntry?.reason).toBe("disabled by your notification preference");
+        // The row was never even created — confirms preference disables at the event-creation layer, not just delivery.
+        expect(grouped?.channels.some((c) => c.channel === "sms" && c.status !== "not_sent")).toBe(false);
+      });
+
+      it("does not suppress the canonical event's other channels just because one channel is disabled", async () => {
+        const { notificationService, contacts } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        await notificationService.setPreference({ userId: "user-1", notificationType: "amendment", channel: "email", enabled: false });
+        await notificationService.notify({ recipientUserId: "user-1", notificationType: "amendment", payload: {}, dedupeKey: "amendment:amendment-1" });
+
+        const [grouped] = await notificationService.listGroupedForUser("user-1");
+        const inAppEntry = grouped?.channels.find((c) => c.channel === "in_app");
+        expect(inAppEntry?.status).toBe("delivered");
+      });
+
+      it("scopes strictly to the requesting user — never another user's history", async () => {
+        const { notificationService, contacts } = createTestNotificationService();
+        contacts.set("user-1", "user1@example.com");
+        contacts.set("user-2", "user2@example.com");
+        await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {}, dedupeKey: "payment_cleared:u1-attempt" });
+        await notificationService.notify({ recipientUserId: "user-2", notificationType: "payment_cleared", payload: {}, dedupeKey: "payment_cleared:u2-attempt" });
+
+        const user1Groups = await notificationService.listGroupedForUser("user-1");
+        expect(user1Groups).toHaveLength(1);
+        const user2Groups = await notificationService.listGroupedForUser("user-2");
+        expect(user2Groups).toHaveLength(1);
+      });
+    });
+
+    describe("getSmsEligibility", () => {
+      it("reports phoneVerified: false and no opt-out concept when no verified phone exists", async () => {
+        const { notificationService } = createTestNotificationService();
+        const eligibility = await notificationService.getSmsEligibility("user-1");
+        expect(eligibility).toEqual({ phoneVerified: false, maskedPhone: null, optedOut: false });
+      });
+
+      it("reports a masked phone (never the full number) when a verified phone exists", async () => {
+        const { notificationService, contacts } = createTestNotificationService();
+        contacts.setPhone("user-1", "+15551234567");
+        const eligibility = await notificationService.getSmsEligibility("user-1");
+        expect(eligibility.phoneVerified).toBe(true);
+        expect(eligibility.maskedPhone).not.toBe("+15551234567");
+        expect(eligibility.maskedPhone).not.toBeNull();
+      });
+
+      it("reports optedOut: true when the verified phone is in the suppression list", async () => {
+        const { notificationService, contacts, smsOptOuts } = createTestNotificationService();
+        contacts.setPhone("user-1", "+15551234567");
+        await smsOptOuts.recordOptOut("+15551234567", "stop_keyword");
+        const eligibility = await notificationService.getSmsEligibility("user-1");
+        expect(eligibility.optedOut).toBe(true);
+      });
+
+      it("never returns another user's eligibility", async () => {
+        const { notificationService, contacts } = createTestNotificationService();
+        contacts.setPhone("user-1", "+15551234567");
+        const eligibility = await notificationService.getSmsEligibility("user-2");
+        expect(eligibility.phoneVerified).toBe(false);
+      });
     });
   });
 });

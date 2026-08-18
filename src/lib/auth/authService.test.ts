@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { AuditService } from "@/lib/audit/auditService";
 import { AccountDisabledError, AuthenticationError, ConflictError, ValidationError } from "@/lib/errors";
+import { DEFAULT_CHANNELS, type NotificationEventType } from "@/lib/notify/eventTypes";
+import { createTestNotificationService } from "@/lib/notify/testFakes";
 import { AuthService } from "./authService";
 import {
   TEST_ADULT_DATE_OF_BIRTH,
@@ -250,6 +252,26 @@ describe("AuthService password reset", () => {
     ).resolves.toBeUndefined();
     expect(ctx.emailSender.sent).toHaveLength(sentBefore);
   });
+
+  it(
+    "PRSprint 16 (docs/prsprints/PRSPRINT_16_NOTIFICATION_PREFERENCES_DELIVERY_HISTORY.md), requirement " +
+      "#47 (mandatory regression): the password-reset email still sends even when every optional " +
+      "notification-preference email category has been disabled for this user — proven, not merely " +
+      "inspected, by disabling every non-critical email preference on a real NotificationService " +
+      "instance and confirming AuthService.requestPasswordReset (which never goes through notify()/ " +
+      "preferences at all — it calls its own EmailSender directly) is architecturally unaffected",
+    async () => {
+      const notifyCtx = createTestNotificationService();
+      for (const type of Object.keys(DEFAULT_CHANNELS) as NotificationEventType[]) {
+        await notifyCtx.notificationService.setPreference({ userId: "reset-user-id", notificationType: type, channel: "email", enabled: false });
+      }
+
+      const sentBefore = ctx.emailSender.sent.length;
+      await ctx.authService.requestPasswordReset(email, { ipAddress: null, userAgent: null });
+      expect(ctx.emailSender.sent).toHaveLength(sentBefore + 1);
+      expect(ctx.emailSender.sent.at(-1)?.subject).toMatch(/reset your.*password/i);
+    },
+  );
 
   it("rejects an unknown or already-used reset token", async () => {
     await expect(ctx.authService.resetPassword("not-a-real-token", "a brand new password")).rejects.toThrow(

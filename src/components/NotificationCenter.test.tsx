@@ -28,14 +28,16 @@ describe("NotificationCenter", () => {
       mockFetchOnce({
         notifications: [
           {
-            id: "notif-1",
+            groupId: "group-1",
             notificationType: "agreement_signed",
             critical: false,
             relatedAgreementId: "agreement-1",
             relatedPaymentAttemptId: null,
             payload: {},
             readAt: null,
+            inAppId: "notif-in-app-1",
             createdAt: new Date().toISOString(),
+            channels: [{ channel: "in_app", status: "delivered", failureReason: null }],
           },
         ],
       }),
@@ -48,7 +50,7 @@ describe("NotificationCenter", () => {
     expect(link).toHaveAttribute("href", "/agreements/detail?id=agreement-1");
   });
 
-  it("marks a notification read and calls the read endpoint", async () => {
+  it("marks a notification read (using the group's own in_app row id) and calls the read endpoint", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/notifications") {
         return {
@@ -57,14 +59,19 @@ describe("NotificationCenter", () => {
           json: async () => ({
             notifications: [
               {
-                id: "notif-1",
+                groupId: "group-1",
                 notificationType: "payment_cleared",
                 critical: false,
                 relatedAgreementId: null,
                 relatedPaymentAttemptId: null,
                 payload: {},
                 readAt: null,
+                inAppId: "notif-in-app-1",
                 createdAt: new Date().toISOString(),
+                channels: [
+                  { channel: "email", status: "sent", failureReason: null },
+                  { channel: "in_app", status: "delivered", failureReason: null },
+                ],
               },
             ],
           }),
@@ -82,8 +89,65 @@ describe("NotificationCenter", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/notifications/read",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ id: "notif-1" }) }),
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ id: "notif-in-app-1" }) }),
       );
     });
+  });
+
+  it("shows a per-channel delivery status chip for email/sms, but not a redundant chip for in_app", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchOnce({
+        notifications: [
+          {
+            groupId: "group-1",
+            notificationType: "agreement_action_required",
+            critical: false,
+            relatedAgreementId: null,
+            relatedPaymentAttemptId: null,
+            payload: {},
+            readAt: new Date().toISOString(),
+            inAppId: "notif-in-app-1",
+            createdAt: new Date().toISOString(),
+            channels: [
+              { channel: "email", status: "sent", failureReason: null },
+              { channel: "sms", status: "not_sent", failureReason: null, reason: "disabled by your notification preference" },
+              { channel: "in_app", status: "delivered", failureReason: null },
+            ],
+          },
+        ],
+      }),
+    );
+    render(<NotificationCenter />);
+
+    expect(await screen.findByText(/email: sent/i)).toBeInTheDocument();
+    expect(screen.getByText(/text message: not sent/i)).toBeInTheDocument();
+    expect(screen.queryByText(/in-app: delivered/i)).not.toBeInTheDocument();
+  });
+
+  it("does not show a 'Mark read' button when the group has no in_app row (in-app was disabled by preference)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchOnce({
+        notifications: [
+          {
+            groupId: "group-1",
+            notificationType: "amendment",
+            critical: false,
+            relatedAgreementId: null,
+            relatedPaymentAttemptId: null,
+            payload: {},
+            readAt: null,
+            inAppId: null,
+            createdAt: new Date().toISOString(),
+            channels: [{ channel: "email", status: "sent", failureReason: null }],
+          },
+        ],
+      }),
+    );
+    render(<NotificationCenter />);
+
+    await screen.findByText(/amendment update/i);
+    expect(screen.queryByRole("button", { name: /mark read/i })).not.toBeInTheDocument();
   });
 });

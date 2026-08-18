@@ -4,46 +4,63 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/ui/apiFetch";
 import { formatRelative } from "@/lib/ui/date";
-import { notificationEventLabel } from "@/lib/ui/statusLabels";
+import { notificationDeliveryStatusLabel, notificationEventLabel } from "@/lib/ui/statusLabels";
 import { NOTIFICATION_TEMPLATES } from "@/lib/notify/templates";
 import { isNotificationEventType } from "@/lib/notify/eventTypes";
 
-interface NotificationRecord {
-  id: string;
+type DeliveryStatus = "pending" | "sent" | "delivered" | "failed" | "not_sent";
+
+interface ChannelStatus {
+  channel: "email" | "sms" | "in_app";
+  status: DeliveryStatus;
+  failureReason: string | null;
+  reason?: string;
+}
+
+interface GroupedNotification {
+  groupId: string;
   notificationType: string;
   critical: boolean;
   relatedAgreementId: string | null;
   relatedPaymentAttemptId: string | null;
   payload: Record<string, unknown>;
-  readAt: string | null;
   createdAt: string;
+  readAt: string | null;
+  inAppId: string | null;
+  channels: ChannelStatus[];
 }
 
 type LoadState = "loading" | "ready" | "error";
 
 const PAGE_SIZE = 20;
+const CHANNEL_LABEL: Record<ChannelStatus["channel"], string> = { email: "Email", sms: "Text message", in_app: "In-app" };
 
-function bodyFor(record: NotificationRecord): string {
+function bodyFor(record: GroupedNotification): string {
   if (isNotificationEventType(record.notificationType)) {
     return NOTIFICATION_TEMPLATES[record.notificationType](record.payload).inAppBody;
   }
   return "";
 }
 
-function titleFor(record: NotificationRecord): string {
+function titleFor(record: GroupedNotification): string {
   return notificationEventLabel[record.notificationType] ?? record.notificationType;
+}
+
+/** Only email/sms are worth a chip — in_app is the card itself, showing it again as a chip would be noise. */
+function externalChannels(record: GroupedNotification): ChannelStatus[] {
+  return record.channels.filter((c) => c.channel !== "in_app");
 }
 
 export function NotificationCenter() {
   const [state, setState] = useState<LoadState>("loading");
-  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
+  const [notifications, setNotifications] = useState<GroupedNotification[]>([]);
   const [page, setPage] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const body = await apiFetch<{ notifications: NotificationRecord[] }>("/api/notifications");
+        const body = await apiFetch<{ notifications: GroupedNotification[] }>("/api/notifications");
         if (!cancelled) {
           setNotifications(body.notifications);
           setState("ready");
@@ -63,14 +80,14 @@ export function NotificationCenter() {
     [notifications, page],
   );
 
-  async function handleOpen(record: NotificationRecord) {
-    if (record.readAt) return;
-    setNotifications((current) => current.map((n) => (n.id === record.id ? { ...n, readAt: new Date().toISOString() } : n)));
+  async function handleOpen(record: GroupedNotification) {
+    if (!record.inAppId || record.readAt) return;
+    setNotifications((current) => current.map((n) => (n.groupId === record.groupId ? { ...n, readAt: new Date().toISOString() } : n)));
     try {
-      await apiFetch("/api/notifications/read", { method: "POST", body: JSON.stringify({ id: record.id }) });
+      await apiFetch("/api/notifications/read", { method: "POST", body: JSON.stringify({ id: record.inAppId }) });
     } catch {
       // Best-effort: revert the optimistic update if the server call failed.
-      setNotifications((current) => current.map((n) => (n.id === record.id ? { ...n, readAt: null } : n)));
+      setNotifications((current) => current.map((n) => (n.groupId === record.groupId ? { ...n, readAt: null } : n)));
     }
   }
 
@@ -105,15 +122,16 @@ export function NotificationCenter() {
     <div>
       <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "0.75rem" }}>
         {pageItems.map((record) => {
-          const unread = record.readAt === null;
+          const unread = record.inAppId !== null && record.readAt === null;
           const deepLink = record.relatedAgreementId
             ? { href: `/agreements/detail?id=${record.relatedAgreementId}`, label: "View agreement" }
             : record.relatedPaymentAttemptId
               ? { href: `/payments/detail?id=${record.relatedPaymentAttemptId}`, label: "View payment" }
               : null;
+          const channels = externalChannels(record);
 
           return (
-            <li key={record.id} className="card" style={{ borderColor: unread ? "var(--forest-700)" : undefined }}>
+            <li key={record.groupId} className="card" style={{ borderColor: unread ? "var(--forest-700)" : undefined }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem" }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -125,6 +143,18 @@ export function NotificationCenter() {
                   <p style={{ margin: "0.35rem 0 0", fontSize: "0.78rem", color: "var(--ink-soft)" }}>
                     {formatRelative(record.createdAt)}
                   </p>
+                  {channels.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.5rem" }}>
+                      {channels.map((c) => {
+                        const label = notificationDeliveryStatusLabel(c.status);
+                        return (
+                          <span key={c.channel} className={`chip chip--${label.tone}`} title={c.reason}>
+                            {CHANNEL_LABEL[c.channel]}: {label.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", alignItems: "flex-end", flexShrink: 0 }}>
                   {unread && (
