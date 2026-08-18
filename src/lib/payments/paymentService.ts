@@ -175,6 +175,37 @@ export interface ManualPaymentInstallmentHook {
   handlePaymentSucceeded(payment: PaymentAttemptRecord): Promise<void>;
 }
 
+/**
+ * PRSprint 20 (docs/prsprints/PRSPRINT_20_IDEMPOTENCY_CONCURRENCY_FINANCIAL_STATE_SAFETY.md):
+ * closes a genuine concurrency gap `assertNotOverpaying` alone cannot — two truly concurrent manual
+ * payments against the *same* agreement, each individually within the remaining balance but
+ * combined exceeding it, would both pass `assertNotOverpaying`'s check (which reads the ledger
+ * *before* either has posted) and both succeed, silently overpaying the agreement. Unlike the
+ * provider-routed path (where the ledger posting happens later, asynchronously, from a webhook —
+ * money has already moved at the processor by then, so rejection is no longer possible; see
+ * AgreementCompletionService's "overpaid" defense-in-depth branch for that case instead), a manual
+ * payment's read-check-insert-post sequence happens entirely within this one request, with nothing
+ * external to wait on — so it CAN be made atomic. The real implementation
+ * (`DrizzleAtomicManualPaymentPoster`) wraps the whole sequence in one DB transaction that takes a
+ * row lock on the agreement (`SELECT ... FOR UPDATE`), serializing concurrent callers for the same
+ * agreement exactly like `DrizzleSigningApplicationRepository.applySigningAtomically` already does
+ * for a double-signature race — the second (blocked) caller re-reads the now-current total once
+ * unlocked and correctly rejects the overpayment its own pre-check couldn't have seen yet.
+ */
+export interface AtomicManualPaymentPoster {
+  postManualPaymentAtomically(input: {
+    idempotencyKey: string;
+    agreementId: string;
+    payerProfileKind: ProfileKind;
+    payerProfileId: string;
+    recipientProfileKind: ProfileKind;
+    recipientProfileId: string;
+    amountMinorUnits: number;
+    currency: string;
+    recordedByUserId: string;
+  }): Promise<PaymentAttemptRecord>;
+}
+
 function profileRefEquals(a: ProfileRef, b: ProfileRef): boolean {
   return a.profileKind === b.profileKind && a.profileId === b.profileId;
 }
@@ -204,6 +235,8 @@ export class PaymentService {
       completion?: AgreementCompletionChecker;
       /** PRSprint 18: optional — mirrors PaymentWebhookService's identical optional dependency. */
       installmentHook?: ManualPaymentInstallmentHook;
+      /** PRSprint 20: optional — see AtomicManualPaymentPoster's own doc comment for why production always wires the real one, and most unit tests don't need to. */
+      atomicManualPayments?: AtomicManualPaymentPoster;
     },
   ) {}
 
@@ -480,38 +513,58 @@ export class PaymentService {
     if (!Number.isSafeInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
       throw new ValidationError("amountMinorUnits must be a positive integer.");
     }
+    // Fast-fail pre-check outside any lock — cheap, and correctly rejects the overwhelming majority
+    // of real (non-racing) overpayment attempts without ever starting a transaction. The atomic
+    // poster below re-verifies this exact same invariant again, inside its lock, which is the actual
+    // enforcement point for a genuinely concurrent race — see AtomicManualPaymentPoster's doc comment.
     await this.assertNotOverpaying(input.agreementId, input.amountMinorUnits);
 
     let record: PaymentAttemptRecord;
-    try {
-      record = await this.deps.payments.insertPending({
+    if (this.deps.atomicManualPayments) {
+      record = await this.deps.atomicManualPayments.postManualPaymentAtomically({
         idempotencyKey: input.idempotencyKey,
+        agreementId: input.agreementId,
         payerProfileKind: parties.debtor.profileKind,
         payerProfileId: parties.debtor.profileId,
         recipientProfileKind: parties.creditor.profileKind,
         recipientProfileId: parties.creditor.profileId,
         amountMinorUnits: input.amountMinorUnits,
         currency: "USD",
-        agreementId: input.agreementId,
-        providerName: "manual",
-        initialStatus: "succeeded",
-        paymentMethod: "manual_off_platform",
         recordedByUserId: input.actingUserId,
       });
-    } catch (error) {
-      const raced = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
-      if (raced) return raced;
-      throw error;
+    } else {
+      // No atomic poster wired (most unit tests, which aren't exercising this specific race) — the
+      // ordinary insert-then-post sequence, protected only by the pre-check above, not by a lock.
+      try {
+        record = await this.deps.payments.insertPending({
+          idempotencyKey: input.idempotencyKey,
+          payerProfileKind: parties.debtor.profileKind,
+          payerProfileId: parties.debtor.profileId,
+          recipientProfileKind: parties.creditor.profileKind,
+          recipientProfileId: parties.creditor.profileId,
+          amountMinorUnits: input.amountMinorUnits,
+          currency: "USD",
+          agreementId: input.agreementId,
+          providerName: "manual",
+          initialStatus: "succeeded",
+          paymentMethod: "manual_off_platform",
+          recordedByUserId: input.actingUserId,
+        });
+      } catch (error) {
+        const raced = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
+        if (raced) return raced;
+        throw error;
+      }
+      // No processor/platform fee on a manual, off-platform payment — the gross amount is exactly the
+      // net creditor proceeds, matching LedgerService.postPaymentCleared's own "fees default to 0" precedent.
+      await this.deps.ledger.postPaymentCleared({
+        paymentAttemptId: record.id,
+        agreementId: input.agreementId,
+        currency: record.currency,
+        grossAmountMinorUnits: record.amountMinorUnits,
+      });
     }
 
-    // No processor/platform fee on a manual, off-platform payment — the gross amount is exactly the
-    // net creditor proceeds, matching LedgerService.postPaymentCleared's own "fees default to 0" precedent.
-    await this.deps.ledger.postPaymentCleared({
-      paymentAttemptId: record.id,
-      agreementId: input.agreementId,
-      currency: record.currency,
-      grossAmountMinorUnits: record.amountMinorUnits,
-    });
     await this.deps.installmentHook?.handlePaymentSucceeded(record);
     await this.deps.completion?.checkAndAdvance(input.agreementId);
     await this.recordAudit(record, "manual_payment_recorded", input.actingUserId, null, null);

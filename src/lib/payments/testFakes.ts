@@ -9,6 +9,7 @@ import type {
   AgreementBalanceReader,
   AgreementCompletionChecker,
   AgreementPartiesReader,
+  AtomicManualPaymentPoster,
   LedgerPoster,
   ManualPaymentInstallmentHook,
   PaymentAttemptRecord,
@@ -192,6 +193,8 @@ export function createTestPaymentService(options?: {
   ledger?: LedgerPoster;
   completion?: AgreementCompletionChecker;
   installmentHook?: ManualPaymentInstallmentHook;
+  /** PRSprint 20: optional — see AtomicManualPaymentPoster's own doc comment. */
+  atomicManualPayments?: AtomicManualPaymentPoster;
 }) {
   const verificationCtx = createTestVerificationService();
   const provider = new SandboxPaymentProvider(TEST_WEBHOOK_SECRET);
@@ -210,6 +213,7 @@ export function createTestPaymentService(options?: {
     ledger: options?.ledger,
     completion: options?.completion,
     installmentHook: options?.installmentHook,
+    atomicManualPayments: options?.atomicManualPayments,
   });
 
   return { verificationCtx, provider, payments, auditRepo, agreements, paymentService };
@@ -217,6 +221,15 @@ export function createTestPaymentService(options?: {
 
 export class InMemoryPaymentWebhookEventRepository implements PaymentWebhookEventRepository {
   private byId = new Map<string, PaymentWebhookEventRecord>();
+  // PRSprint 20 (docs/prsprints/PRSPRINT_20_IDEMPOTENCY_CONCURRENCY_FINANCIAL_STATE_SAFETY.md): a
+  // synchronous, no-await-before-check-and-reserve index — the fake's own accurate model of what the
+  // real DB's `(provider, provider_event_id)` unique index guarantees atomically. The prior
+  // implementation re-checked via the async `findByProviderEvent` (an await point) before inserting,
+  // which left a genuine race window a concurrent `Promise.all` test could fall through (both callers
+  // pass the check before either reserves the key) — a window the real Postgres unique constraint
+  // never has. This mirrors `InMemoryPaymentAttemptRepository.insertPending`'s own already-correct
+  // synchronous-reservation pattern.
+  private reservedKeys = new Set<string>();
 
   async findByProviderEvent(provider: string, providerEventId: string): Promise<PaymentWebhookEventRecord | null> {
     return [...this.byId.values()].find((e) => e.provider === provider && e.providerEventId === providerEventId) ?? null;
@@ -229,8 +242,9 @@ export class InMemoryPaymentWebhookEventRepository implements PaymentWebhookEven
     signatureVerified: boolean;
     payload: unknown;
   }): Promise<PaymentWebhookEventRecord> {
-    const existing = await this.findByProviderEvent(input.provider, input.providerEventId);
-    if (existing) throw new Error("duplicate webhook event");
+    const key = `${input.provider}:${input.providerEventId}`;
+    if (this.reservedKeys.has(key)) throw new Error("duplicate webhook event");
+    this.reservedKeys.add(key);
     const record: PaymentWebhookEventRecord = { id: randomUUID(), receivedAt: new Date(), processedAt: null, ...input };
     this.byId.set(record.id, record);
     return record;

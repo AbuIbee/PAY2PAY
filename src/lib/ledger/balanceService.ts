@@ -60,38 +60,50 @@ export class BalanceService {
     };
   }
 
-  /**
-   * Groups entries by payment attempt, then sums each payment's gross-cleared amount into either
-   * "paid" (cleared, never reversed) or "reversed" (cleared, then refunded/reversed/disputed —
-   * whether the reversal used the pre-payout mirror shape or the post-payout clawback shape, the
-   * debtor's obligation is treated as unsatisfied either way: docs/PAYMENT_ARCHITECTURE.md §7's
-   * "reduce the agreement's recorded paid balance" applies to a late return regardless of whether
-   * payout already occurred — only *who bears the clawback exposure* differs, not whether the
-   * debtor's payment still counts). Each payment's contribution is computed independently of every
-   * other payment and independently of iteration order, so summing in any order — or shuffling the
-   * input array first — produces the identical total; see balanceService.test.ts.
-   */
   private reconstruct(entries: LedgerJournalEntryRecord[]): { amountPaidMinorUnits: number; reversedMinorUnits: number } {
-    const byPayment = new Map<string, LedgerJournalEntryRecord[]>();
-    for (const entry of entries) {
-      const list = byPayment.get(entry.paymentAttemptId) ?? [];
-      list.push(entry);
-      byPayment.set(entry.paymentAttemptId, list);
-    }
-
-    let amountPaidMinorUnits = 0;
-    let reversedMinorUnits = 0;
-    for (const paymentEntries of byPayment.values()) {
-      const clearEntry = paymentEntries.find((e) => e.entryType === "payment_cleared");
-      if (!clearEntry) continue;
-      const grossLeg = clearEntry.postings.find((p) => p.accountType === "processor_clearing" && p.direction === "debit");
-      if (!grossLeg) continue;
-      const wasReversed = paymentEntries.some(
-        (e) => e.entryType === "refund" || e.entryType === "reversal" || e.entryType === "dispute_adjustment",
-      );
-      if (wasReversed) reversedMinorUnits += grossLeg.amountMinorUnits;
-      else amountPaidMinorUnits += grossLeg.amountMinorUnits;
-    }
-    return { amountPaidMinorUnits, reversedMinorUnits };
+    return reconstructPaidAndReversed(entries);
   }
+}
+
+/**
+ * PRSprint 20 (docs/prsprints/PRSPRINT_20_IDEMPOTENCY_CONCURRENCY_FINANCIAL_STATE_SAFETY.md):
+ * extracted from BalanceService's private method (which now just delegates here, unchanged
+ * behavior) and exported so `DrizzleAtomicManualPaymentPoster` can re-verify the exact same
+ * "amount paid" total *inside* its locking transaction, without duplicating this business logic a
+ * second time — a duplicated, hand-re-implemented version of this exact calculation is precisely the
+ * kind of two-source-of-truth drift risk this codebase's "single source of truth" precedent
+ * (docs/PAYMENT_ARCHITECTURE.md §14.1) exists to prevent.
+ *
+ * Groups entries by payment attempt, then sums each payment's gross-cleared amount into either
+ * "paid" (cleared, never reversed) or "reversed" (cleared, then refunded/reversed/disputed —
+ * whether the reversal used the pre-payout mirror shape or the post-payout clawback shape, the
+ * debtor's obligation is treated as unsatisfied either way: docs/PAYMENT_ARCHITECTURE.md §7's
+ * "reduce the agreement's recorded paid balance" applies to a late return regardless of whether
+ * payout already occurred — only *who bears the clawback exposure* differs, not whether the
+ * debtor's payment still counts). Each payment's contribution is computed independently of every
+ * other payment and independently of iteration order, so summing in any order — or shuffling the
+ * input array first — produces the identical total; see balanceService.test.ts.
+ */
+export function reconstructPaidAndReversed(entries: LedgerJournalEntryRecord[]): { amountPaidMinorUnits: number; reversedMinorUnits: number } {
+  const byPayment = new Map<string, LedgerJournalEntryRecord[]>();
+  for (const entry of entries) {
+    const list = byPayment.get(entry.paymentAttemptId) ?? [];
+    list.push(entry);
+    byPayment.set(entry.paymentAttemptId, list);
+  }
+
+  let amountPaidMinorUnits = 0;
+  let reversedMinorUnits = 0;
+  for (const paymentEntries of byPayment.values()) {
+    const clearEntry = paymentEntries.find((e) => e.entryType === "payment_cleared");
+    if (!clearEntry) continue;
+    const grossLeg = clearEntry.postings.find((p) => p.accountType === "processor_clearing" && p.direction === "debit");
+    if (!grossLeg) continue;
+    const wasReversed = paymentEntries.some(
+      (e) => e.entryType === "refund" || e.entryType === "reversal" || e.entryType === "dispute_adjustment",
+    );
+    if (wasReversed) reversedMinorUnits += grossLeg.amountMinorUnits;
+    else amountPaidMinorUnits += grossLeg.amountMinorUnits;
+  }
+  return { amountPaidMinorUnits, reversedMinorUnits };
 }

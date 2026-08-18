@@ -7,6 +7,7 @@ import { getLedgerService } from "@/lib/ledger/getLedgerService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { getVerificationService } from "@/lib/profiles/getVerificationService";
 import { DrizzleAgreementPartiesReader } from "./drizzleAgreementPartiesReader";
+import { DrizzleAtomicManualPaymentPoster } from "./drizzleAtomicManualPaymentPoster";
 import { DrizzlePaymentAttemptRepository } from "./drizzlePaymentAttemptRepository";
 import { getPaymentProvider } from "./getPaymentProvider";
 import { PaymentService } from "./paymentService";
@@ -38,6 +39,7 @@ export function getPaymentService(): PaymentService {
       balances: getBalanceService(),
       ledger: getLedgerService(),
       completion: getAgreementCompletionService(),
+      atomicManualPayments: new DrizzleAtomicManualPaymentPoster(),
     });
   }
   return cached;

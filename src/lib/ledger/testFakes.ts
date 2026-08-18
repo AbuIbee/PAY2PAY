@@ -31,6 +31,12 @@ export class InMemoryLedgerAccountRepository implements LedgerAccountRepository 
 
 export class InMemoryLedgerJournalEntryRepository implements LedgerJournalEntryRepository {
   private byId = new Map<string, LedgerJournalEntryRecord>();
+  // PRSprint 20 (docs/prsprints/PRSPRINT_20_IDEMPOTENCY_CONCURRENCY_FINANCIAL_STATE_SAFETY.md): see
+  // InMemoryPaymentWebhookEventRepository's identical doc comment — a synchronous,
+  // no-await-before-reserve index accurately modeling the real DB's
+  // `(payment_attempt_id, entry_type)` unique index, replacing the prior async re-check that left a
+  // genuine concurrent-race window the real constraint never has.
+  private reservedKeys = new Set<string>();
 
   async findByPaymentAndType(paymentAttemptId: string, entryType: LedgerEntryType): Promise<LedgerJournalEntryRecord | null> {
     return [...this.byId.values()].find((e) => e.paymentAttemptId === paymentAttemptId && e.entryType === entryType) ?? null;
@@ -44,8 +50,9 @@ export class InMemoryLedgerJournalEntryRepository implements LedgerJournalEntryR
     reason: string | null;
     postings: LedgerPostingInput[];
   }): Promise<LedgerJournalEntryRecord> {
-    const existing = await this.findByPaymentAndType(input.paymentAttemptId, input.entryType);
-    if (existing) throw new Error("duplicate ledger journal entry (payment_attempt_id, entry_type)");
+    const key = `${input.paymentAttemptId}:${input.entryType}`;
+    if (this.reservedKeys.has(key)) throw new Error("duplicate ledger journal entry (payment_attempt_id, entry_type)");
+    this.reservedKeys.add(key);
     const entry: LedgerJournalEntryRecord = {
       id: randomUUID(),
       entryType: input.entryType,
