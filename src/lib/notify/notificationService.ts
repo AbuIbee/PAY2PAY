@@ -1,10 +1,13 @@
 import "server-only";
+import type { AuditService } from "@/lib/audit/auditService";
+import { ValidationError } from "@/lib/errors";
+import { logger } from "@/lib/logger";
+import { maskPhone } from "@/lib/phone";
 import { EmailDeliveryError } from "./emailDeliveryError";
 import type { EmailSender } from "./emailSender";
 import { SmsDeliveryError } from "./smsDeliveryError";
 import type { SmsSender } from "./smsSender";
 import { DEFAULT_CHANNELS, isCriticalNotificationType, type NotificationEventType } from "./eventTypes";
-import { ValidationError } from "@/lib/errors";
 import { NOTIFICATION_TEMPLATES } from "./templates";
 
 export type NotificationChannel = "email" | "sms" | "in_app";
@@ -83,6 +86,52 @@ export interface SmsOptOutRepository {
   recordOptOut(phone: string, source: "stop_keyword" | "provider_rejection"): Promise<void>;
 }
 
+/**
+ * PRSprint 16 (docs/prsprints/PRSPRINT_16_NOTIFICATION_PREFERENCES_DELIVERY_HISTORY.md), requirement
+ * #5/#6: what the app actually knows about a user's ability to receive SMS, distinct from whether
+ * they've *chosen* to (that's the ordinary preference row). `phoneVerified` mirrors exactly what
+ * `UserContactReader.getPhone` itself requires (a verified SMS MFA credential) — this is intentionally
+ * the same signal, exposed for the UI to explain *why* a toggle can't be meaningfully enabled, not a
+ * second, different notion of "verified."
+ */
+export interface SmsEligibility {
+  phoneVerified: boolean;
+  /** Masked (e.g. "+1********67") — never the full number, even to the owning user's own preferences view; the account/security page is where the real number is managed. */
+  maskedPhone: string | null;
+  /** True if the verified phone (or, if unverified, no phone at all — always false in that case since there is nothing to have opted out) is present in sms_opt_out. */
+  optedOut: boolean;
+}
+
+/**
+ * PRSprint 16, requirement #18/#21: one logical notification (one `notify()` call), not one row per
+ * channel — every channel that call fanned out to is reunified here via the caller-supplied dedupe
+ * key (with `:channel` stripped), which every `notify()` call site in this codebase already supplies
+ * (audited directly, not assumed) — see `listGroupedForUser`'s own doc comment for the fallback when
+ * one doesn't exist.
+ */
+export interface GroupedChannelStatus {
+  channel: NotificationChannel;
+  /** A real notification_event status when a row exists for this channel; "not_sent" (with `reason`) when this channel was eligible for the type but no row exists — e.g. excluded by the recipient's own preference. */
+  status: NotificationStatus | "not_sent";
+  failureReason: string | null;
+  reason?: string;
+}
+
+export interface GroupedNotification {
+  groupId: string;
+  notificationType: string;
+  critical: boolean;
+  relatedAgreementId: string | null;
+  relatedPaymentAttemptId: string | null;
+  payload: Record<string, unknown>;
+  createdAt: Date;
+  /** From the group's own in_app row, if one exists (a user may have disabled in_app for this type, same as any other channel). */
+  readAt: Date | null;
+  /** The in_app row's own id — what a "mark read" action targets. Null when no in_app row exists for this group. */
+  inAppId: string | null;
+  channels: GroupedChannelStatus[];
+}
+
 export interface NotificationServiceOptions {
   /** How long to wait before retrying a failed delivery. Default 15 minutes. */
   retryDelayMs?: number;
@@ -127,6 +176,8 @@ export class NotificationService {
       smsOptOuts: SmsOptOutRepository;
       /** PRSprint 14: base URL used to build the CTA link on an email notification, when the event has a `relatedAgreementId` to link to (see `buildCtaUrl`). Mirrors AgreementInvitationService/AuthService's own identical `appUrl` dependency. */
       appUrl: string;
+      /** PRSprint 16, requirement #17: records a preference change to the audit trail. Optional — mirrors PaymentWebhookService's own "notifications remain optional" precedent; a missing/failing audit write must never block the preference update it's recording. */
+      audit?: AuditService;
     },
     options: NotificationServiceOptions = {},
   ) {
@@ -199,16 +250,120 @@ export class NotificationService {
       // this table for a critical type regardless, so a stored row here would be inert anyway.
       return;
     }
+    // PRSprint 16, requirement #16: read the prior value first so the audit record captures a real
+    // old→new transition, not just "someone touched this" — also makes the upsert itself trivially
+    // idempotent to observe (setting the same value twice produces two audit rows with identical
+    // old/new, not a misleading "changed" entry).
+    const previous = await this.deps.preferences.find(input.userId, input.notificationType, input.channel);
     await this.deps.preferences.upsert({
       userId: input.userId,
       notificationType: input.notificationType,
       channel: input.channel,
       enabled: input.enabled,
     });
+    if (this.deps.audit) {
+      try {
+        await this.deps.audit.record({
+          actorUserId: input.userId,
+          actorRole: "personal_user",
+          profileKind: null,
+          profileId: null,
+          agreementId: null,
+          action: "notification_preference_changed",
+          occurredAt: new Date().toISOString(),
+          ipAddress: null,
+          deviceInfo: null,
+          previousValue: { notificationType: input.notificationType, channel: input.channel, enabled: previous?.enabled ?? true },
+          newValue: { notificationType: input.notificationType, channel: input.channel, enabled: input.enabled },
+          reason: null,
+          authStrength: null,
+          relatedDocumentId: null,
+          relatedCaseId: null,
+        });
+      } catch (error) {
+        // Failure isolation, matching every other optional cross-cutting dependency in this codebase
+        // (PaymentWebhookService.notifyPaymentStatus's identical precedent) — an audit-write failure
+        // must never roll back or block the preference change it's recording.
+        logger.error("notification_preference_audit_failed", { userId: input.userId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
   }
 
   async listForUser(recipientUserId: string): Promise<NotificationEventRecord[]> {
     return this.deps.events.listForUser(recipientUserId);
+  }
+
+  /**
+   * PRSprint 16, requirement #18/#21: the user-facing history view — one entry per `notify()` call,
+   * not one per channel row. Every row's stored `dedupeKey` is `${callerSuppliedKey}:${channel}`
+   * (notify()'s own construction); stripping the trailing `:${channel}` recovers the caller-supplied
+   * key shared by every channel sibling of the same logical call. Audited directly: every notify()
+   * call site in this codebase supplies a dedupeKey (no exceptions found), so the `row.id` fallback
+   * below is a defensive last resort, not an expected path.
+   *
+   * For a channel the type is normally eligible for (`DEFAULT_CHANNELS[type]`) but that has no row in
+   * this group, distinguishes *why*: an explicit stored preference disabling it ("not_sent" +
+   * `disabled by your notification preference`) versus anything else — most commonly a type gaining a
+   * channel after this particular notification was already created (`DEFAULT_CHANNELS` has changed
+   * over time — PRSprint 15 added `sms` to five types) — labeled generically rather than claiming a
+   * specific cause it can't actually verify for historical data.
+   */
+  async listGroupedForUser(recipientUserId: string): Promise<GroupedNotification[]> {
+    const rows = await this.deps.events.listForUser(recipientUserId);
+    const groups = new Map<string, GroupedNotification>();
+    for (const row of rows) {
+      const groupKey = row.dedupeKey && row.dedupeKey.endsWith(`:${row.channel}`) ? row.dedupeKey.slice(0, -(row.channel.length + 1)) : row.id;
+      let group = groups.get(groupKey);
+      if (!group) {
+        group = {
+          groupId: groupKey,
+          notificationType: row.notificationType,
+          critical: row.critical,
+          relatedAgreementId: row.relatedAgreementId,
+          relatedPaymentAttemptId: row.relatedPaymentAttemptId,
+          payload: row.payload,
+          createdAt: row.createdAt,
+          readAt: null,
+          inAppId: null,
+          channels: [],
+        };
+        groups.set(groupKey, group);
+      }
+      group.channels.push({ channel: row.channel, status: row.status, failureReason: row.failureReason });
+      if (row.channel === "in_app") {
+        group.readAt = row.readAt;
+        group.inAppId = row.id;
+      }
+      if (row.createdAt < group.createdAt) group.createdAt = row.createdAt;
+    }
+
+    for (const group of groups.values()) {
+      const type = group.notificationType as NotificationEventType;
+      const eligibleChannels = DEFAULT_CHANNELS[type] ?? [];
+      const present = new Set(group.channels.map((c) => c.channel));
+      for (const channel of eligibleChannels) {
+        if (present.has(channel)) continue;
+        const preference = group.critical ? null : await this.deps.preferences.find(recipientUserId, type, channel);
+        group.channels.push({
+          channel,
+          status: "not_sent",
+          failureReason: null,
+          reason: preference && !preference.enabled ? "disabled by your notification preference" : "not applicable to this notification",
+        });
+      }
+    }
+
+    return [...groups.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  /** PRSprint 16, requirement #5/#6: what the UI needs to explain SMS eligibility honestly, without exposing infrastructure terms — see `SmsEligibility`'s own doc comment. */
+  async getSmsEligibility(userId: string): Promise<SmsEligibility> {
+    const phone = await this.deps.contacts.getPhone(userId);
+    if (!phone) {
+      return { phoneVerified: false, maskedPhone: null, optedOut: false };
+    }
+    const optedOut = await this.deps.smsOptOuts.isOptedOut(phone);
+    return { phoneVerified: true, maskedPhone: maskPhone(phone), optedOut };
   }
 
   async markRead(recipientUserId: string, notificationId: string): Promise<NotificationEventRecord | null> {

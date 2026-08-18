@@ -36,7 +36,8 @@ function computeEmailDeliveryStatus(env: ServerEnv): EmailDeliveryStatus {
   return "resend";
 }
 
-function computeSmsDeliveryStatus(env: ServerEnv): SmsDeliveryStatus {
+/** Exported (not just used internally) — PRSprint 16's own notification-preferences route reuses this exact decision to tell a user honestly whether SMS is live right now, without duplicating the logic getSmsSender.ts itself uses. */
+export function computeSmsDeliveryStatus(env: ServerEnv): SmsDeliveryStatus {
   const hasSender = Boolean(env.TWILIO_MESSAGING_SERVICE_SID || env.TWILIO_FROM_NUMBER);
   if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !hasSender) return "console_log_only_no_provider";
   if (!env.SMS_DELIVERY_ENABLED) return "console_log_only_kill_switch";

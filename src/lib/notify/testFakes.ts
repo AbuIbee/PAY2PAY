@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { EmailDeliveryError } from "./emailDeliveryError";
 import type { EmailSender } from "./emailSender";
 import { SmsDeliveryError } from "./smsDeliveryError";
@@ -238,6 +239,22 @@ export class InMemorySmsOptOutRepository implements SmsOptOutRepository {
   }
 }
 
+class InMemoryAuditEventRepositoryForNotify implements AuditEventRepository {
+  events: AuditEventRecord[] = [];
+  private nextId = 1;
+
+  async getLastEvent(): Promise<AuditEventRecord | null> {
+    return this.events.at(-1) ?? null;
+  }
+
+  async insertEvent(record: Omit<AuditEventRecord, "id">): Promise<AuditEventRecord> {
+    const stored: AuditEventRecord = { ...record, id: this.nextId++ };
+    this.events.push(stored);
+    return stored;
+  }
+}
+
+/** PRSprint 16, requirement #17: `audit`/`auditRepo` let tests assert on the preference-change audit trail; both are optional to consume — most existing tests never touch them, so this is purely additive. */
 export function createTestNotificationService(options?: NotificationServiceOptions) {
   const events = new InMemoryNotificationEventRepository();
   const preferences = new InMemoryNotificationPreferenceRepository();
@@ -246,6 +263,8 @@ export function createTestNotificationService(options?: NotificationServiceOptio
   const smsSender = new InMemorySmsSender();
   const smsOptOuts = new InMemorySmsOptOutRepository();
   const appUrl = "https://app.test";
-  const notificationService = new NotificationService({ events, preferences, emailSender, smsSender, contacts, smsOptOuts, appUrl }, options);
-  return { events, preferences, contacts, emailSender, smsSender, smsOptOuts, appUrl, notificationService };
+  const auditRepo = new InMemoryAuditEventRepositoryForNotify();
+  const audit = new AuditService(auditRepo);
+  const notificationService = new NotificationService({ events, preferences, emailSender, smsSender, contacts, smsOptOuts, appUrl, audit }, options);
+  return { events, preferences, contacts, emailSender, smsSender, smsOptOuts, appUrl, auditRepo, audit, notificationService };
 }

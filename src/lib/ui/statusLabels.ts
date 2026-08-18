@@ -337,7 +337,41 @@ export const notificationEventLabel: Record<string, string> = {
   relationship_funding_account_replaced: "Funding account changed",
   relationship_payout_account_replaced: "Payout account changed",
   appeal_decided: "Appeal decided",
+  // PRSprint 13 added these four (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md) but never
+  // added labels for them — every one of these previously rendered as its raw enum string in the
+  // Notification Center (`titleFor`'s own `?? record.notificationType` fallback), exactly the "raw
+  // infrastructure" leak PRSprint 16 (docs/prsprints/PRSPRINT_16_NOTIFICATION_PREFERENCES_DELIVERY_HISTORY.md)
+  // requirement #19 prohibits. Fixed here, not silently left.
+  agreement_invitation_response: "Proposal update",
+  agreement_action_required: "Agreement needs your attention",
+  agreement_decided: "Agreement decision",
+  agreement_counterparty_signed: "Signature needed",
+  amendment_decided: "Amendment decision",
 };
+
+/**
+ * PRSprint 16 (docs/prsprints/PRSPRINT_16_NOTIFICATION_PREFERENCES_DELIVERY_HISTORY.md), requirement
+ * #20/#34: per-channel delivery status, in plain language, for the Notification Center's grouped
+ * history view — never "provider_accepted"/"bounced"/other infrastructure terms. `sent` and
+ * `delivered` are deliberately different labels (not conflated) — "sent" means the provider accepted
+ * it, "delivered" means the provider later confirmed real delivery via its own webhook; see
+ * notificationService.ts's own `deliver()` doc comments for the underlying distinction this reflects,
+ * not invents.
+ */
+export function notificationDeliveryStatusLabel(status: "pending" | "sent" | "delivered" | "failed" | "not_sent"): StatusLabel {
+  switch (status) {
+    case "pending":
+      return { label: "Pending", tone: "neutral" };
+    case "sent":
+      return { label: "Sent", tone: "info" };
+    case "delivered":
+      return { label: "Delivered", tone: "success" };
+    case "failed":
+      return { label: "Could not send", tone: "danger" };
+    case "not_sent":
+      return { label: "Not sent", tone: "neutral" };
+  }
+}
 
 /** Sprint 18's internal-admin capability model, translated to user-facing language. */
 export const adminCapabilityLabel: Record<string, string> = {

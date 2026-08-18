@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { withErrorHandling } from "@/lib/api-handler";
+import { getServerEnv } from "@/config/env";
+import { computeSmsDeliveryStatus } from "@/lib/admin/environmentStatus";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { isNotificationEventType } from "@/lib/notify/eventTypes";
@@ -18,12 +20,20 @@ const setSchema = z.object({
   enabled: z.boolean(),
 });
 
-/** Always the caller's own preferences — userId is taken from the session, never accepted as a request parameter. */
+/**
+ * Always the caller's own preferences — userId is taken from the session, never accepted as a
+ * request parameter. PRSprint 16, requirement #5/#11/#12: also returns `smsEligibility`
+ * (phone-verified/masked-phone/opted-out) and `smsProviderAvailable` (the same live decision
+ * `getSmsSender()` itself makes) so the UI can render an honest SMS control state instead of a plain
+ * checkbox — computed fresh on every request, never a hard-coded flag, so it tracks Twilio activation
+ * automatically once that External Blocker is resolved.
+ */
 export function createNotificationPreferencesGetHandler(authService: AuthService, notificationService: NotificationService) {
   return async function handleGet(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
-    const preferences = await notificationService.getPreferences(userId);
-    return NextResponse.json({ preferences }, { status: 200 });
+    const [preferences, smsEligibility] = await Promise.all([notificationService.getPreferences(userId), notificationService.getSmsEligibility(userId)]);
+    const smsProviderAvailable = computeSmsDeliveryStatus(getServerEnv()) === "twilio";
+    return NextResponse.json({ preferences, smsEligibility, smsProviderAvailable }, { status: 200 });
   };
 }
 
