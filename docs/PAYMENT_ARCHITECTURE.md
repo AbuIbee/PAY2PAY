@@ -355,6 +355,66 @@ compare against the processor.
 - All amounts are integer minor units throughout (FR-MONEY-001) — no floating-point arithmetic
   anywhere in ledger posting logic.
 
+### 14.1 Balance source of truth (PRSprint 19)
+
+PRSprint 19 (docs/prsprints/PRSPRINT_19_AUTHORITATIVE_LEDGER_TRANSACTION_INTEGRITY.md) requires this
+rule set to be written down explicitly, not left implicit in code comments. This documents the
+**as-implemented** system (`src/lib/ledger/ledgerService.ts`, `balanceService.ts`), which differs in
+detail from Section 14's original illustrative design (no `payout_in_transit` intermediate — payout is
+modeled as a single direct posting; see `ledgerService.ts`'s own doc comment for why).
+
+**The rule:** an agreement's balance is always *computed*, never *stored*. There is no
+`agreement.balance` column, no cached total anywhere in the schema, and no code path that writes one.
+`BalanceService.getAgreementBalance(agreementId)` is the single function that computes it, and it does
+so from exactly two authoritative, independently-owned sources:
+
+1. **Obligation** — `agreement_version.terms.originalAmountMinorUnits` /
+   `currentPrincipalMinorUnits`, read via `AgreementTermsReader`. Written once, by
+   `AgreementService`/`AmendmentService`, when an agreement's terms are set or amended. Never written
+   by anything in the payments/ledger layer.
+2. **Money movement** — every `ledger_journal_entry` row for the agreement, read via
+   `LedgerService.listEntriesForAgreement`. Written only by `LedgerService`'s posting methods
+   (`postPaymentCleared`/`reversePayment`/`postPayout`/`postAdminAdjustment`), each idempotent
+   (get-existing-or-post-once, keyed by `(payment_attempt_id, entry_type)`) and append-only (no
+   `update`/`delete` exists on the journal-entry or posting repositories).
+
+`BalanceService.reconstruct` groups journal entries by `payment_attempt_id` and sums each payment's
+gross-cleared amount into either "paid" (cleared, never reversed) or "reversed" (cleared, then
+refunded/returned/disputed) — a pure function of the stored rows, independent of read order (summing a
+`Map`'s values in any order produces the same total; see `balanceService.test.ts`). This is what
+"reconstructable from authoritative records" means concretely for this codebase: delete every derived
+value in the system and `BalanceService.getAgreementBalance` still produces the identical answer from
+`agreement_version` + `ledger_journal_entry`/`ledger_posting` alone.
+
+**Obligation and money movement are structurally separate** — enforced by construction, not just
+convention: `LedgerService` has no dependency capable of writing to `agreement`/`agreement_version`,
+and `AgreementService`/`AmendmentService` have no dependency capable of writing to
+`ledger_journal_entry`/`ledger_posting`. The one narrow, deliberate exception is `agreement.status`
+itself (not the obligation *amount*, which never changes once signed except via a new amendment
+version) — `SettlementService` and, as of PRSprint 18, `AgreementCompletionService` are the only two
+classes that ever write `agreement.status` in response to money having moved, and each does so through
+its own narrow `AgreementRepository`/`AgreementStatusRepository` dependency, never by touching the
+ledger or the terms.
+
+**Reversal, not deletion:** a refund, a late ACH return, and a dispute-driven reversal are each a new
+`ledger_journal_entry` row (`entry_type` = `refund`/`reversal`/`dispute_adjustment`), never an edit or
+delete of the original `payment_cleared` entry. `payment_attempt.status` likewise only ever
+transitions forward (`refunded`/`returned`/`disputed`); nothing rewrites an attempt's history. The
+full sequence of events for any payment is always reconstructable from the journal entries that
+reference it plus the `audit_event` rows PaymentService/PaymentWebhookService/LedgerService record on
+every status transition (`previous_value`/`new_value`/`occurred_at`) — this audit trail is this
+codebase's lifecycle/status history mechanism; there is no separate, second status-history table, since
+duplicating what the audit log already records verbatim for every transition would be exactly the kind
+of redundant, driftable second source of truth this section exists to rule out.
+
+**Double-entry assessment:** PRSprint 19 requires assessing whether double-entry is warranted "if
+stored value is introduced." It already has been — `processor_clearing`/`creditor_proceeds_payable`/
+`platform_fee_revenue`/`processor_fee_expense`/`creditor_clawback_exposure`/`admin_adjustment_suspense`
+are real internal tracking accounts (Sprint 10), and every posting set is balanced-checked in
+application code (`LedgerService.assertBalanced`) before it is ever written. Conclusion: yes,
+double-entry is required and already implemented exactly as this section describes — there is no
+further action for PRSprint 19 to take here beyond documenting it.
+
 ## 15. Sprint 9: provider evaluation and sandbox implementation
 
 `docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md` required evaluating processor and
