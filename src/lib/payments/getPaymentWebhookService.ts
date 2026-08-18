@@ -2,6 +2,7 @@ import "server-only";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getFailedPaymentWorkflowService } from "@/lib/failedPayments/getFailedPaymentWorkflowService";
+import { getAgreementCompletionService } from "@/lib/ledger/getAgreementCompletionService";
 import { getLedgerService } from "@/lib/ledger/getLedgerService";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
@@ -23,6 +24,7 @@ export function getPaymentWebhookService(): PaymentWebhookService {
       failedPaymentWorkflow: getFailedPaymentWorkflowService(),
       notifications: getNotificationService(),
       profileOwners: new DrizzleProfileOwnerReader(),
+      completion: getAgreementCompletionService(),
     });
   }
   return cached;

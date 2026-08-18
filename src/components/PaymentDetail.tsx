@@ -17,7 +17,8 @@ interface PaymentDetailData {
   recipient: { profileKind: "personal" | "business"; profileId: string };
   agreementId: string | null;
   providerName: string;
-  paymentMethod: "ach" | "debit_card" | null;
+  paymentMethod: "ach" | "debit_card" | "manual_off_platform" | null;
+  recipientConfirmedAt: string | null;
   failureReason: string | null;
   createdAt: string;
   updatedAt: string;
@@ -64,6 +65,7 @@ export function PaymentDetail() {
   const [retry, setRetry] = useState<RetryStatus | null>(null);
   const [disputes, setDisputes] = useState<PaymentDispute[]>([]);
   const [manualPayStatus, setManualPayStatus] = useState<"idle" | "confirming" | "submitting" | "done" | "error">("idle");
+  const [confirmStatus, setConfirmStatus] = useState<"idle" | "submitting" | "done" | "error">("idle");
 
   const load = useCallback(async () => {
     if (!id) {
@@ -113,6 +115,18 @@ export function PaymentDetail() {
       await load();
     } catch {
       setManualPayStatus("error");
+    }
+  }
+
+  async function handleConfirmManualPayment() {
+    if (!payment) return;
+    setConfirmStatus("submitting");
+    try {
+      await apiFetch("/api/payments/manual/confirm", { method: "POST", body: JSON.stringify({ id: payment.id }) });
+      setConfirmStatus("done");
+      await load();
+    } catch {
+      setConfirmStatus("error");
     }
   }
 
@@ -171,6 +185,50 @@ export function PaymentDetail() {
           )}
         </dl>
       </div>
+
+      {payment.paymentMethod === "manual_off_platform" && (
+        <div className="card">
+          <div className="card__header">
+            <h3>Manually recorded payment</h3>
+          </div>
+          <p style={{ color: "var(--ink-soft)" }}>
+            This payment was recorded as collected outside PAY2PAY (for example, cash or a check) rather than processed through
+            a payment provider.
+          </p>
+          {payment.recipientConfirmedAt ? (
+            <p className="chip chip--success" style={{ marginTop: "0.5rem" }}>
+              Confirmed by the recipient on {formatDate(payment.recipientConfirmedAt)}
+            </p>
+          ) : (
+            <div style={{ marginTop: "0.75rem" }}>
+              <p style={{ margin: "0 0 0.5rem", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
+                Not yet confirmed by the recipient. Confirmation is optional and only strengthens the record — this payment
+                already counts toward the balance.
+              </p>
+              {confirmStatus !== "done" && (
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={() => void handleConfirmManualPayment()}
+                  disabled={confirmStatus === "submitting"}
+                >
+                  {confirmStatus === "submitting" ? "Confirming…" : "Confirm you received this payment"}
+                </button>
+              )}
+              {confirmStatus === "error" && (
+                <p className="field-error" role="alert">
+                  This could not be confirmed. Only the payment&apos;s recipient may confirm it.
+                </p>
+              )}
+              {confirmStatus === "done" && (
+                <p className="form-status form-status--success" role="status">
+                  Confirmed.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {isFailed && (
         <div className="card">

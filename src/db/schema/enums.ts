@@ -275,7 +275,15 @@ export const achMandateStatusEnum = pgEnum("ach_mandate_status", ["active", "rev
  * and reasoned about separately (master spec §6: "The system must separately track ACH and card
  * payment states") and so the fee-allocation engine below knows which processor-fee rate applied.
  */
-export const paymentMethodEnum = pgEnum("payment_method", ["ach", "debit_card"]);
+/**
+ * PRSprint 18 (docs/prsprints/PRSPRINT_18_PARTIAL_PAYMENTS_OVERPAYMENTS_COMPLETION_RULES.md)
+ * addition: "manual_off_platform" — a payment collected outside this platform's payment rails
+ * entirely (cash, check, an external transfer) that a party records for evidentiary/bookkeeping
+ * purposes, distinct from a provider-verified (ach/debit_card) attempt this platform itself
+ * processed. Never routes through PaymentProvider — see paymentService.ts's
+ * recordManualOffPlatformPayment.
+ */
+export const paymentMethodEnum = pgEnum("payment_method", ["ach", "debit_card", "manual_off_platform"]);
 
 /**
  * Sprint 12: a debit card on file for an agreement, mirroring `ach_mandate_status`'s shape and the

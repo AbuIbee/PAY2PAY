@@ -120,7 +120,8 @@ export class ApprovalService {
     if (!isCapability(input.capability)) {
       throw new ValidationError(`"${input.capability}" is not a recognized capability.`);
     }
-    if (input.thresholdMinorUnits !== null && (!Number.isInteger(input.thresholdMinorUnits) || input.thresholdMinorUnits < 0)) {
+    // PRSprint 17: Number.isSafeInteger — see schedule.ts's identical hardening rationale.
+    if (input.thresholdMinorUnits !== null && (!Number.isSafeInteger(input.thresholdMinorUnits) || input.thresholdMinorUnits < 0)) {
       throw new ValidationError("thresholdMinorUnits must be a non-negative integer or null.");
     }
 

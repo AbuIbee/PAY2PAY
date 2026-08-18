@@ -80,6 +80,14 @@ describe("PaymentService", () => {
     await expect(ctx.paymentService.createPayment(baseInput({ amountMinorUnits: 10.5 }))).rejects.toThrow(ValidationError);
   });
 
+  it("PRSprint 17: rejects an unsafe integer amount (beyond Number.MAX_SAFE_INTEGER)", async () => {
+    await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+    await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+    await expect(
+      ctx.paymentService.createPayment(baseInput({ amountMinorUnits: Number.MAX_SAFE_INTEGER + 2 })),
+    ).rejects.toThrow(ValidationError);
+  });
+
   it("is idempotent: the same idempotency key returns the same record without a second provider call", async () => {
     await markFullyVerified(PAYER.profileKind, PAYER.profileId);
     await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);

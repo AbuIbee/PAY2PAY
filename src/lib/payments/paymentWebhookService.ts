@@ -7,7 +7,7 @@ import type { NotificationEventType } from "@/lib/notify/eventTypes";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { PaymentProvider } from "./paymentProvider";
-import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus } from "./paymentService";
+import type { AgreementCompletionChecker, PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus } from "./paymentService";
 
 export interface PaymentWebhookEventRecord {
   id: string;
@@ -123,6 +123,14 @@ export class PaymentWebhookService {
        */
       notifications?: NotificationService;
       profileOwners?: ProfileOwnerReader;
+      /**
+       * PRSprint 18 (docs/prsprints/PRSPRINT_18_PARTIAL_PAYMENTS_OVERPAYMENTS_COMPLETION_RULES.md):
+       * recomputes and applies the agreement's status once a provider-cleared payment may have just
+       * completed it — see AgreementCompletionChecker's own doc comment. Optional, mirroring every
+       * other Sprint-17-and-later hook on this class; every pre-PRSprint-18 test omitting it is
+       * unaffected.
+       */
+      completion?: AgreementCompletionChecker;
     },
   ) {}
 
@@ -139,13 +147,27 @@ export class PaymentWebhookService {
       return { status: "duplicate" };
     }
 
-    const eventRecord = await this.deps.events.insert({
-      provider: parsed.provider,
-      providerEventId: parsed.providerEventId,
-      eventType: parsed.eventType,
-      signatureVerified: true,
-      payload: parsed.data,
-    });
+    // PRSprint 20 (docs/prsprints/PRSPRINT_20_IDEMPOTENCY_CONCURRENCY_FINANCIAL_STATE_SAFETY.md):
+    // insert-then-recheck-on-conflict — mirrors PaymentService.reserveAttempt's identical pattern.
+    // Two truly concurrent deliveries of the same event can both pass the check above (an ordinary
+    // check-then-act race); the real DB's `(provider, provider_event_id)` unique index is what
+    // actually decides a winner, and the loser's insert throws rather than silently succeeding twice.
+    // Without this catch, that loser's whole webhook request would fail with an unhandled error
+    // instead of correctly resolving as "duplicate" the same way a later redelivery does.
+    let eventRecord;
+    try {
+      eventRecord = await this.deps.events.insert({
+        provider: parsed.provider,
+        providerEventId: parsed.providerEventId,
+        eventType: parsed.eventType,
+        signatureVerified: true,
+        payload: parsed.data,
+      });
+    } catch (error) {
+      const raced = await this.deps.events.findByProviderEvent(parsed.provider, parsed.providerEventId);
+      if (raced) return { status: "duplicate" };
+      throw error;
+    }
 
     await this.applyEvent(parsed.eventType, parsed.data);
     await this.deps.events.markProcessed(eventRecord.id);
@@ -202,7 +224,26 @@ export class PaymentWebhookService {
 
     await this.postLedgerEntry(eventType, updated, data);
     await this.runFailedPaymentWorkflow(newStatus, updated, failureCategory ?? null);
+    await this.checkCompletion(newStatus, updated);
     await this.notifyPaymentStatus(newStatus, updated);
+  }
+
+  /**
+   * PRSprint 18: only a "succeeded" transition can ever complete or activate an agreement — mirrors
+   * `postLedgerEntry`/`runFailedPaymentWorkflow`'s identical "never fail the webhook" contract; a
+   * completion-check failure here is caught and logged, never thrown.
+   */
+  private async checkCompletion(status: PaymentAttemptStatus, payment: PaymentAttemptRecord): Promise<void> {
+    if (!this.deps.completion || status !== "succeeded" || !payment.agreementId) return;
+    try {
+      await this.deps.completion.checkAndAdvance(payment.agreementId);
+    } catch (error) {
+      logger.error("payment_webhook_completion_check_failed", {
+        paymentAttemptId: payment.id,
+        agreementId: payment.agreementId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Sprint 17 review-pass addition — see the constructor's `notifications`/`profileOwners` doc comment. */

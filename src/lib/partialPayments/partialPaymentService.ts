@@ -115,7 +115,8 @@ export class PartialPaymentService {
     if (role !== "debtor") {
       throw new ForbiddenError("Only the borrower may propose a partial payment.");
     }
-    if (!Number.isInteger(input.proposedAmountMinorUnits) || input.proposedAmountMinorUnits <= 0) {
+    // PRSprint 17: Number.isSafeInteger — see schedule.ts's identical hardening rationale.
+    if (!Number.isSafeInteger(input.proposedAmountMinorUnits) || input.proposedAmountMinorUnits <= 0) {
       throw new ValidationError("proposedAmountMinorUnits must be a positive integer.");
     }
     const detail = await this.deps.agreementService.getAgreement(input.agreementId, input.actingUserId);
@@ -175,7 +176,7 @@ export class PartialPaymentService {
     if (input.counterAmountMinorUnits === undefined || !input.counterDate) {
       throw new ValidationError("counterAmountMinorUnits and counterDate are required for a counteroffer.");
     }
-    if (!Number.isInteger(input.counterAmountMinorUnits) || input.counterAmountMinorUnits <= 0) {
+    if (!Number.isSafeInteger(input.counterAmountMinorUnits) || input.counterAmountMinorUnits <= 0) {
       throw new ValidationError("counterAmountMinorUnits must be a positive integer.");
     }
     const detail = await this.deps.agreementService.getAgreement(request.agreementId, input.actingUserId);

@@ -267,10 +267,13 @@ export function buildTerms(input: DraftTermsInput): { terms: AgreementTerms; sch
   requireNonEmpty(input.settlementRules, "settlementRules");
   requireNonEmpty(input.disputeProcedure, "disputeProcedure");
 
-  if (!Number.isInteger(input.originalAmountMinorUnits) || input.originalAmountMinorUnits <= 0) {
+  // PRSprint 17 (docs/prsprints/PRSPRINT_17_PAYMENT_SCHEDULE_MONETARY_MATH.md): Number.isSafeInteger
+  // — see schedule.ts's identical hardening rationale, applied consistently at every authoritative
+  // monetary-input boundary in this codebase.
+  if (!Number.isSafeInteger(input.originalAmountMinorUnits) || input.originalAmountMinorUnits <= 0) {
     throw new ValidationError("originalAmountMinorUnits must be a positive integer.");
   }
-  if (!Number.isInteger(input.previousPaymentsMinorUnits) || input.previousPaymentsMinorUnits < 0) {
+  if (!Number.isSafeInteger(input.previousPaymentsMinorUnits) || input.previousPaymentsMinorUnits < 0) {
     throw new ValidationError("previousPaymentsMinorUnits must be a non-negative integer.");
   }
   const currentPrincipalMinorUnits = input.originalAmountMinorUnits - input.previousPaymentsMinorUnits;

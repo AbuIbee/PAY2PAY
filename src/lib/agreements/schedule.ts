@@ -74,10 +74,16 @@ export function addFrequencyInterval(isoDate: string, frequency: PaymentFrequenc
  * (FR-FPAY-002 AC2), never spread across installments or silently dropped.
  */
 export function computeSchedule(input: ScheduleInput): ComputedSchedule {
-  if (!Number.isInteger(input.currentPrincipalMinorUnits) || input.currentPrincipalMinorUnits < 0) {
+  // PRSprint 17 (docs/prsprints/PRSPRINT_17_PAYMENT_SCHEDULE_MONETARY_MATH.md): Number.isSafeInteger
+  // (not merely Number.isInteger) — a value like 2**53 is technically an integer per Number.isInteger
+  // but cannot be represented exactly, which would let unsafe arithmetic silently corrupt a schedule.
+  // No master-spec-stated dollar minimum/maximum exists (checked docs/PAY2PAY_MASTER_SPEC.md — no
+  // match), so this is the one defensible bound: not a business rule, purely "this number can be
+  // trusted to add/subtract/compare exactly," which is the actual Hard Stop rule's concern.
+  if (!Number.isSafeInteger(input.currentPrincipalMinorUnits) || input.currentPrincipalMinorUnits < 0) {
     throw new ValidationError("currentPrincipalMinorUnits must be a non-negative integer.");
   }
-  if (!Number.isInteger(input.firstPaymentMinorUnits) || input.firstPaymentMinorUnits < 0) {
+  if (!Number.isSafeInteger(input.firstPaymentMinorUnits) || input.firstPaymentMinorUnits < 0) {
     throw new ValidationError("firstPaymentMinorUnits must be a non-negative integer.");
   }
   if (input.firstPaymentMinorUnits > input.currentPrincipalMinorUnits) {
@@ -96,7 +102,7 @@ export function computeSchedule(input: ScheduleInput): ComputedSchedule {
     return { items: [firstItem], finalPaymentMinorUnits: input.firstPaymentMinorUnits, numberOfInstallments: 0 };
   }
 
-  if (!Number.isInteger(input.installmentAmountMinorUnits) || input.installmentAmountMinorUnits <= 0) {
+  if (!Number.isSafeInteger(input.installmentAmountMinorUnits) || input.installmentAmountMinorUnits <= 0) {
     throw new ValidationError("installmentAmountMinorUnits must be a positive integer.");
   }
 

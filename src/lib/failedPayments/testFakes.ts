@@ -219,7 +219,12 @@ export function createTestFailedPaymentWorkflow(delayBusinessDays?: number) {
   const paymentRetryService = new PaymentRetryService({
     retries,
     paymentAttempts: ach.paymentCtx.payments,
-    initiators: { ach: ach.achPaymentService, debit_card: card.debitCardPaymentService },
+    initiators: {
+      ach: ach.achPaymentService,
+      debit_card: card.debitCardPaymentService,
+      // PRSprint 18: never invoked in practice — see getPaymentRetryService.ts's identical stub.
+      manual_off_platform: { createManualPayment: () => Promise.reject(new Error("not retryable")) },
+    },
     profileOwners: ach.paymentCtx.verificationCtx.profileOwners,
     audit: new AuditService(auditRepo),
     delayBusinessDays,

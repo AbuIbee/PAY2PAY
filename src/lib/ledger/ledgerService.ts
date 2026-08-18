@@ -143,16 +143,37 @@ export class LedgerService {
     }
     this.assertBalanced(postings);
 
-    const entry = await this.deps.entries.insert({
-      entryType: "payment_cleared",
-      agreementId: input.agreementId,
-      paymentAttemptId: input.paymentAttemptId,
-      currency: input.currency,
-      reason: null,
-      postings,
-    });
+    const entry = await this.insertIdempotently(
+      { entryType: "payment_cleared", agreementId: input.agreementId, paymentAttemptId: input.paymentAttemptId, currency: input.currency, reason: null, postings },
+    );
     await this.recordAudit(entry, "ledger_payment_cleared", null, "ledger_system");
     return entry;
+  }
+
+  /**
+   * PRSprint 20 (docs/prsprints/PRSPRINT_20_IDEMPOTENCY_CONCURRENCY_FINANCIAL_STATE_SAFETY.md):
+   * insert-then-recheck-on-conflict — mirrors PaymentService.reserveAttempt's and
+   * PaymentWebhookService.receiveWebhook's identical pattern. Every posting method above does its own
+   * `findByPaymentAndType` check before calling this, but that check-then-act is not atomic; the real
+   * DB's `(payment_attempt_id, entry_type)` unique index is what actually decides a winner between two
+   * truly concurrent callers, and this catches the loser's insert failure and returns the winner's
+   * already-posted entry instead of letting the error propagate as if posting had failed outright.
+   */
+  private async insertIdempotently(input: {
+    entryType: LedgerEntryType;
+    agreementId: string;
+    paymentAttemptId: string;
+    currency: string;
+    reason: string | null;
+    postings: LedgerPostingInput[];
+  }): Promise<LedgerJournalEntryRecord> {
+    try {
+      return await this.deps.entries.insert(input);
+    } catch (error) {
+      const raced = await this.deps.entries.findByPaymentAndType(input.paymentAttemptId, input.entryType);
+      if (raced) return raced;
+      throw error;
+    }
   }
 
   /**
@@ -200,14 +221,9 @@ export class LedgerService {
     }
     this.assertBalanced(postings);
 
-    const entry = await this.deps.entries.insert({
-      entryType: input.entryType,
-      agreementId: clearEntry.agreementId,
-      paymentAttemptId: input.paymentAttemptId,
-      currency: clearEntry.currency,
-      reason: input.reason,
-      postings,
-    });
+    const entry = await this.insertIdempotently(
+      { entryType: input.entryType, agreementId: clearEntry.agreementId, paymentAttemptId: input.paymentAttemptId, currency: clearEntry.currency, reason: input.reason, postings },
+    );
     await this.recordAudit(entry, `ledger_${input.entryType}`, null, "ledger_system");
     return entry;
   }
@@ -242,14 +258,9 @@ export class LedgerService {
     ];
     this.assertBalanced(postings);
 
-    const entry = await this.deps.entries.insert({
-      entryType: "payout",
-      agreementId: clearEntry.agreementId,
-      paymentAttemptId: input.paymentAttemptId,
-      currency: clearEntry.currency,
-      reason: input.reason ?? null,
-      postings,
-    });
+    const entry = await this.insertIdempotently(
+      { entryType: "payout", agreementId: clearEntry.agreementId, paymentAttemptId: input.paymentAttemptId, currency: clearEntry.currency, reason: input.reason ?? null, postings },
+    );
     await this.recordAudit(entry, "ledger_payout", null, "ledger_system");
     return entry;
   }
@@ -297,14 +308,26 @@ export class LedgerService {
     ];
     this.assertBalanced(postings);
 
-    const entry = await this.deps.entries.insert({
-      entryType: "admin_adjustment",
-      agreementId: input.agreementId,
-      paymentAttemptId: input.paymentAttemptId,
-      currency: input.currency,
-      reason: input.reason,
-      postings,
-    });
+    // PRSprint 20: unlike the other three posting methods, a second admin_adjustment is a genuine
+    // caller error (this method's own doc comment), not something to idempotently return — so a
+    // concurrent race between two callers must still surface as ConflictError, just via a race-safe
+    // path rather than letting a raw DB unique-constraint error leak through in place of the clean
+    // message a sequential second call already gets.
+    let entry: LedgerJournalEntryRecord;
+    try {
+      entry = await this.deps.entries.insert({
+        entryType: "admin_adjustment",
+        agreementId: input.agreementId,
+        paymentAttemptId: input.paymentAttemptId,
+        currency: input.currency,
+        reason: input.reason,
+        postings,
+      });
+    } catch (error) {
+      const raced = await this.deps.entries.findByPaymentAndType(input.paymentAttemptId, "admin_adjustment");
+      if (raced) throw new ConflictError("An administrative adjustment has already been posted for this payment.");
+      throw error;
+    }
     await this.recordAudit(entry, "ledger_admin_adjustment", input.actingUserId, "platform_owner");
     return entry;
   }
@@ -336,7 +359,8 @@ export class LedgerService {
   }
 
   private assertNonNegativeInteger(value: number, label: string): void {
-    if (!Number.isInteger(value) || value < 0) {
+    // PRSprint 17: Number.isSafeInteger — see schedule.ts's identical hardening rationale.
+    if (!Number.isSafeInteger(value) || value < 0) {
       throw new ValidationError(`${label} must be a non-negative integer.`);
     }
   }

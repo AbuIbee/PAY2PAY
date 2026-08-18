@@ -231,7 +231,11 @@ describe("PaymentRetryService", () => {
     const cardRetryService = new PaymentRetryService({
       retries,
       paymentAttempts: card.paymentCtx.payments,
-      initiators: { ach: unusedAch.achPaymentService, debit_card: card.debitCardPaymentService },
+      initiators: {
+        ach: unusedAch.achPaymentService,
+        debit_card: card.debitCardPaymentService,
+        manual_off_platform: { createManualPayment: () => Promise.reject(new Error("not retryable")) },
+      },
       profileOwners: card.paymentCtx.verificationCtx.profileOwners,
       audit: new AuditService(card.auditRepo),
       delayBusinessDays: 0,

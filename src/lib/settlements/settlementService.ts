@@ -102,10 +102,11 @@ export interface SettlementServiceDeps {
 }
 
 function validateTerms(terms: SettlementTerms): void {
-  if (!Number.isInteger(terms.preSettlementBalanceMinorUnits) || terms.preSettlementBalanceMinorUnits <= 0) {
+  // PRSprint 17: Number.isSafeInteger — see schedule.ts's identical hardening rationale.
+  if (!Number.isSafeInteger(terms.preSettlementBalanceMinorUnits) || terms.preSettlementBalanceMinorUnits <= 0) {
     throw new ValidationError("preSettlementBalanceMinorUnits must be a positive integer.");
   }
-  if (!Number.isInteger(terms.settlementAmountMinorUnits) || terms.settlementAmountMinorUnits <= 0) {
+  if (!Number.isSafeInteger(terms.settlementAmountMinorUnits) || terms.settlementAmountMinorUnits <= 0) {
     throw new ValidationError("settlementAmountMinorUnits must be a positive integer.");
   }
   if (terms.settlementAmountMinorUnits >= terms.preSettlementBalanceMinorUnits) {
@@ -116,7 +117,7 @@ function validateTerms(terms: SettlementTerms): void {
   }
   if (terms.failureConsequence === "restore_stated" || terms.failureConsequence === "forgive_permanently") {
     const stated = terms.failureConsequenceStatedAmountMinorUnits;
-    if (stated === undefined || !Number.isInteger(stated) || stated < 0) {
+    if (stated === undefined || !Number.isSafeInteger(stated) || stated < 0) {
       throw new ValidationError(`A non-negative failureConsequenceStatedAmountMinorUnits is required for the "${terms.failureConsequence}" failure consequence.`);
     }
   }
