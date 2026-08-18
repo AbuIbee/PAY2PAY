@@ -93,6 +93,58 @@ describe("computeSchedule", () => {
     expect(addFrequencyInterval("2028-01-31", "monthly", 1)).toBe("2028-02-29");
   });
 
+  it("a zero-principal schedule (debt already fully settled by prior payments) produces a single zero-amount first payment and no later installments", () => {
+    const result = computeSchedule({
+      currentPrincipalMinorUnits: 0,
+      firstPaymentMinorUnits: 0,
+      installmentAmountMinorUnits: 10_000,
+      frequency: "monthly",
+      firstPaymentDate: "2026-01-01",
+    });
+    expect(result.numberOfInstallments).toBe(0);
+    expect(result.items).toEqual([{ sequenceNumber: 0, dueDate: "2026-01-01", amountMinorUnits: 0 }]);
+    expect(result.finalPaymentMinorUnits).toBe(0);
+  });
+
+  it(
+    "PRSprint 17 (docs/prsprints/PRSPRINT_17_PAYMENT_SCHEDULE_MONETARY_MATH.md): rejects an unsafe " +
+      "integer amount (beyond Number.MAX_SAFE_INTEGER) rather than silently computing with a value " +
+      "that cannot be trusted to add/subtract/compare exactly",
+    () => {
+      const unsafe = Number.MAX_SAFE_INTEGER + 2; // still Number.isInteger(unsafe) === true
+      expect(() =>
+        computeSchedule({
+          currentPrincipalMinorUnits: unsafe,
+          firstPaymentMinorUnits: 0,
+          installmentAmountMinorUnits: 10_000,
+          frequency: "monthly",
+          firstPaymentDate: "2026-01-01",
+        }),
+      ).toThrow(ValidationError);
+      expect(() =>
+        computeSchedule({
+          currentPrincipalMinorUnits: 10_000,
+          firstPaymentMinorUnits: 0,
+          installmentAmountMinorUnits: unsafe,
+          frequency: "monthly",
+          firstPaymentDate: "2026-01-01",
+        }),
+      ).toThrow(ValidationError);
+    },
+  );
+
+  it("rejects a non-integer (fractional-cent) amount — the schema's own integer-minor-units invariant, enforced at the boundary, not merely by column type", () => {
+    expect(() =>
+      computeSchedule({
+        currentPrincipalMinorUnits: 10_000.5,
+        firstPaymentMinorUnits: 0,
+        installmentAmountMinorUnits: 1_000,
+        frequency: "monthly",
+        firstPaymentDate: "2026-01-01",
+      }),
+    ).toThrow(ValidationError);
+  });
+
   it("rejects an invalid firstPaymentDate", () => {
     expect(() =>
       computeSchedule({

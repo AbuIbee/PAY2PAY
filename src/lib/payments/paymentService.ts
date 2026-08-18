@@ -250,7 +250,9 @@ export class PaymentService {
       }
     }
 
-    if (!Number.isInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
+    // PRSprint 17: Number.isSafeInteger, not merely Number.isInteger — see schedule.ts's identical
+    // hardening for why (an integer past 2**53 cannot be trusted to add/subtract/compare exactly).
+    if (!Number.isSafeInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
       throw new ValidationError("amountMinorUnits must be a positive integer.");
     }
 

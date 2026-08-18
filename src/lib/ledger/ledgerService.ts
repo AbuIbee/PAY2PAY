@@ -336,7 +336,8 @@ export class LedgerService {
   }
 
   private assertNonNegativeInteger(value: number, label: string): void {
-    if (!Number.isInteger(value) || value < 0) {
+    // PRSprint 17: Number.isSafeInteger — see schedule.ts's identical hardening rationale.
+    if (!Number.isSafeInteger(value) || value < 0) {
       throw new ValidationError(`${label} must be a non-negative integer.`);
     }
   }

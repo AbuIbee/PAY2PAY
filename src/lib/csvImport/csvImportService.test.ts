@@ -57,6 +57,43 @@ describe("CsvImportService", () => {
     });
   });
 
+  describe("monetary parsing boundary (PRSprint 17 — docs/prsprints/PHASE_5_PREFLIGHT_FINDINGS.md §7 item 7)", () => {
+    it("converts dollar strings to exact integer minor units with no rounding drift, including $ and comma formatting", async () => {
+      const { businessId, ownerId } = await seedBusiness();
+      const csv = [
+        "customerEmail,customerName,invoiceReference,balance,installmentAmount,frequency,firstPaymentDate",
+        "penny@example.com,Penny Cents,INV-P,0.01,0.01,monthly,2026-03-01",
+        "dollar@example.com,Dollar Amt,INV-D,1234567.89,100.00,monthly,2026-03-01",
+        "formatted@example.com,Formatted Amt,INV-F,\"$1,200.00\",\"$200.00\",monthly,2026-03-01",
+      ].join("\n");
+      const { rows } = await ctx.csvImportService.uploadBatch({ businessProfileId: businessId, actingUserId: ownerId, fileName: "boundary.csv", csvContent: csv });
+      // Exact — never off by a cent from an accumulated floating-point remainder.
+      expect(rows[0]?.balanceMinorUnits).toBe(1);
+      expect(rows[1]?.balanceMinorUnits).toBe(123_456_789);
+      expect(rows[2]?.balanceMinorUnits).toBe(120_000);
+      expect(rows[2]?.proposedInstallmentAmountMinorUnits).toBe(20_000);
+    });
+
+    it("rejects malformed monetary input (more than 2 decimal places, negative, non-numeric) rather than silently coercing it", async () => {
+      const { businessId, ownerId } = await seedBusiness();
+      const csv = [
+        "customerEmail,customerName,invoiceReference,balance,installmentAmount,frequency,firstPaymentDate",
+        "threeDecimals@example.com,Three Decimals,INV-1,100.005,50.00,monthly,2026-03-01",
+        "negative@example.com,Negative,INV-2,-100.00,50.00,monthly,2026-03-01",
+        "nonnumeric@example.com,Non Numeric,INV-3,not-a-number,50.00,monthly,2026-03-01",
+      ].join("\n");
+      const { batch } = await ctx.csvImportService.uploadBatch({ businessProfileId: businessId, actingUserId: ownerId, fileName: "malformed.csv", csvContent: csv });
+      const { rows } = await ctx.csvImportService.validateBatch(batch.id, ownerId);
+      // Every malformed balance parses to null -> defaults to 0 -> fails the ">0" check explicitly,
+      // rather than silently truncating/rounding to some other dollar amount.
+      for (const row of rows) {
+        expect(row.balanceMinorUnits).toBe(0);
+        expect(row.validationStatus).toBe("invalid");
+        expect(row.validationErrors).toContain("balance must be a positive dollar amount.");
+      }
+    });
+  });
+
   describe("invalid row", () => {
     it("flags a row with a bad email, non-positive balance, and invalid date, without blocking other rows", async () => {
       const { businessId, ownerId } = await seedBusiness();
