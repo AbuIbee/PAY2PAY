@@ -12,14 +12,14 @@ export default function TermsPage() {
       intro="The rules for using PAY2PAY — not yet finalized."
     >
       <p>
-        PAY2PAY is currently in its product-development stage. No accounts, agreements,
-        signatures, or payments are enabled on this site, so no service is being provided under
-        these terms yet. Submitting the early-access form does not create a binding agreement of
-        any kind between you and PAY2PAY.
+        PAY2PAY is currently in pre-launch testing. Account, agreement, signature, and payment
+        functionality exists in the product for testing purposes, but no version of these Terms of
+        Service has yet been reviewed by counsel, and no functionality here should be relied on as
+        a finished, legally binding commercial service.
       </p>
       <p>
-        Complete terms of service will be published, after legal review, before any account,
-        agreement, or payment functionality goes live.
+        Complete, counsel-reviewed terms of service will be published before any public or
+        production launch.
       </p>
     </LegalPlaceholder>
   );

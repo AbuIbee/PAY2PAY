@@ -18,6 +18,27 @@ export function AccountDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [mfaStep, setMfaStep] = useState<MfaEnrollStep>("choose");
   const [totpSecret, setTotpSecret] = useState<string | null>(null);
+  const [exportStatus, setExportStatus] = useState<"idle" | "working" | "error">("idle");
+
+  async function handleExportData() {
+    setExportStatus("working");
+    try {
+      const response = await fetch("/api/account/export");
+      if (!response.ok) throw new Error("export failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `pay2pay-data-export-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setExportStatus("idle");
+    } catch {
+      setExportStatus("error");
+    }
+  }
   const [totpUri, setTotpUri] = useState<string | null>(null);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [mfaMessage, setMfaMessage] = useState<string | null>(null);
@@ -230,6 +251,23 @@ export function AccountDashboard() {
         {mfaError ? (
           <p className="form-status form-status--error" role="alert">
             {mfaError}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="early-access-form">
+        <h2 style={{ margin: 0, fontSize: "1.1rem" }}>Your data</h2>
+        <p style={{ margin: 0, color: "var(--ink-soft)", fontSize: "0.9rem" }}>
+          Download a copy of your account information, agreements, and consent history as a JSON file.
+        </p>
+        <div className="hero__actions">
+          <button type="button" className="button button--ghost" disabled={exportStatus === "working"} onClick={() => void handleExportData()}>
+            {exportStatus === "working" ? "Preparing…" : "Download my data"}
+          </button>
+        </div>
+        {exportStatus === "error" ? (
+          <p className="form-status form-status--error" role="alert">
+            We couldn&apos;t prepare your data export. Please try again.
           </p>
         ) : null}
       </div>
