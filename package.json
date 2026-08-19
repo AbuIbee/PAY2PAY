@@ -13,6 +13,9 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check-drift": "node scripts/check-schema-drift.mjs",
+    "db:fresh-migration-test": "node scripts/apply-migrations-fresh.mjs",
+    "db:check-migration-safety": "node scripts/check-migration-safety.mjs",
+    "smoke-test": "node scripts/smoke-test.mjs",
     "test:tooling": "node --test scripts/*.test.mjs"
   },
   "dependencies": {

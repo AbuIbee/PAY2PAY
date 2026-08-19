@@ -48,11 +48,16 @@ history:
   session has performed (Phase 5/6/6A/7) is still listed via `vercel ls pay-2-pay --prod` with its own
   stable URL; `vercel rollback` (or promoting a prior deployment via the Vercel dashboard/CLI) points
   production traffic at any previous immutable build without a new code change.
-- **Every deploy to `master` is gated by CI** (lint/typecheck/test/build, and — on the `master` push
-  specifically — the Supabase schema drift check; see `docs/OPERATIONS_CI_CD.md` §1). A bad deploy
-  requires either a CI failure to have been bypassed (it can't be, on the required branch) or a defect
-  that passed all gates — in the latter case, rollback is "promote the previous Vercel deployment,"
-  which requires no database change and is safe by construction (see §4).
+- **CI runs on every push/PR to `master`** (lint/typecheck/test/build, a fresh-database migration
+  test, and — on the `master` push specifically — the Supabase schema drift check; see
+  `docs/OPERATIONS_CI_CD.md` §1). **Correction (PRSprint 30):** this section previously claimed a bad
+  deploy "requires... a CI failure to have been bypassed (it can't be, on the required branch)" — that
+  was inaccurate. PRSprint 30 checked directly (`gh api repos/AbuIbee/PAY2PAY/branches/master/
+  protection`) and found `master` has no branch protection configured at all: CI is visible but not
+  currently enforced as a merge/push gate. See `docs/OPERATIONS_CI_CD.md` §2 for the full finding and
+  the options flagged for Product Owner decision. Rollback itself is unaffected by this: "promote the
+  previous Vercel deployment" requires no database change and is safe by construction regardless of
+  how a bad deploy got there (see §4).
 - **Migration rollback strategy**: this project has no automated "down" migrations (standard for this
   codebase's drizzle-kit-generated migration style — every migration to date has been additive:
   new tables/columns, never a destructive `DROP`/`ALTER ... TYPE` that would need reversing). The
