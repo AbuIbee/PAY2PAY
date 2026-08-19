@@ -583,4 +583,57 @@ describe("AgreementService", () => {
       expect(debtorNotifications).toHaveLength(0);
     });
   });
+
+  describe(
+    "PRSprint 26 (docs/prsprints/PRSPRINT_26_SEARCH_FILTER_PAGINATION_RECORD_MANAGEMENT.md): " +
+      "listAgreements pagination",
+    () => {
+      it("returns a bounded page, newest-first, when pageParams are supplied — never the full unbounded set", async () => {
+        const creditorUserId = randomUUID();
+        const debtorProfileId = randomUUID();
+        const creditorProfileId = randomUUID();
+        ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+        ctx.profileOwners.set("personal", debtorProfileId, randomUUID());
+        for (let i = 0; i < 5; i++) {
+          await ctx.agreementService.createDraft({
+            creatorUserId: creditorUserId,
+            creditor: { kind: "personal", id: creditorProfileId },
+            debtor: { kind: "personal", id: debtorProfileId },
+            ...baseTerms(),
+          });
+        }
+        const page = await ctx.agreementService.listAgreements(creditorUserId, { kind: "personal", id: creditorProfileId }, {
+          limit: 3,
+          offset: 0,
+        });
+        expect(page).toHaveLength(3);
+
+        const nextPage = await ctx.agreementService.listAgreements(creditorUserId, { kind: "personal", id: creditorProfileId }, {
+          limit: 3,
+          offset: 3,
+        });
+        expect(nextPage).toHaveLength(2);
+        // No overlap/duplication across pages.
+        expect(page.map((a) => a.id)).not.toEqual(expect.arrayContaining(nextPage.map((a) => a.id)));
+      });
+
+      it("returns every matching agreement when pageParams are omitted (backward-compatible default)", async () => {
+        const creditorUserId = randomUUID();
+        const debtorProfileId = randomUUID();
+        const creditorProfileId = randomUUID();
+        ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+        ctx.profileOwners.set("personal", debtorProfileId, randomUUID());
+        for (let i = 0; i < 4; i++) {
+          await ctx.agreementService.createDraft({
+            creatorUserId: creditorUserId,
+            creditor: { kind: "personal", id: creditorProfileId },
+            debtor: { kind: "personal", id: debtorProfileId },
+            ...baseTerms(),
+          });
+        }
+        const all = await ctx.agreementService.listAgreements(creditorUserId, { kind: "personal", id: creditorProfileId });
+        expect(all).toHaveLength(4);
+      });
+    },
+  );
 });

@@ -8,6 +8,7 @@ import type { AuthService } from "@/lib/auth/authService";
 import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
 import { ValidationError } from "@/lib/errors";
+import { parsePageParams, toPage } from "@/lib/pagination";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,19 +55,27 @@ export function createAgreementListHandler(authService: AuthService, agreementSe
     });
     if (!parsed.success) throw new ValidationError("profileKind and profileId are required.");
 
-    const agreements = await agreementService.listAgreements(userId, {
-      kind: parsed.data.profileKind,
-      id: parsed.data.profileId,
-    });
+    // PRSprint 26 (docs/prsprints/PRSPRINT_26_SEARCH_FILTER_PAGINATION_RECORD_MANAGEMENT.md):
+    // server-side pagination — never an unbounded browser load, newest-first, stable across pages.
+    const pageParams = parsePageParams(url.searchParams);
+    const agreements = await agreementService.listAgreements(
+      userId,
+      { kind: parsed.data.profileKind, id: parsed.data.profileId },
+      { limit: pageParams.limit + 1, offset: pageParams.offset },
+    );
+    const page = toPage(agreements, pageParams);
     return NextResponse.json(
       {
-        agreements: agreements.map((a) => ({
+        agreements: page.items.map((a) => ({
           id: a.id,
           status: a.status,
           currency: a.currency,
           relationshipShape: agreementService.relationshipShape(a),
           createdAt: a.createdAt,
         })),
+        limit: page.limit,
+        offset: page.offset,
+        hasMore: page.hasMore,
       },
       { status: 200 },
     );

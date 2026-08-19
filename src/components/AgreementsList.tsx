@@ -37,6 +37,8 @@ export function AgreementsList() {
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [active, setActive] = useState<SelectableProfile | null>(null);
   const [agreements, setAgreements] = useState<AgreementSummary[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
 
   const [myRole, setMyRole] = useState<"creditor" | "debtor">("creditor");
@@ -69,10 +71,27 @@ export function AgreementsList() {
       setLoadStatus("error");
       return;
     }
-    const body = (await listResponse.json()) as { agreements: AgreementSummary[] };
+    const body = (await listResponse.json()) as { agreements: AgreementSummary[]; hasMore: boolean };
     setAgreements(body.agreements);
+    setHasMore(body.hasMore);
     setLoadStatus("ready");
   }, []);
+
+  async function handleLoadMore() {
+    if (!active || loadingMore) return;
+    const ref = activeProfileRef(active);
+    if (!ref) return;
+    setLoadingMore(true);
+    try {
+      const response = await fetch(`/api/agreements?profileKind=${ref.kind}&profileId=${ref.id}&offset=${agreements.length}`);
+      if (!response.ok) return;
+      const body = (await response.json()) as { agreements: AgreementSummary[]; hasMore: boolean };
+      setAgreements((prev) => [...prev, ...body.agreements]);
+      setHasMore(body.hasMore);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -158,6 +177,17 @@ export function AgreementsList() {
               </li>
             ))}
           </ul>
+        )}
+        {hasMore && (
+          <button
+            type="button"
+            className="button button--ghost"
+            style={{ marginTop: "1rem" }}
+            onClick={() => void handleLoadMore()}
+            disabled={loadingMore}
+          >
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
         )}
       </div>
 

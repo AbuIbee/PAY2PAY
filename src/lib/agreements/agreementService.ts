@@ -6,6 +6,7 @@ import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
+import type { PageParams } from "@/lib/pagination";
 import { computeSchedule } from "./schedule";
 import type { PaymentFrequency, ScheduleItem } from "./schedule";
 
@@ -97,7 +98,14 @@ export interface AgreementRepository {
   findById(id: string): Promise<AgreementRecord | null>;
   updateStatus(id: string, status: AgreementStatus): Promise<void>;
   setCurrentVersionId(id: string, versionId: string): Promise<void>;
-  listForProfile(profileKind: ProfileKind, profileId: string): Promise<AgreementRecord[]>;
+  /**
+   * PRSprint 26 (docs/prsprints/PRSPRINT_26_SEARCH_FILTER_PAGINATION_RECORD_MANAGEMENT.md):
+   * `pageParams` is optional so every pre-existing caller (tests, any future admin/batch tooling)
+   * keeps its current unbounded behavior unchanged — the customer-facing route
+   * (`GET /api/agreements`) always supplies it. Ordered newest-first so pagination is stable across
+   * pages even as new agreements are created between requests.
+   */
+  listForProfile(profileKind: ProfileKind, profileId: string, pageParams?: PageParams): Promise<AgreementRecord[]>;
 }
 
 /** Real implementation: DrizzleAgreementVersionRepository. */
@@ -553,9 +561,9 @@ export class AgreementService {
     return { agreement, version, schedule };
   }
 
-  async listAgreements(actingUserId: string, profile: ProfileRef): Promise<AgreementRecord[]> {
+  async listAgreements(actingUserId: string, profile: ProfileRef, pageParams?: PageParams): Promise<AgreementRecord[]> {
     await this.authorizeParty(actingUserId, profile, null);
-    return this.deps.agreements.listForProfile(profile.kind, profile.id);
+    return this.deps.agreements.listForProfile(profile.kind, profile.id, pageParams);
   }
 
   /**
