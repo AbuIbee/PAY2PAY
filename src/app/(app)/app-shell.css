@@ -68,6 +68,8 @@
   backdrop-filter: blur(12px);
 }
 .app-topbar__brand { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 850; letter-spacing: -0.03em; color: var(--forest-950); text-decoration: none; }
+/* PRSprint 27: persistent "acting as business" cue on mobile, where the sidebar (and its always-visible .app-nav__user block) is hidden behind the drawer by default. */
+.app-topbar__acting-as { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 0.75rem; font-weight: 650; color: var(--ink-soft); }
 .app-topbar__actions { display: flex; align-items: center; gap: var(--space-2); }
 .app-topbar__button {
   padding: 0.5rem 0.85rem;

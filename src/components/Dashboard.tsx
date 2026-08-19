@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { BusinessProfileForm } from "./BusinessProfileForm";
+import { OnboardingBanner } from "./OnboardingBanner";
 import { ProfileSwitcher, type SelectableProfile } from "./ProfileSwitcher";
 import { formatMoney } from "@/lib/ui/money";
 
@@ -19,8 +20,7 @@ interface BusinessDashboardData {
   payablesMinorUnits: number;
   agreements: unknown[];
   customers: unknown[];
-  staffPlaceholder: boolean;
-  reportsPlaceholder: boolean;
+  staffCount: number;
 }
 
 type LoadStatus = "loading" | "ready" | "unauthorized" | "error";
@@ -177,6 +177,8 @@ export function Dashboard() {
 
   return (
     <div style={{ display: "grid", gap: "2rem" }}>
+      {active && <OnboardingBanner kind={active.kind} />}
+
       <div className="hero__actions" style={{ alignItems: "flex-end" }}>
         <ProfileSwitcher profiles={profiles} activeKey={activeKeyFor(active)} onSwitch={(p) => void handleSwitch(p)} />
         <BusinessProfileForm onCreated={() => void loadAll()} />
@@ -199,6 +201,10 @@ export function Dashboard() {
           <div className="stat-card">
             <span className="stat-card__label">Upcoming payments</span>
             <span className="stat-card__value">{personalData.upcomingPayments.length}</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-card__label">Action required</span>
+            <span className="stat-card__value">{personalData.requests.length}</span>
           </div>
         </div>
       ) : null}
@@ -224,9 +230,10 @@ export function Dashboard() {
         </div>
       ) : null}
 
-      {active?.kind === "business" && (
+      {active?.kind === "business" && businessData && (
         <p style={{ margin: 0 }}>
-          <Link href="/organization/staff">Manage staff</Link> for {active.displayName}.
+          <Link href="/organization/staff">Manage staff</Link> for {active.displayName} ({businessData.staffCount}{" "}
+          {businessData.staffCount === 1 ? "member" : "members"}).
         </p>
       )}
 

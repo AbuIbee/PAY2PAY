@@ -3,26 +3,111 @@ import { withErrorHandling } from "@/lib/api-handler";
 import type { AuthService } from "@/lib/auth/authService";
 import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
+import type { AgreementRecord, AgreementService } from "@/lib/agreements/agreementService";
+import { getAgreementService } from "@/lib/agreements/getAgreementService";
+import type { BalanceService } from "@/lib/ledger/balanceService";
+import { getBalanceService } from "@/lib/ledger/getBalanceService";
+import type { ProfileAccessService } from "@/lib/profiles/profileAccessService";
+import { getProfileAccessService } from "@/lib/profiles/getProfileAccessService";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Sprint 3's personal dashboard: "No fake financial data. Empty state
- * values must reflect actual stored data." No agreement/payment/request
- * tables exist yet (Sprint 5+/9+/16+), so every value here is honestly
- * zero/empty rather than a placeholder number — there is nothing to sum yet.
+ * PRSprint 27 (docs/prsprints/PRSPRINT_27_DASHBOARDS_ONBOARDING_ROLE_AWARE_UX.md): an agreement only
+ * has a real, ledger-reconstructable balance once both parties have signed — draft/pre-signature
+ * statuses (draft, awaiting_debtor_acknowledgment, awaiting_creditor_acceptance, awaiting_signatures)
+ * have no BalanceService.getAgreementBalance answer yet (AgreementTermsReader keys off a *signed*
+ * version's terms). closed/paid_in_full/settled_in_full/mutually_canceled/closed are resolved — no
+ * outstanding balance to surface on a dashboard.
  */
-export function createPersonalDashboardHandler(authService: AuthService) {
+const BALANCE_ELIGIBLE_STATUSES = new Set(["signed", "first_payment_pending", "active", "past_due", "disputed", "paused_by_amendment"]);
+
+interface DashboardAgreementSummary {
+  id: string;
+  status: string;
+}
+
+interface UpcomingPayment {
+  agreementId: string;
+  dueDate: string;
+  amountMinorUnits: number;
+}
+
+interface ActionRequiredItem {
+  agreementId: string;
+  reason: "awaiting_your_acknowledgment" | "awaiting_your_decision" | "awaiting_your_signature";
+}
+
+function roleFor(agreement: AgreementRecord, profileId: string): "creditor" | "debtor" | null {
+  if (agreement.creditorProfileKind === "personal" && agreement.creditorProfileId === profileId) return "creditor";
+  if (agreement.debtorProfileKind === "personal" && agreement.debtorProfileId === profileId) return "debtor";
+  return null;
+}
+
+/**
+ * Sprint 3's personal dashboard, made real for PRSprint 27 — the original handler unconditionally
+ * returned zeros/empty arrays ("No agreement/payment/request tables exist yet"), which stopped being
+ * true as of Sprint 5/9/16 but was never revisited. `moneyIOweMinorUnits`/`moneyOwedToMeMinorUnits`
+ * are the ledger-reconstructed remaining balance (BalanceService — never a cached/mutable field) summed
+ * across every signed, unresolved agreement where this profile is debtor/creditor respectively.
+ * `requests` surfaces agreements genuinely awaiting *this user's* decision (not yet signed by them, or
+ * awaiting their creditor-acceptance/debtor-acknowledgment) — "action required" per the spec, computed
+ * from data already on hand rather than a second unrelated query.
+ */
+export function createPersonalDashboardHandler(authService: AuthService, profileAccess: ProfileAccessService, agreementService: AgreementService, balanceService: BalanceService) {
   return async function handleDashboard(request: NextRequest): Promise<Response> {
-    await requireSession(request, authService);
+    const { userId } = await requireSession(request, authService);
+    const profile = await profileAccess.resolveActiveProfile(userId, { kind: "personal" });
+    const profileId = profile.personalProfileId!;
+
+    const agreements = await agreementService.listAgreements(userId, { kind: "personal", id: profileId });
+
+    const today = new Date().toISOString().slice(0, 10);
+    let moneyIOweMinorUnits = 0;
+    let moneyOwedToMeMinorUnits = 0;
+    const upcomingPayments: UpcomingPayment[] = [];
+    const requests: ActionRequiredItem[] = [];
+
+    for (const agreement of agreements) {
+      const role = roleFor(agreement, profileId);
+
+      if (BALANCE_ELIGIBLE_STATUSES.has(agreement.status)) {
+        const balance = await balanceService.getAgreementBalance(agreement.id);
+        if (role === "debtor") moneyIOweMinorUnits += balance.remainingBalanceMinorUnits;
+        if (role === "creditor") moneyOwedToMeMinorUnits += balance.remainingBalanceMinorUnits;
+
+        const detail = await agreementService.getAgreement(agreement.id, userId);
+        for (const item of detail.schedule) {
+          if (item.dueDate >= today) {
+            upcomingPayments.push({ agreementId: agreement.id, dueDate: item.dueDate, amountMinorUnits: item.amountMinorUnits });
+          }
+        }
+        continue;
+      }
+
+      if (agreement.status === "awaiting_creditor_acceptance" && role === "creditor") {
+        requests.push({ agreementId: agreement.id, reason: "awaiting_your_decision" });
+      } else if (agreement.status === "awaiting_debtor_acknowledgment" && role === "debtor") {
+        requests.push({ agreementId: agreement.id, reason: "awaiting_your_acknowledgment" });
+      } else if (agreement.status === "awaiting_signatures") {
+        const detail = await agreementService.getAgreement(agreement.id, userId);
+        const alreadySigned = role === "debtor" ? detail.version.debtorSignedAt : detail.version.creditorSignedAt;
+        if (!alreadySigned) requests.push({ agreementId: agreement.id, reason: "awaiting_your_signature" });
+      }
+    }
+
+    upcomingPayments.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
+    const summaries: DashboardAgreementSummary[] = agreements.map((a) => ({ id: a.id, status: a.status }));
+
     return NextResponse.json(
       {
-        moneyIOweMinorUnits: 0,
-        moneyOwedToMeMinorUnits: 0,
-        agreements: [],
-        upcomingPayments: [],
-        requests: [],
+        moneyIOweMinorUnits,
+        moneyOwedToMeMinorUnits,
+        agreements: summaries,
+        upcomingPayments: upcomingPayments.slice(0, 10),
+        requests,
       },
       { status: 200 },
     );
@@ -30,7 +115,7 @@ export function createPersonalDashboardHandler(authService: AuthService) {
 }
 
 async function handleDashboard(request: NextRequest): Promise<Response> {
-  return createPersonalDashboardHandler(getAuthService())(request);
+  return createPersonalDashboardHandler(getAuthService(), getProfileAccessService(), getAgreementService(), getBalanceService())(request);
 }
 
 export const GET = withErrorHandling("dashboard_personal", handleDashboard);
