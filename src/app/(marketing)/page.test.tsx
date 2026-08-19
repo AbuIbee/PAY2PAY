@@ -13,11 +13,24 @@ describe("HomePage", () => {
     ).toBeInTheDocument();
   });
 
-  it("truthfully states agreements and payments are live for signed-up users", () => {
+  it(
+    "Phase 6A (docs/prsprints/PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md): no longer presents " +
+      "an early-access / in-active-development landing section",
+    () => {
+      render(<HomePage />);
+      expect(screen.queryByText(/get on the early-access list/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/in active development/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole("form", { name: /early access/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/joining early access does not create an account/i)).not.toBeInTheDocument();
+    },
+  );
+
+  it("does not present the product as a sandbox or development demo", () => {
     render(<HomePage />);
-    expect(
-      screen.getByText(/account creation, agreements, signatures, and payments are live for signed-up users/i),
-    ).toBeInTheDocument();
+    const bodyText = document.body.textContent ?? "";
+    expect(bodyText.toLowerCase()).not.toContain("sandbox");
+    expect(bodyText.toLowerCase()).not.toContain("test payment");
+    expect(bodyText.toLowerCase()).not.toContain("development-only");
   });
 
   it("states the platform is not a lender or guarantor", () => {

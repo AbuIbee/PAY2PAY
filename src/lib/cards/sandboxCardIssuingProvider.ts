@@ -107,7 +107,7 @@ export class SandboxCardIssuingProvider implements CardIssuingProvider {
 
   private requireCard(providerCardRef: string): StoredSandboxCard {
     const card = this.cards.get(providerCardRef);
-    if (!card) throw new ValidationError("Unknown sandbox card reference.");
+    if (!card) throw new ValidationError("Unknown card reference.");
     return card;
   }
 }
