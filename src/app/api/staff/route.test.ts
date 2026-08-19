@@ -94,4 +94,36 @@ describe("GET /api/staff", () => {
       expect(row.name === null || row.name.length > 0).toBe(true);
     }
   });
+
+  it("PRSprint 31 (IDOR): a staff member of a different business cannot list this business's roster by supplying its businessProfileId", async () => {
+    const authCtx = createTestAuthService();
+    const { staffService, staffMembers } = createTestStaffService();
+    const targetOwner = await authCtx.authService.signup({
+      email: "target-owner@example.com",
+      password: "a-strong-password",
+      dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
+      ipAddress: null,
+      userAgent: null,
+    });
+    const outsider = await authCtx.authService.signup({
+      email: "outsider-owner@example.com",
+      password: "a-strong-password",
+      dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
+      ipAddress: null,
+      userAgent: null,
+    });
+    const targetBusinessId = "target-biz";
+    const outsiderBusinessId = "outsider-biz";
+    await staffMembers.insert({ businessProfileId: targetBusinessId, userId: targetOwner.user.id, role: "owner", customRoleId: null, isAuthorizedRepresentative: true });
+    // The outsider IS a legitimate, active staff member — just of a *different* business — proving
+    // this isn't caught merely by "not staff anywhere," which the existing 401/400 tests don't cover.
+    await staffMembers.insert({ businessProfileId: outsiderBusinessId, userId: outsider.user.id, role: "owner", customRoleId: null, isAuthorizedRepresentative: true });
+
+    const response = await withErrorHandling("staff_list", createStaffListHandler(authCtx.authService, staffService, new FakeStaffDisplayReader()))(
+      new NextRequest(`http://localhost/api/staff?businessProfileId=${targetBusinessId}`, {
+        headers: { cookie: `p2p_session=${outsider.token}` },
+      }),
+    );
+    expect(response.status).toBe(403);
+  });
 });

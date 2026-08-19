@@ -109,34 +109,50 @@ export class DrizzleAgreementInvitationRepository implements AgreementInvitation
     return toRecord(rows[0]!);
   }
 
-  async markAccepted(id: string, input: { acceptedAt: Date; claimedAt: Date; agreementId: string }): Promise<AgreementInvitationRecord> {
+  /**
+   * PRSprint 31: atomic `WHERE status IN ('pending','viewed')` — see claimAcceptance's own doc
+   * comment on the AgreementInvitationRepository interface for the real financial-integrity bug this
+   * closes. Returns `null`, never throws, when another decision already won the race.
+   */
+  async claimAcceptance(id: string, acceptedAt: Date): Promise<AgreementInvitationRecord | null> {
     const db = getDb();
     const rows = await db
       .update(agreementInvitation)
-      .set({ status: "accepted", ...input, updatedAt: new Date() })
+      .set({ status: "accepted", acceptedAt, updatedAt: new Date() })
+      .where(and(eq(agreementInvitation.id, id), inArray(agreementInvitation.status, ["pending", "viewed"])))
+      .returning();
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  /** Unconditional — only ever called after claimAcceptance already won the race for this id, so there is nothing left to guard against. */
+  async attachAcceptedAgreement(id: string, input: { claimedAt: Date; agreementId: string }): Promise<AgreementInvitationRecord> {
+    const db = getDb();
+    const rows = await db
+      .update(agreementInvitation)
+      .set({ ...input, updatedAt: new Date() })
       .where(eq(agreementInvitation.id, id))
       .returning();
     return toRecord(rows[0]!);
   }
 
-  async markDeclined(id: string, declinedAt: Date): Promise<AgreementInvitationRecord> {
+  async markDeclined(id: string, declinedAt: Date): Promise<AgreementInvitationRecord | null> {
     const db = getDb();
     const rows = await db
       .update(agreementInvitation)
       .set({ status: "declined", declinedAt, updatedAt: new Date() })
-      .where(eq(agreementInvitation.id, id))
+      .where(and(eq(agreementInvitation.id, id), inArray(agreementInvitation.status, ["pending", "viewed"])))
       .returning();
-    return toRecord(rows[0]!);
+    return rows[0] ? toRecord(rows[0]) : null;
   }
 
-  async markRevoked(id: string, revokedAt: Date): Promise<AgreementInvitationRecord> {
+  async markRevoked(id: string, revokedAt: Date): Promise<AgreementInvitationRecord | null> {
     const db = getDb();
     const rows = await db
       .update(agreementInvitation)
       .set({ status: "revoked", revokedAt, updatedAt: new Date() })
-      .where(eq(agreementInvitation.id, id))
+      .where(and(eq(agreementInvitation.id, id), inArray(agreementInvitation.status, ["pending", "viewed"])))
       .returning();
-    return toRecord(rows[0]!);
+    return rows[0] ? toRecord(rows[0]) : null;
   }
 
   async markExpired(id: string): Promise<AgreementInvitationRecord> {
