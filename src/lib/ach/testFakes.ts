@@ -25,6 +25,7 @@ export class InMemoryAchMandateRepository implements AchMandateRepository {
       authorizedAt: now,
       revokedAt: null,
       revokedReason: null,
+      financialAccountId: null,
       createdAt: now,
       ...input,
     };

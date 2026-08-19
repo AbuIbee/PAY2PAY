@@ -54,6 +54,13 @@ export interface PaymentAttemptRecord {
   recordedByUserId: string | null;
   /** PRSprint 18: optional, purely evidentiary counterparty confirmation of a manual attempt — see paymentService.ts's recordManualOffPlatformPayment doc comment. */
   recipientConfirmedAt: Date | null;
+  /**
+   * Phase 6A Ledger Payment-Source Rule: which internal `financial_account` (bank connection) funded
+   * this attempt — never a routing/account number. Set only for an ACH attempt whose active mandate
+   * carries a known `financial_account_id` (see achMandateFinancialAccountAdapter.ts); null for
+   * debit_card/manual_off_platform attempts and for every pre-Phase-6A row.
+   */
+  bankConnectionId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -84,6 +91,8 @@ export interface PaymentAttemptRepository {
     paymentMethod?: PaymentMethod | null;
     /** PRSprint 18: who recorded a "manual_off_platform" attempt. */
     recordedByUserId?: string | null;
+    /** Phase 6A: which internal financial_account (bank connection) funded this attempt, if known. */
+    bankConnectionId?: string | null;
   }): Promise<PaymentAttemptRecord>;
   updateStatus(
     id: string,
@@ -276,6 +285,7 @@ export class PaymentService {
       actingUserId: string;
       installmentScheduleItemId?: string | null;
       paymentMethod?: PaymentMethod | null;
+      bankConnectionId?: string | null;
     },
     initialStatus: PaymentAttemptStatus = "scheduled",
   ): Promise<PaymentAttemptRecord> {
@@ -316,6 +326,7 @@ export class PaymentService {
       actingUserId: string;
       installmentScheduleItemId?: string | null;
       paymentMethod?: PaymentMethod | null;
+      bankConnectionId?: string | null;
     },
     initialStatus?: PaymentAttemptStatus,
   ): Promise<{ record: PaymentAttemptRecord; alreadyResolved: boolean }> {
@@ -386,6 +397,7 @@ export class PaymentService {
         installmentScheduleItemId: input.installmentScheduleItemId ?? null,
         initialStatus,
         paymentMethod: input.paymentMethod ?? null,
+        bankConnectionId: input.bankConnectionId ?? null,
       });
       return { record, alreadyResolved: false };
     } catch (error) {

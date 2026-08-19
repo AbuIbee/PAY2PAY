@@ -2,7 +2,7 @@ import "server-only";
 import { ConflictError, ValidationError } from "@/lib/errors";
 import type { ProfileRef } from "@/lib/payments/paymentProvider";
 import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentService } from "@/lib/payments/paymentService";
-import type { AchMandateService } from "./achMandateService";
+import type { AchMandateRecord, AchMandateService } from "./achMandateService";
 
 /**
  * Sprint 11 (docs/sprints/SPRINT_11_ACH_Sandbox.md) ACH-specific orchestration on top of Sprint 9's
@@ -41,7 +41,7 @@ export class AchPaymentService {
     currency: string;
     actingUserId: string;
   }): Promise<PaymentAttemptRecord> {
-    await this.requireActiveMandate(input.agreementId);
+    const mandate = await this.requireActiveMandate(input.agreementId);
 
     const existingOpen = await this.deps.paymentAttempts.findOpenByInstallment(input.installmentScheduleItemId);
     if (existingOpen) {
@@ -63,6 +63,9 @@ export class AchPaymentService {
         // requires ("must separately track ACH and card payment states"), and Sprint 13's own retry
         // firing needs it to know which method-specific service to retry through.
         paymentMethod: "ach",
+        // Phase 6A Ledger Payment-Source Rule: null when the active mandate has no known internal
+        // bank-connection record (a mandate authorized outside the relationship flow).
+        bankConnectionId: mandate.financialAccountId,
       },
       "scheduled",
     );
@@ -92,7 +95,7 @@ export class AchPaymentService {
     actingUserId: string;
     installmentScheduleItemId?: string;
   }): Promise<PaymentAttemptRecord> {
-    await this.requireActiveMandate(input.agreementId);
+    const mandate = await this.requireActiveMandate(input.agreementId);
     const scheduled = await this.deps.payments.schedulePayment(
       {
         idempotencyKey: input.idempotencyKey,
@@ -104,6 +107,7 @@ export class AchPaymentService {
         actingUserId: input.actingUserId,
         installmentScheduleItemId: input.installmentScheduleItemId,
         paymentMethod: "ach",
+        bankConnectionId: mandate.financialAccountId,
       },
       "scheduled",
     );
@@ -114,10 +118,11 @@ export class AchPaymentService {
     return this.deps.payments.submitPending(scheduled.id, input.actingUserId);
   }
 
-  private async requireActiveMandate(agreementId: string): Promise<void> {
-    const active = await this.deps.mandates.isActiveForAgreement(agreementId);
+  private async requireActiveMandate(agreementId: string): Promise<AchMandateRecord> {
+    const active = await this.deps.mandates.getActiveMandate(agreementId);
     if (!active) {
       throw new ValidationError("An active ACH mandate is required before a payment can be scheduled for this agreement.");
     }
+    return active;
   }
 }

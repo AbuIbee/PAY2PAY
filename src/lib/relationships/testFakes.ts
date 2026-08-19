@@ -39,6 +39,7 @@ import type {
 } from "./relationshipInvitationService";
 import { RelationshipFinancialAccountService } from "./relationshipFinancialAccountService";
 import type {
+  BankAccountSubtype,
   FinancialAccountRecord,
   FinancialAccountRepository,
   FinancialAccountType,
@@ -273,6 +274,7 @@ export class InMemoryFinancialAccountRepository implements FinancialAccountRepos
     cardExpiryMonth: number | null;
     cardExpiryYear: number | null;
     cardBrand: string | null;
+    bankAccountSubtype: BankAccountSubtype | null;
     addedByUserId: string;
   }): Promise<FinancialAccountRecord> {
     const now = new Date();

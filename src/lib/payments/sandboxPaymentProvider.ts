@@ -17,6 +17,8 @@ import type {
   PaymentProviderPaymentStatus,
   RefundPaymentResult,
   RetrievePaymentResult,
+  TokenizeBankAccountInput,
+  TokenizeBankAccountResult,
 } from "./paymentProvider";
 
 interface StoredSandboxPayment {
@@ -55,6 +57,25 @@ export class SandboxPaymentProvider implements PaymentProvider {
     return { providerPaymentMethodToken: `sandbox_pm_${randomUUID()}` };
   }
 
+  /**
+   * Phase 6A fallback-architecture tokenization boundary (see TokenizeBankAccountInput's doc comment).
+   * `input.routingNumber`/`input.accountNumber` are read exactly once, here, to derive a masked last4
+   * and a fresh opaque reference — neither raw value is ever assigned to `this.payments`, a class
+   * field, a log call, or any other structure that would outlive this method call. `accountHolderName`
+   * is accepted (a real provider would use it for identity-matching/Reg E purposes) but is likewise
+   * never retained beyond this call.
+   */
+  async tokenizeBankAccount(input: TokenizeBankAccountInput): Promise<TokenizeBankAccountResult> {
+    if (!/^\d{9}$/.test(input.routingNumber)) {
+      throw new ValidationError("Routing number must be exactly 9 digits.");
+    }
+    if (!/^\d{4,17}$/.test(input.accountNumber)) {
+      throw new ValidationError("Account number must be between 4 and 17 digits.");
+    }
+    const maskedLast4 = input.accountNumber.slice(-4);
+    return { providerAccountRef: `sandbox_bank_${randomUUID()}`, maskedLast4 };
+  }
+
   async createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult> {
     if (!Number.isInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
       throw new ValidationError("amountMinorUnits must be a positive integer.");
@@ -70,7 +91,7 @@ export class SandboxPaymentProvider implements PaymentProvider {
 
   async retrievePayment(providerPaymentId: string): Promise<RetrievePaymentResult> {
     const record = this.payments.get(providerPaymentId);
-    if (!record) throw new ValidationError("Unknown sandbox payment id.");
+    if (!record) throw new ValidationError("Unknown payment reference.");
     return { providerPaymentId, status: record.status };
   }
 

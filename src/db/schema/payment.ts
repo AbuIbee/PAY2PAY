@@ -3,6 +3,7 @@ import { boolean, check, integer, jsonb, pgTable, text, timestamp, uniqueIndex, 
 import { agreement, installmentScheduleItem } from "./agreement";
 import { paymentAttemptStatusEnum, paymentMethodEnum, profileKindEnum } from "./enums";
 import { userAccount } from "./identity";
+import { financialAccount } from "./financialAccount";
 
 /**
  * Sprint 9 (docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md) payment-provider
@@ -68,6 +69,20 @@ export const paymentAttempt = pgTable(
     // gate on that). Nullable — unconfirmed by default, and never applicable to a provider-routed
     // attempt (a real processor's own webhook is already that attempt's confirmation).
     recipientConfirmedAt: timestamp("recipient_confirmed_at", { withTimezone: true }),
+    // Phase 6A (docs/prsprints/PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md) Ledger Payment-
+    // Source Rule: "the ledger must identify a payment source using an internal bank_connection_id,
+    // never a routing or account number." References the same party-owned `financial_account` row
+    // Sprint 18A already built (never a new/duplicate table — see that table's own doc comment for
+    // why `financial_account` already models this concept). Nullable: only set for a provider-routed
+    // payment that actually used a known bank connection (ACH, once the mandate that authorized it
+    // carries a `financial_account_id` — see achMandateFinancialAccountAdapter.ts); null for
+    // debit_card/manual_off_platform attempts and for any ACH mandate authorized outside the
+    // relationship flow (pre-Phase-6A path, still valid, simply has no known internal bank-connection
+    // record to reference). Deliberately NOT FK-constrained to CASCADE on delete — `financial_account`
+    // rows are never hard-deleted (disableAccount only ever sets `disabledAt`), so a historical
+    // payment's provenance survives a bank connection being disconnected/replaced (this phase's own
+    // "a removed bank connection should not make historical payments impossible to understand").
+    bankConnectionId: uuid("bank_connection_id").references(() => financialAccount.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

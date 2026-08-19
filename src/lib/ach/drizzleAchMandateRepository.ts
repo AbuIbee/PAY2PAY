@@ -14,6 +14,7 @@ function toRecord(row: Row): AchMandateRecord {
     payerProfileKind: row.payerProfileKind,
     payerProfileId: row.payerProfileId,
     bankAccountRef: row.bankAccountRef,
+    financialAccountId: row.financialAccountId,
     status: row.status,
     authorizedAt: row.authorizedAt,
     revokedAt: row.revokedAt,

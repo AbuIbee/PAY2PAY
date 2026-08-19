@@ -24,6 +24,12 @@ export interface AdminPaymentAttemptSummary {
   providerPaymentId: string | null;
   amountMinorUnits: number;
   currency: string;
+  /**
+   * Phase 6A Ledger Payment-Source Rule: the internal `financial_account` (bank connection) that
+   * funded this attempt, if known — never a routing/account number. Safe to expose to support staff:
+   * it is PAY2PAY's own internal identifier, not a provider credential.
+   */
+  bankConnectionId: string | null;
   createdAt: Date;
 }
 

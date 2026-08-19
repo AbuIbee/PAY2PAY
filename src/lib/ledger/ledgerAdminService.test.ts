@@ -77,6 +77,7 @@ describe("LedgerAdminService", () => {
                 providerPaymentId: "sandbox_pay_abc123",
                 amountMinorUnits: 5_000,
                 currency: "USD",
+                bankConnectionId: "financial-account-1",
                 createdAt: new Date(),
               },
             ],
