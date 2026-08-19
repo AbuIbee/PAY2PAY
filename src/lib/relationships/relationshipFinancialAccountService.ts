@@ -197,6 +197,23 @@ export class RelationshipFinancialAccountService {
         throw new ValidationError("cardExpiryYear must be a valid 4-digit year.");
       }
     }
+
+    // PRSprint 22 (docs/prsprints/PRSPRINT_22_KYC_KYB_FINANCIAL_ACCOUNT_PROVISIONING.md): duplicate
+    // provisioning protection — a retried "connect this bank account/card" request (double-click,
+    // network retry, a client resubmitting after a slow response) carries the exact same
+    // provider-issued token as the original. Without this check, each retry would silently insert a
+    // second `financial_account` row for what is really the same underlying account, fragmenting
+    // history and letting a stale `disabled` copy sit alongside a live one. Idempotent-by-return
+    // (mirrors this codebase's established insert-then-recheck precedent, e.g. PaymentService.
+    // reserveAttempt): a disabled account never blocks re-adding the same token — a party who
+    // disabled an account and now wants to reconnect it gets a fresh row, not a resurrected old one.
+    const existingForParty = await this.deps.financialAccounts.listForParty(
+      input.actingParty.kind === "personal" ? input.actingParty.id : null,
+      input.actingParty.kind === "business" ? input.actingParty.id : null,
+    );
+    const duplicate = existingForParty.find((a) => a.providerAccountRef === input.providerAccountRef && a.status !== "disabled");
+    if (duplicate) return duplicate;
+
     const account = await this.deps.financialAccounts.insert({
       individualProfileId: input.actingParty.kind === "personal" ? input.actingParty.id : null,
       organizationId: input.actingParty.kind === "business" ? input.actingParty.id : null,

@@ -67,4 +67,25 @@ describe("GET/POST /api/profiles/verification", () => {
     const response = await getHandler()(withCookie());
     expect(response.status).toBe(401);
   });
+
+  it(
+    "PRSprint 22 (docs/prsprints/PRSPRINT_22_KYC_KYB_FINANCIAL_ACCOUNT_PROVISIONING.md): a client-supplied " +
+      "'status'/'decision' field in the submit body is completely ignored — the route never even reads the " +
+      "request body, so a request only ever lands at FULL_PENDING, never a self-reported FULL_VERIFIED",
+    async () => {
+      const postResponse = await postHandler()(
+        new NextRequest(URL, {
+          method: "POST",
+          headers: { cookie: `p2p_session=${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ status: "verified", decision: "verified", tier: "full", state: "FULL_VERIFIED" }),
+        }),
+      );
+      expect(postResponse.status).toBe(200);
+
+      const getResponse = await getHandler()(withCookie(token));
+      const body = (await getResponse.json()) as { state: string };
+      expect(body.state).toBe("FULL_PENDING");
+      expect(body.state).not.toBe("FULL_VERIFIED");
+    },
+  );
 });
