@@ -634,3 +634,39 @@ export const appealStatusEnum = pgEnum("appeal_status", ["submitted", "under_rev
 
 /** Sprint 18 §30: the three outcomes a reviewer may record — "partially_overturned" exists because a restriction is frequently narrower or broader than what full reversal would imply (e.g. a payout restriction upheld but its duration shortened), not because the platform is adjudicating fault (no such field exists on this table — see appealService.ts's own doc comment). */
 export const appealDecisionEnum = pgEnum("appeal_decision", ["upheld", "overturned", "partially_overturned"]);
+
+/**
+ * PRSprint 24 (docs/prsprints/PRSPRINT_24_DEBIT_CARD_ISSUANCE_CARD_LIFECYCLE.md): a PAY2PAY-issued
+ * card's own lifecycle, per this PRSprint's required list verbatim (cardholder creation through
+ * lost/stolen). "expired" is deliberately not a stored state — mirrors
+ * `debitCardMethodStatusEnum`'s identical "expired reserved, never set directly" precedent
+ * (src/lib/debitCard/debitCardMethodService.ts's lazy, read-time `isExpired` check); an issued card's
+ * expiry is derived from `expires_at_month`/`expires_at_year` the same way.
+ */
+export const issuedCardStatusEnum = pgEnum("issued_card_status", [
+  "requested",
+  "pending_issuance",
+  "issued",
+  "active",
+  "frozen",
+  "lost",
+  "stolen",
+  "replaced",
+  "canceled",
+]);
+
+/** PRSprint 24: "virtual/physical issuance" — this PRSprint's own required distinction. */
+export const issuedCardTypeEnum = pgEnum("issued_card_type", ["virtual", "physical"]);
+
+/**
+ * PRSprint 24: "Auth/clearing/settlement/decline/reversal states" — this PRSprint's own required
+ * list verbatim (SPRINT_18C_PRODUCTION_READY.md item 107: "Do not treat card authorization as final
+ * settlement... Handle: authorization; capture/clearing; settlement; reversal; decline.").
+ */
+export const cardTransactionEventTypeEnum = pgEnum("card_transaction_event_type", [
+  "authorization",
+  "clearing",
+  "settlement",
+  "decline",
+  "reversal",
+]);

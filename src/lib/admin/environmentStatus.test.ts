@@ -16,6 +16,8 @@ function baseEnv(overrides: Partial<ServerEnv> = {}): ServerEnv {
     KYC_SANDBOX_WEBHOOK_SECRET: undefined,
     PAYMENT_PROVIDER: "sandbox",
     KYC_PROVIDER: "sandbox",
+    CARD_ISSUING_PROVIDER: "sandbox",
+    CARD_SANDBOX_WEBHOOK_SECRET: undefined,
     CRON_SECRET: undefined,
     RESEND_API_KEY: undefined,
     EMAIL_FROM_ADDRESS: undefined,

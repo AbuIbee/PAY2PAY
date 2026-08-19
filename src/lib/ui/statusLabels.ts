@@ -106,6 +106,27 @@ export const financialAccountStatusLabel = registry<"pending_verification" | "ve
   disabled: { label: "Disabled", tone: "neutral" },
 });
 
+/**
+ * PRSprint 24 (docs/prsprints/PRSPRINT_24_DEBIT_CARD_ISSUANCE_CARD_LIFECYCLE.md): a PAY2PAY-issued
+ * card's own lifecycle status — distinct from `debitCardMethodStatusLabel` above (that one is a
+ * card-on-file the *debtor* registers for charging; this one is a card PAY2PAY issues to a
+ * cardholder to spend). "Do not present sandbox/test capabilities as production-live" is handled by
+ * the page copy, not this label set — these are the same words a live card program would use.
+ */
+export const issuedCardStatusLabel = registry<
+  "requested" | "pending_issuance" | "issued" | "active" | "frozen" | "lost" | "stolen" | "replaced" | "canceled"
+>({
+  requested: { label: "Requested", tone: "info" },
+  pending_issuance: { label: "Issuing", tone: "info" },
+  issued: { label: "Ready to activate", tone: "info" },
+  active: { label: "Active", tone: "success" },
+  frozen: { label: "Frozen", tone: "warning" },
+  lost: { label: "Reported lost", tone: "danger" },
+  stolen: { label: "Reported stolen", tone: "danger" },
+  replaced: { label: "Replaced", tone: "neutral" },
+  canceled: { label: "Canceled", tone: "neutral" },
+});
+
 export const rescheduleRequestStatusLabel = registry<"pending" | "approved" | "rejected">({
   pending: { label: "Awaiting creditor decision", tone: "info" },
   approved: { label: "Approved", tone: "success" },

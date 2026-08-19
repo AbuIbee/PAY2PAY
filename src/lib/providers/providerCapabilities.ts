@@ -49,6 +49,12 @@ export const PROVIDER_CAPABILITY_REGISTRY: Readonly<Record<string, ProviderCapab
     environment: "sandbox",
     capabilities: ["kyc", "kyb", "webhook_delivery"],
   },
+  // PRSprint 24 (docs/prsprints/PRSPRINT_24_DEBIT_CARD_ISSUANCE_CARD_LIFECYCLE.md).
+  sandbox_card_issuing_mock: {
+    providerName: "sandbox_card_issuing_mock",
+    environment: "sandbox",
+    capabilities: ["debit_card_issuing", "webhook_delivery"],
+  },
 };
 
 export function getProviderCapabilityDescriptor(providerName: string): ProviderCapabilityDescriptor {

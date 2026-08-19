@@ -77,6 +77,10 @@ const serverEnvSchema = z.object({
   // through to sandbox behavior while claiming something else was selected.
   PAYMENT_PROVIDER: z.enum(["sandbox"]).default("sandbox"),
   KYC_PROVIDER: z.enum(["sandbox"]).default("sandbox"),
+  // PRSprint 24 (docs/prsprints/PRSPRINT_24_DEBIT_CARD_ISSUANCE_CARD_LIFECYCLE.md): mirrors
+  // PAYMENT_PROVIDER/KYC_PROVIDER exactly — see providerCapabilities.ts's registry.
+  CARD_ISSUING_PROVIDER: z.enum(["sandbox"]).default("sandbox"),
+  CARD_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
   // Sprint 13 (docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md): shared secret protecting
   // POST /api/scheduler/retry-failed-payments — Vercel Cron Jobs automatically send
   // `Authorization: Bearer <CRON_SECRET>` to the route(s) configured in vercel.json when this

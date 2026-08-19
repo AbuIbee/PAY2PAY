@@ -21,6 +21,7 @@ const PRIMARY_LINKS: NavLinkItem[] = [
   { href: "/agreements", label: "Agreements" },
   { href: "/payments", label: "Payments" },
   { href: "/payment-methods", label: "Payment Methods" },
+  { href: "/cards", label: "Cards" },
   { href: "/notifications", label: "Notifications" },
   { href: "/support", label: "Support" },
 ];
