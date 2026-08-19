@@ -1,6 +1,7 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
-import { ConfigurationError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { ConfigurationError, DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { isFeatureEnabled } from "@/lib/feature-flags";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { PaymentProvider, ProfileRef } from "./paymentProvider";
@@ -332,6 +333,14 @@ export class PaymentService {
   ): Promise<{ record: PaymentAttemptRecord; alreadyResolved: boolean }> {
     const existing = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
     if (existing) return { record: existing, alreadyResolved: true };
+
+    // PRSprint 29 (docs/prsprints/PRSPRINT_29_BACKUPS_RECOVERY_ROLLBACK_INCIDENT_CONTROLS.md):
+    // financial kill switch — checked only after the idempotent-replay lookup above, so an operator
+    // disabling new payment initiation mid-incident never blocks a retried request for a payment that
+    // already succeeded; it only ever blocks genuinely *new* activity.
+    if (!isFeatureEnabled("paymentInitiationEnabled")) {
+      throw new DependencyError("New payment initiation is temporarily disabled. Please try again shortly.");
+    }
 
     const payerOwnerUserId = await this.deps.profileOwners.getOwnerUserId(
       input.payer.profileKind,

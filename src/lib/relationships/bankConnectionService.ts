@@ -1,5 +1,6 @@
 import "server-only";
-import { ValidationError } from "@/lib/errors";
+import { DependencyError, ValidationError } from "@/lib/errors";
+import { isFeatureEnabled } from "@/lib/feature-flags";
 import { accountNumbersMatch, isValidAccountNumber, isValidRoutingNumber } from "@/lib/finance/bankAccountValidation";
 import type { PaymentProvider } from "@/lib/payments/paymentProvider";
 import type { PartyRef } from "./relationshipInvitationService";
@@ -40,6 +41,13 @@ export class BankConnectionService {
     accountNumberConfirm: string;
     accountSubtype: BankAccountSubtype;
   }): Promise<FinancialAccountRecord> {
+    // PRSprint 29 (docs/prsprints/PRSPRINT_29_BACKUPS_RECOVERY_ROLLBACK_INCIDENT_CONTROLS.md):
+    // bank-linking kill switch — an operator can disable new bank connections mid-incident (e.g. a
+    // suspected tokenization-provider issue) via FEATURE_BANK_CONNECTION_ENABLED=false, with no
+    // deploy required and no effect on already-connected accounts.
+    if (!isFeatureEnabled("bankConnectionEnabled")) {
+      throw new DependencyError("Bank account connection is temporarily unavailable. Please try again shortly.");
+    }
     if (!input.accountHolderName.trim()) {
       throw new ValidationError("Account holder name is required.");
     }

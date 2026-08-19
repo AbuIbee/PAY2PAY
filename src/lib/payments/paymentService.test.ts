@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
 import { createTestPaymentService } from "./testFakes";
 import type { ProfileKind } from "./paymentProvider";
 
@@ -263,4 +263,33 @@ describe("PaymentService", () => {
       expect(results).toEqual([]);
     });
   });
+
+  describe(
+    "PRSprint 29 (docs/prsprints/PRSPRINT_29_BACKUPS_RECOVERY_ROLLBACK_INCIDENT_CONTROLS.md): " +
+      "paymentInitiationEnabled kill switch",
+    () => {
+      afterEach(() => {
+        delete process.env.FEATURE_PAYMENT_INITIATION_ENABLED;
+      });
+
+      it("blocks a genuinely new payment when the switch is disabled", async () => {
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        process.env.FEATURE_PAYMENT_INITIATION_ENABLED = "false";
+        await expect(ctx.paymentService.createPayment(baseInput({ idempotencyKey: "kill-switch-1" }))).rejects.toThrow(
+          DependencyError,
+        );
+      });
+
+      it("still returns the existing record for a retried idempotency key even while the switch is disabled (never blocks a replay of an already-succeeded payment)", async () => {
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        const original = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "kill-switch-2" }));
+
+        process.env.FEATURE_PAYMENT_INITIATION_ENABLED = "false";
+        const replay = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "kill-switch-2" }));
+        expect(replay.id).toBe(original.id);
+      });
+    },
+  );
 });

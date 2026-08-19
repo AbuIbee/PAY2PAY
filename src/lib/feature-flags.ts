@@ -26,6 +26,19 @@ export const FEATURE_FLAGS = {
   // of — checking the actual provider's own `providerEnvironment`.
   liveBankingEnabled: false,
   liveCardIssuanceEnabled: false,
+  // PRSprint 29 (docs/prsprints/PRSPRINT_29_BACKUPS_RECOVERY_ROLLBACK_INCIDENT_CONTROLS.md):
+  // operational kill switches — "provide operational ability to disable: new payment initiation,
+  // bank linking, provider processing, card operations... without destroying historical records."
+  // All default `true` (normal operation); an operator flips the matching `FEATURE_*` env var to
+  // `false` in Vercel during an incident to halt *new* activity of that kind immediately, with no
+  // deploy required and no effect on already-scheduled/in-flight work or historical records.
+  // `paymentInitiationEnabled` is enforced in PaymentService.reserveAttempt — the single choke point
+  // every payment-creation path (createPayment/schedulePayment, provider-routed and manual alike)
+  // already goes through (see that class's own doc comment).
+  paymentInitiationEnabled: true,
+  // Enforced in BankConnectionService.connectBankAccount — the single place a new bank connection is
+  // ever created (see PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md).
+  bankConnectionEnabled: true,
 } as const satisfies Record<string, boolean>;
 
 export type FeatureFlagName = keyof typeof FEATURE_FLAGS;
