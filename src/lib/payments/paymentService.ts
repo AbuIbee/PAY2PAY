@@ -2,6 +2,7 @@ import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
 import { ConfigurationError, DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
 import { isFeatureEnabled } from "@/lib/feature-flags";
+import { getMaxPaymentMinorUnits, getReviewThresholdMinorUnits } from "./transactionLimits";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { PaymentProvider, ProfileRef } from "./paymentProvider";
@@ -377,6 +378,14 @@ export class PaymentService {
     if (!Number.isSafeInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
       throw new ValidationError("amountMinorUnits must be a positive integer.");
     }
+    // PRSprint 33 (docs/prsprints/PRSPRINT_33_FINAL_PRODUCTION_LAUNCH_CONTROLS_CLOSED_BETA.md):
+    // master-spec item 154's per-payment transaction limit — checked here, in the single choke point
+    // every payment-creation path already goes through, exactly like the paymentInitiationEnabled kill
+    // switch above. See transactionLimits.ts's own doc comment for why the default is a placeholder,
+    // not an approved production limit.
+    if (input.amountMinorUnits > getMaxPaymentMinorUnits()) {
+      throw new ValidationError("This payment exceeds the maximum amount currently allowed. Please contact support for a higher-value transfer.");
+    }
     if (input.agreementId) {
       await this.assertNotOverpaying(input.agreementId, input.amountMinorUnits);
     }
@@ -408,6 +417,16 @@ export class PaymentService {
         paymentMethod: input.paymentMethod ?? null,
         bankConnectionId: input.bankConnectionId ?? null,
       });
+      // PRSprint 33: master-spec item 155, "high-risk situations should be reviewable without
+      // rewriting database records manually" — never blocks; a payment at/above the review threshold
+      // is created normally and simply surfaced via the existing audit log (already admin-searchable
+      // at /admin/audit) rather than a new, parallel review-queue table.
+      if (input.amountMinorUnits >= getReviewThresholdMinorUnits()) {
+        // reserveAttempt's own input type has no ipAddress/deviceInfo (schedulePayment's callers never
+        // supply them) — null here, not a missing value; createPayment's own "payment_created" audit
+        // event (recorded separately, right after this) is where those are captured when present.
+        await this.recordAudit(record, "payment_flagged_for_review", input.actingUserId, null, null);
+      }
       return { record, alreadyResolved: false };
     } catch (error) {
       const raced = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);

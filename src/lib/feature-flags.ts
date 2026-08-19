@@ -39,6 +39,14 @@ export const FEATURE_FLAGS = {
   // Enforced in BankConnectionService.connectBankAccount — the single place a new bank connection is
   // ever created (see PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md).
   bankConnectionEnabled: true,
+  // PRSprint 33 (docs/prsprints/PRSPRINT_33_FINAL_PRODUCTION_LAUNCH_CONTROLS_CLOSED_BETA.md):
+  // master-spec items 153/199, "financial launch should be phased... use a small controlled cohort."
+  // Default false (open signup, today's behavior, unchanged) — an operator sets
+  // FEATURE_CLOSED_BETA_ENABLED=true to require a valid single-use invite code
+  // (BetaInviteService) at signup. Enforced in the signup *route*
+  // (src/app/api/auth/signup/route.ts), never inside AuthService.signup itself — see
+  // BetaInviteService's own doc comment for why.
+  closedBetaEnabled: false,
 } as const satisfies Record<string, boolean>;
 
 export type FeatureFlagName = keyof typeof FEATURE_FLAGS;

@@ -4,7 +4,10 @@ import { withErrorHandling } from "@/lib/api-handler";
 import type { AuthService } from "@/lib/auth/authService";
 import { setSessionCookie } from "@/lib/auth/cookies";
 import { getAuthService } from "@/lib/auth/getAuthService";
+import type { BetaInviteService } from "@/lib/compliance/betaInviteService";
+import { getBetaInviteService } from "@/lib/compliance/getBetaInviteService";
 import { ValidationError, RateLimitedError } from "@/lib/errors";
+import { isFeatureEnabled } from "@/lib/feature-flags";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getClientIp } from "@/lib/request-ip";
 
@@ -17,6 +20,9 @@ const signupSchema = z.object({
   // Age eligibility (18+) is enforced by AuthService.signup itself — this
   // regex only validates shape, not the age business rule.
   dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date of birth must be in YYYY-MM-DD format."),
+  // PRSprint 33: only required/checked when closedBetaEnabled is on — see BetaInviteService's doc
+  // comment for why this gate lives here rather than inside AuthService.signup.
+  inviteCode: z.string().trim().optional(),
 });
 
 // NFR-SEC-004: authentication endpoints are rate-limited per account/IP/device.
@@ -29,7 +35,7 @@ const SIGNUP_WINDOW_MS = 10 * 60 * 1000;
  * below wires in the real, Drizzle-backed getAuthService() lazily, only when
  * a request actually arrives (mirrors src/db/client.ts's lazy pattern).
  */
-export function createSignupHandler(authService: AuthService) {
+export function createSignupHandler(authService: AuthService, betaInvites: BetaInviteService) {
   return async function handleSignup(request: NextRequest): Promise<Response> {
     const ip = getClientIp(request);
     if (!(await checkRateLimit(`signup:ip:${ip}`, SIGNUP_LIMIT_PER_IP, SIGNUP_WINDOW_MS))) {
@@ -44,6 +50,15 @@ export function createSignupHandler(authService: AuthService) {
       );
     }
 
+    // PRSprint 33 (docs/prsprints/PRSPRINT_33_FINAL_PRODUCTION_LAUNCH_CONTROLS_CLOSED_BETA.md): a
+    // pre-check, before AuthService.signup is ever called — an invalid/missing code during closed
+    // beta means no account is created at all. See BetaInviteService's own doc comment for why the
+    // actual atomic consumption happens as a separate step after signup, not here.
+    const closedBeta = isFeatureEnabled("closedBetaEnabled");
+    if (closedBeta) {
+      await betaInvites.checkCodeIsRedeemable(parsed.data.inviteCode ?? "");
+    }
+
     const { user, token, expiresAt } = await authService.signup({
       email: parsed.data.email,
       password: parsed.data.password,
@@ -52,6 +67,10 @@ export function createSignupHandler(authService: AuthService) {
       userAgent: request.headers.get("user-agent"),
     });
 
+    if (closedBeta && parsed.data.inviteCode) {
+      await betaInvites.consumeCode(parsed.data.inviteCode, user.id);
+    }
+
     const response = NextResponse.json({ id: user.id, email: user.email }, { status: 201 });
     setSessionCookie(response, token, expiresAt);
     return response;
@@ -59,7 +78,7 @@ export function createSignupHandler(authService: AuthService) {
 }
 
 async function handleSignup(request: NextRequest): Promise<Response> {
-  return createSignupHandler(getAuthService())(request);
+  return createSignupHandler(getAuthService(), getBetaInviteService())(request);
 }
 
 export const POST = withErrorHandling("auth_signup", handleSignup);

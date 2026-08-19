@@ -39,3 +39,24 @@ export const consentRecord = pgTable("consent_record", {
   method: text("method").notNull(),
   ipAddress: text("ip_address"),
 }).enableRLS();
+
+/**
+ * PRSprint 33 (docs/prsprints/PRSPRINT_33_FINAL_PRODUCTION_LAUNCH_CONTROLS_CLOSED_BETA.md): master-
+ * spec items 153/199, "financial launch should be phased... use a small controlled cohort." A single-
+ * use invite code, consumed atomically at signup (`WHERE used_by_user_id IS NULL` — the same
+ * claim-before-side-effect discipline PRSprint 31 established for invitation accept/cancel races; two
+ * people racing to redeem the same code must never both succeed). Only enforced when the
+ * `closedBetaEnabled` feature flag is on (default false) — see BetaInviteService's own doc comment for
+ * why the gate lives at the API-route layer, not inside AuthService.signup itself.
+ */
+export const betaInviteCode = pgTable("beta_invite_code", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),
+  createdByUserId: uuid("created_by_user_id")
+    .notNull()
+    .references(() => userAccount.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  note: text("note"),
+  usedByUserId: uuid("used_by_user_id").references(() => userAccount.id),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+}).enableRLS();

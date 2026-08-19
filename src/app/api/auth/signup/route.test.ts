@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { resetRateLimits } from "@/lib/rate-limit";
 import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService, readSetCookie } from "@/lib/auth/testFakes";
+import { createTestBetaInviteService } from "@/lib/compliance/testFakes";
 import { createSignupHandler } from "./route";
 
 const SIGNUP_URL = "http://localhost/api/auth/signup";
@@ -18,17 +19,19 @@ function postJson(body: unknown, headers: Record<string, string> = {}) {
 
 describe("POST /api/auth/signup", () => {
   let ctx: ReturnType<typeof createTestAuthService>;
+  let betaCtx: ReturnType<typeof createTestBetaInviteService>;
 
   beforeEach(() => {
     resetRateLimits();
     ctx = createTestAuthService();
+    betaCtx = createTestBetaInviteService();
   });
 
   // Wraps the same withErrorHandling the production route uses, so thrown
   // AppErrors are asserted via their mapped status code, exactly as a real
   // client would observe them.
-  function handlerFor(authService = ctx.authService) {
-    return withErrorHandling("auth_signup", createSignupHandler(authService));
+  function handlerFor(authService = ctx.authService, betaInviteService = betaCtx.betaInviteService) {
+    return withErrorHandling("auth_signup", createSignupHandler(authService, betaInviteService));
   }
 
   it("creates an account, returns 201, and sets a session cookie", async () => {
@@ -115,4 +118,62 @@ describe("POST /api/auth/signup", () => {
     );
     expect(blocked.status).toBe(429);
   });
+
+  describe(
+    "PRSprint 33 (docs/prsprints/PRSPRINT_33_FINAL_PRODUCTION_LAUNCH_CONTROLS_CLOSED_BETA.md): closedBetaEnabled invite-code gate",
+    () => {
+      afterEach(() => {
+        delete process.env.FEATURE_CLOSED_BETA_ENABLED;
+      });
+
+      it("open signup (flag off, today's default) works with no invite code at all", async () => {
+        const handler = handlerFor();
+        const response = await handler(postJson({ email: "open-signup@example.com", password: "a-strong-password", dateOfBirth }));
+        expect(response.status).toBe(201);
+      });
+
+      it("rejects signup with a missing invite code once closed beta is enabled — and never creates an account", async () => {
+        process.env.FEATURE_CLOSED_BETA_ENABLED = "true";
+        const handler = handlerFor();
+        const response = await handler(postJson({ email: "no-code@example.com", password: "a-strong-password", dateOfBirth }));
+        expect(response.status).toBe(400);
+        expect(await ctx.users.findByEmail("no-code@example.com")).toBeNull();
+      });
+
+      it("rejects signup with an unknown invite code once closed beta is enabled", async () => {
+        process.env.FEATURE_CLOSED_BETA_ENABLED = "true";
+        const handler = handlerFor();
+        const response = await handler(
+          postJson({ email: "bad-code@example.com", password: "a-strong-password", dateOfBirth, inviteCode: "does-not-exist" }),
+        );
+        expect(response.status).toBe(400);
+        expect(await ctx.users.findByEmail("bad-code@example.com")).toBeNull();
+      });
+
+      it("accepts signup with a valid, unused invite code once closed beta is enabled, and consumes the code", async () => {
+        process.env.FEATURE_CLOSED_BETA_ENABLED = "true";
+        await betaCtx.invites.insert({ code: "WELCOME1", createdByUserId: "admin-1", note: null });
+        const handler = handlerFor();
+        const response = await handler(
+          postJson({ email: "good-code@example.com", password: "a-strong-password", dateOfBirth, inviteCode: "WELCOME1" }),
+        );
+        expect(response.status).toBe(201);
+        const codes = await betaCtx.invites.listAll();
+        expect(codes[0]?.usedByUserId).toBeTruthy();
+      });
+
+      it("rejects a second signup attempt reusing an already-consumed invite code", async () => {
+        process.env.FEATURE_CLOSED_BETA_ENABLED = "true";
+        await betaCtx.invites.insert({ code: "ONETIME", createdByUserId: "admin-1", note: null });
+        const handler = handlerFor();
+        await handler(postJson({ email: "first-user@example.com", password: "a-strong-password", dateOfBirth, inviteCode: "ONETIME" }));
+
+        const second = await handler(
+          postJson({ email: "second-user@example.com", password: "a-strong-password", dateOfBirth, inviteCode: "ONETIME" }),
+        );
+        expect(second.status).toBe(400);
+        expect(await ctx.users.findByEmail("second-user@example.com")).toBeNull();
+      });
+    },
+  );
 });

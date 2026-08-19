@@ -1179,6 +1179,13 @@ function DisputePanel({ agreementId, disputes, onChanged }: { agreementId: strin
           </button>
         )}
       </div>
+      <p style={{ margin: "0 0 0.75rem", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
+        PAY2PAY records both parties&apos; statements and evidence here so there is a shared, dated
+        record. It does not investigate, judge, or decide who is right, and it does not reverse a
+        payment on its own — it is a record-keeping tool for a disagreement you and the other party
+        need to work out directly. For account, payment, or platform issues, see{" "}
+        <a href="/support">Support</a>.
+      </p>
 
       {disputes.length === 0 ? (
         <p className="form-status">No disputes on this agreement.</p>
