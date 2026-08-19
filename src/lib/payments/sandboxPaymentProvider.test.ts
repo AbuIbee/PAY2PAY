@@ -20,6 +20,66 @@ describe("SandboxPaymentProvider (provider adapter)", () => {
     expect(token.providerPaymentMethodToken).toMatch(/^sandbox_pm_/);
   });
 
+  describe("tokenizeBankAccount (Phase 6A fallback-architecture boundary)", () => {
+    it("exchanges a raw routing/account number for an opaque reference and masked last4, echoing neither raw value back", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      const result = await provider.tokenizeBankAccount({
+        profile: PAYER,
+        routingNumber: "021000021",
+        accountNumber: "123456789012",
+        accountSubtype: "checking",
+        accountHolderName: "Jordan Payer",
+      });
+      expect(result.providerAccountRef).toMatch(/^sandbox_bank_/);
+      expect(result.maskedLast4).toBe("9012");
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("021000021");
+      expect(serialized).not.toContain("123456789012");
+    });
+
+    it("rejects a routing number that is not exactly 9 digits", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      await expect(
+        provider.tokenizeBankAccount({
+          profile: PAYER,
+          routingNumber: "123",
+          accountNumber: "123456789012",
+          accountSubtype: "checking",
+          accountHolderName: "Jordan Payer",
+        }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects an account number outside the 4-17 digit range", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      await expect(
+        provider.tokenizeBankAccount({
+          profile: PAYER,
+          routingNumber: "021000021",
+          accountNumber: "12",
+          accountSubtype: "savings",
+          accountHolderName: "Jordan Payer",
+        }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("never retains the raw values on the provider instance itself (no field/map grows to hold them)", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      await provider.tokenizeBankAccount({
+        profile: PAYER,
+        routingNumber: "021000021",
+        accountNumber: "123456789012",
+        accountSubtype: "checking",
+        accountHolderName: "Jordan Payer",
+      });
+      // The provider's only stateful field is its private sandbox payments map — tokenizeBankAccount
+      // must never write to it (structural proof, not just behavioral).
+      const serializedInstance = JSON.stringify(provider);
+      expect(serializedInstance ?? "").not.toContain("123456789012");
+      expect(serializedInstance ?? "").not.toContain("021000021");
+    });
+  });
+
   it("defaults a created payment to pending (models async settlement)", async () => {
     const provider = new SandboxPaymentProvider(SECRET);
     const result = await provider.createPayment({

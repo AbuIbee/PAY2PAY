@@ -256,13 +256,14 @@ img, svg { display: block; max-width: 100%; }
 .closing-cta > div { max-width: 43rem; }
 .closing-cta h2 { font-size: clamp(1.8rem, 1.4rem + 1.6vw, 2.7rem); }
 
-.early-access { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(24rem, 1.1fr); gap: clamp(2.5rem, 6vw, 5rem); margin-bottom: var(--space-24); padding: clamp(2.25rem, 5vw, 3.75rem); border: 1px solid var(--border); border-radius: var(--radius-lg); background: linear-gradient(120deg, var(--cream), var(--forest-50)); }
-.early-access__copy h2 { margin: 0.8rem 0 1rem; font-family: Georgia, "Times New Roman", serif; font-size: var(--text-2xl); font-weight: 500; line-height: 1.08; letter-spacing: -0.045em; }
-.early-access__copy p { margin: 0; color: var(--ink-soft); font-size: var(--text-base); line-height: 1.7; }
-.early-access__copy ul { margin: 1.5rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.6rem; }
-.early-access__copy li { display: flex; align-items: flex-start; gap: 0.55rem; color: var(--ink-soft); font-size: 0.88rem; }
-.early-access__copy li b { display: grid; place-items: center; flex: none; width: 1.05rem; height: 1.05rem; margin-top: 0.1rem; border-radius: 50%; background: var(--forest-100); color: var(--forest-800); font-size: 0.65rem; }
-
+/*
+ * Phase 6A (docs/prsprints/PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md): the landing page's
+ * early-access section (and its .early-access / .early-access__copy wrapper classes) was removed —
+ * see src/app/(marketing)/page.tsx. `.early-access-form` / `.early-access-form__row` below are kept
+ * unchanged: despite the name, they are this codebase's generic form-card and two-column-row layout
+ * classes, reused across dozens of unrelated components (SignupForm, LoginForm, AdminDashboard, and
+ * more) — genuinely load-bearing, not obsolete, and out of scope to rename here.
+ */
 .early-access-form { display: grid; gap: 1rem; padding: clamp(1.5rem, 3vw, 2rem); border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--white); box-shadow: var(--shadow-sm); }
 .early-access-form__row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .field { display: grid; gap: 0.4rem; }
@@ -333,7 +334,6 @@ img, svg { display: block; max-width: 100%; }
   .process-intro { position: static; }
   .trust-panel__facts { grid-template-columns: repeat(3, 1fr); }
   .closing-cta { align-items: flex-start; flex-direction: column; }
-  .early-access { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 40rem) {
@@ -365,6 +365,5 @@ img, svg { display: block; max-width: 100%; }
   .trust-panel__facts { grid-template-columns: 1fr; }
   .trust-panel__facts > div { min-height: auto; }
   .closing-cta { margin-bottom: 4rem; padding: 2rem 1.25rem; }
-  .early-access { margin-bottom: 4rem; padding: 1.5rem 1.1rem; }
   .early-access-form__row { grid-template-columns: 1fr; }
 }

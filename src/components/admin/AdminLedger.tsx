@@ -26,6 +26,7 @@ interface AdminPaymentAttemptSummary {
   providerPaymentId: string | null;
   amountMinorUnits: number;
   currency: string;
+  bankConnectionId: string | null;
   createdAt: string;
 }
 interface AdminAchMandateSummary {
@@ -259,6 +260,7 @@ export function AdminLedger() {
                       {p.status} — {p.paymentMethod ?? "unspecified method"} —{" "}
                       {formatMoney(p.amountMinorUnits, p.currency)} — provider: {p.providerName}
                       {p.providerPaymentId ? ` (${p.providerPaymentId})` : ""}
+                      {p.bankConnectionId ? ` — bank connection ${p.bankConnectionId}` : ""}
                     </li>
                   ))}
                 </ul>

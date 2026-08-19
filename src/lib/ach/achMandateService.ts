@@ -12,6 +12,15 @@ export interface AchMandateRecord {
   payerProfileKind: ProfileKind;
   payerProfileId: string;
   bankAccountRef: string;
+  /**
+   * Phase 6A: additive read-only exposure of the Sprint 18A `ach_mandate.financial_account_id`
+   * column — set only via `AchMandateFinancialAccountAdapter`'s narrow direct-SQL update immediately
+   * after `authorize()`, never by this service itself (see this file's own doc comment: "Sprint 11
+   * has no concept of financial_account_id"). Read by `AchPaymentService` to populate
+   * `payment_attempt.bank_connection_id` (the Ledger Payment-Source Rule) — null for a mandate
+   * authorized outside the relationship flow.
+   */
+  financialAccountId: string | null;
   status: AchMandateStatus;
   authorizedAt: Date;
   revokedAt: Date | null;

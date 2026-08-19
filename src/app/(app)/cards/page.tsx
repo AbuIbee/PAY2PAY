@@ -10,7 +10,7 @@ export default function CardsPage() {
         <div>
           <h1>Cards</h1>
           <p className="app-page__lede">
-            Request and manage debit cards for spending funds you&apos;ve received through PAY2PAY.
+            Spend funds you&apos;ve received through PAY2PAY with a debit card.
           </p>
         </div>
       </div>

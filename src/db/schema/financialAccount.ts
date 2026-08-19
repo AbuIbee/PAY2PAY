@@ -3,6 +3,7 @@ import { check, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "dri
 import { businessProfile, personalProfile, userAccount } from "./identity";
 import { relationship, relationshipParticipant } from "./relationship";
 import {
+  bankAccountSubtypeEnum,
   financialAccountStatusEnum,
   financialAccountTypeEnum,
   financialAccountUsageEnum,
@@ -47,6 +48,11 @@ export const financialAccount = pgTable(
     cardExpiryMonth: integer("card_expiry_month"),
     cardExpiryYear: integer("card_expiry_year"),
     cardBrand: text("card_brand"),
+    // Phase 6A: bank-specific, nullable, meaningful only when accountType = 'bank_account' — mirrors
+    // the card fields above's identical pattern. Never a routing/account number; see
+    // docs/PRODUCTION_PROVIDER_READINESS.md and this table's own doc comment for the "opaque
+    // provider reference, never a raw credential" precedent this column follows.
+    bankAccountSubtype: bankAccountSubtypeEnum("bank_account_subtype"),
     status: financialAccountStatusEnum("status").notNull().default("pending_verification"),
     addedByUserId: uuid("added_by_user_id")
       .notNull()

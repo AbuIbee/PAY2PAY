@@ -4,6 +4,7 @@ import { getDb } from "@/db/client";
 import { financialAccount } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
 import type {
+  BankAccountSubtype,
   FinancialAccountRecord,
   FinancialAccountRepository,
   FinancialAccountType,
@@ -25,6 +26,7 @@ function toRecord(row: Row): FinancialAccountRecord {
     cardExpiryMonth: row.cardExpiryMonth,
     cardExpiryYear: row.cardExpiryYear,
     cardBrand: row.cardBrand,
+    bankAccountSubtype: row.bankAccountSubtype as BankAccountSubtype | null,
     status: row.status as FinancialAccountStatus,
     addedByUserId: row.addedByUserId,
     createdAt: row.createdAt,
@@ -46,6 +48,7 @@ export class DrizzleFinancialAccountRepository implements FinancialAccountReposi
     cardExpiryMonth: number | null;
     cardExpiryYear: number | null;
     cardBrand: string | null;
+    bankAccountSubtype: BankAccountSubtype | null;
     addedByUserId: string;
   }): Promise<FinancialAccountRecord> {
     const db = getDb();

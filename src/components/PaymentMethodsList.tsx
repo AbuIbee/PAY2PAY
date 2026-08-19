@@ -21,8 +21,15 @@ interface FinancialAccountRecord {
   cardExpiryMonth: number | null;
   cardExpiryYear: number | null;
   cardBrand: string | null;
+  bankAccountSubtype: "checking" | "savings" | null;
   status: "pending_verification" | "verified" | "failed" | "disabled";
   createdAt: string;
+}
+
+function bankSubtypeLabel(subtype: "checking" | "savings" | null): string {
+  if (subtype === "checking") return "Checking";
+  if (subtype === "savings") return "Savings";
+  return "Bank account";
 }
 
 type LoadState = "loading" | "ready" | "unauthorized" | "error";
@@ -33,17 +40,25 @@ function AccountCard({ account }: { account: FinancialAccountRecord }) {
     account.accountType === "bank_account"
       ? account.institutionDisplayName ?? "Bank account"
       : [account.cardBrand, "card"].filter(Boolean).join(" ");
+  const subtitle =
+    account.accountType === "bank_account"
+      ? [bankSubtypeLabel(account.bankAccountSubtype), account.maskedLast4 ? `•••• ${account.maskedLast4}` : null]
+          .filter(Boolean)
+          .join(" ")
+      : [
+          account.maskedLast4 ? `Ending in ${account.maskedLast4}` : "No card number on file",
+          account.cardExpiryMonth && account.cardExpiryYear
+            ? `Expires ${String(account.cardExpiryMonth).padStart(2, "0")}/${account.cardExpiryYear}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
   return (
     <div className="card">
       <div className="card__header">
         <div>
           <h3>{title}</h3>
-          <p style={{ margin: "0.25rem 0 0", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
-            {account.maskedLast4 ? `Ending in ${account.maskedLast4}` : "No card number on file"}
-            {account.accountType === "debit_card" && account.cardExpiryMonth && account.cardExpiryYear
-              ? ` · Expires ${String(account.cardExpiryMonth).padStart(2, "0")}/${account.cardExpiryYear}`
-              : null}
-          </p>
+          <p style={{ margin: "0.25rem 0 0", color: "var(--ink-soft)", fontSize: "0.85rem" }}>{subtitle}</p>
         </div>
         <span className={`chip chip--${chip.tone}`}>{chip.label}</span>
       </div>
@@ -117,11 +132,11 @@ export function PaymentMethodsList() {
   if (accounts.length === 0) {
     return (
       <div className="empty-state">
-        <h3>No payment methods yet</h3>
-        <p>Add a bank account or debit card so you&apos;re ready to fund or receive payments.</p>
+        <h3>No bank account connected</h3>
+        <p>Connect a bank account so you&apos;re ready to fund or receive payments.</p>
         <div className="hero__actions" style={{ marginTop: "0.5rem" }}>
           <Link href="/payment-methods/add-bank" className="button button--primary">
-            Add bank account
+            Connect bank account
           </Link>
           <Link href="/payment-methods/add-card" className="button button--ghost">
             Add debit card

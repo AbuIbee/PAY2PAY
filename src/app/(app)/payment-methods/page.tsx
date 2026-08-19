@@ -16,7 +16,7 @@ export default function PaymentMethodsPage() {
         </div>
         <div className="hero__actions">
           <Link href="/payment-methods/add-bank" className="button button--primary">
-            Add bank account
+            Connect bank account
           </Link>
           <Link href="/payment-methods/add-card" className="button button--ghost">
             Add debit card

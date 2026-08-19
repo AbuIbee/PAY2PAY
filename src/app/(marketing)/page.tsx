@@ -1,5 +1,3 @@
-import { EarlyAccessForm } from "@/components/EarlyAccessForm";
-
 const VALUE_PROPS = [
   {
     eyebrow: "Clear terms",
@@ -242,8 +240,7 @@ export default function HomePage() {
             ))}
           </div>
           <p className="preview-note">
-            Early access: account creation, agreements, signatures, and payments are live for
-            signed-up users.
+            Create an account today to draft your first agreement.
           </p>
         </div>
         <ProductPreview />
@@ -342,8 +339,8 @@ export default function HomePage() {
             <span className="eyebrow eyebrow--light"><span /> Honest by design</span>
             <h2 id="trust-heading">A repayment platform—not a lender, collector, or guarantor.</h2>
             <p>
-              PAY2PAY is being built to document and facilitate repayment through qualified providers.
-              It does not advance funds, guarantee repayment, or claim formal Sharia certification.
+              PAY2PAY documents and facilitates repayment through qualified providers. It does not
+              advance funds, guarantee repayment, or claim formal Sharia certification.
             </p>
           </div>
           <div className="trust-panel__facts">
@@ -352,23 +349,6 @@ export default function HomePage() {
             <div><strong>1</strong><span>shared agreement timeline</span></div>
           </div>
         </div>
-      </section>
-
-      <section className="early-access" id="early-access" aria-labelledby="early-access-heading">
-        <div className="early-access__copy">
-          <span className="eyebrow"><span /> In active development</span>
-          <h2 id="early-access-heading">Get on the early-access list.</h2>
-          <p>
-            PAY2PAY is currently in its product-development stage. Functional accounts, agreements,
-            signatures, and payments are not enabled yet. Joining early access does not create an
-            account — it lets us reach out as new capabilities become available.
-          </p>
-          <ul>
-            <li><b aria-hidden="true">✓</b>No bank account, card, SSN, or government ID requested here.</li>
-            <li><b aria-hidden="true">✓</b>You can ask us to remove your information at any time.</li>
-          </ul>
-        </div>
-        <EarlyAccessForm />
       </section>
     </>
   );

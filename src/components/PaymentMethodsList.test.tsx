@@ -29,8 +29,8 @@ describe("PaymentMethodsList", () => {
       ]),
     );
     render(<PaymentMethodsList />);
-    expect(await screen.findByText(/no payment methods yet/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /add bank account/i })).toHaveAttribute("href", "/payment-methods/add-bank");
+    expect(await screen.findByText(/no bank account connected/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /connect bank account/i })).toHaveAttribute("href", "/payment-methods/add-bank");
     expect(screen.getByRole("link", { name: /add debit card/i })).toHaveAttribute("href", "/payment-methods/add-card");
   });
 
@@ -45,12 +45,13 @@ describe("PaymentMethodsList", () => {
               {
                 id: "acct-1",
                 accountType: "bank_account",
-                providerName: "sandbox-bank",
+                providerName: "sandbox_mock",
                 maskedLast4: "1234",
                 institutionDisplayName: "First Sandbox Bank",
                 cardExpiryMonth: null,
                 cardExpiryYear: null,
                 cardBrand: null,
+                bankAccountSubtype: "checking",
                 status: "verified",
                 createdAt: new Date().toISOString(),
               },
@@ -63,6 +64,7 @@ describe("PaymentMethodsList", () => {
                 cardExpiryMonth: 8,
                 cardExpiryYear: 2028,
                 cardBrand: "Visa",
+                bankAccountSubtype: null,
                 status: "pending_verification",
                 createdAt: new Date().toISOString(),
               },
@@ -81,7 +83,7 @@ describe("PaymentMethodsList", () => {
     expect(screen.queryByText("verified")).not.toBeInTheDocument();
     expect(screen.queryByText("pending_verification")).not.toBeInTheDocument();
     // Never display full/raw account numbers — only the masked last 4.
-    expect(screen.getByText(/ending in 1234/i)).toBeInTheDocument();
+    expect(screen.getByText(/checking.*1234/i)).toBeInTheDocument();
     expect(screen.getByText(/ending in 4321/i)).toBeInTheDocument();
   });
 

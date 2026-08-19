@@ -36,7 +36,7 @@ export class SandboxKycProvider implements KycKybProvider {
 
   async retrieveVerificationStatus(providerVerificationId: string): Promise<RetrieveVerificationStatusResult> {
     const status = this.verifications.get(providerVerificationId);
-    if (!status) throw new ValidationError("Unknown sandbox verification id.");
+    if (!status) throw new ValidationError("Unknown verification reference.");
     return { providerVerificationId, status };
   }
 

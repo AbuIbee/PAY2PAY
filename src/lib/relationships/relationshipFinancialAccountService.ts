@@ -11,6 +11,7 @@ import type { PartyRef } from "./relationshipInvitationService";
 import type { RelationshipRepository, RelationshipParticipantRecord, RelationshipParticipantRepository } from "./relationshipService";
 
 export type FinancialAccountType = "bank_account" | "debit_card";
+export type BankAccountSubtype = "checking" | "savings";
 export type FinancialAccountStatus = "pending_verification" | "verified" | "failed" | "disabled";
 export type FinancialAccountUsage = "funding" | "payout";
 export type RelationshipFinancialAccountAssignmentStatus = "active" | "superseded";
@@ -27,6 +28,7 @@ export interface FinancialAccountRecord {
   cardExpiryMonth: number | null;
   cardExpiryYear: number | null;
   cardBrand: string | null;
+  bankAccountSubtype: BankAccountSubtype | null;
   status: FinancialAccountStatus;
   addedByUserId: string;
   createdAt: Date;
@@ -68,6 +70,7 @@ export interface AdminFinancialAccountAssignmentView {
   accountStatus: FinancialAccountStatus;
   maskedLast4: string | null;
   institutionDisplayName: string | null;
+  bankAccountSubtype: BankAccountSubtype | null;
   effectiveFrom: Date;
   effectiveTo: Date | null;
 }
@@ -85,6 +88,7 @@ export interface FinancialAccountRepository {
     cardExpiryMonth: number | null;
     cardExpiryYear: number | null;
     cardBrand: string | null;
+    bankAccountSubtype: BankAccountSubtype | null;
     addedByUserId: string;
   }): Promise<FinancialAccountRecord>;
   findById(id: string): Promise<FinancialAccountRecord | null>;
@@ -181,6 +185,7 @@ export class RelationshipFinancialAccountService {
     cardExpiryMonth?: number | null;
     cardExpiryYear?: number | null;
     cardBrand?: string | null;
+    bankAccountSubtype?: BankAccountSubtype | null;
   }): Promise<FinancialAccountRecord> {
     await this.authorizeParty(input.actingUserId, input.actingParty);
     if (!input.providerAccountRef.trim()) {
@@ -225,6 +230,7 @@ export class RelationshipFinancialAccountService {
       cardExpiryMonth: input.cardExpiryMonth ?? null,
       cardExpiryYear: input.cardExpiryYear ?? null,
       cardBrand: input.cardBrand ?? null,
+      bankAccountSubtype: input.bankAccountSubtype ?? null,
       addedByUserId: input.actingUserId,
     });
     await this.recordAccountAudit(account, "FINANCIAL_ACCOUNT_ADDED", input.actingUserId, null);
@@ -288,6 +294,7 @@ export class RelationshipFinancialAccountService {
       accountStatus: a.financialAccount.status,
       maskedLast4: a.financialAccount.maskedLast4,
       institutionDisplayName: a.financialAccount.institutionDisplayName,
+      bankAccountSubtype: a.financialAccount.bankAccountSubtype,
       effectiveFrom: a.effectiveFrom,
       effectiveTo: a.effectiveTo,
     }));

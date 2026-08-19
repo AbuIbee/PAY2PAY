@@ -591,6 +591,14 @@ export const relationshipInvitationStatusEnum = pgEnum("relationship_invitation_
 /** Sprint 18A §15: which kind of financial account a party has on file. */
 export const financialAccountTypeEnum = pgEnum("financial_account_type", ["bank_account", "debit_card"]);
 
+/**
+ * Phase 6A (docs/prsprints/PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md): a bank account's own
+ * checking/savings distinction — non-sensitive display/routing metadata, nullable and meaningful only
+ * when `financial_account.account_type = 'bank_account'`, mirroring `cardExpiryMonth`/`cardBrand`'s
+ * identical nullable-and-type-specific precedent on the same table. Never a raw credential.
+ */
+export const bankAccountSubtypeEnum = pgEnum("bank_account_subtype", ["checking", "savings"]);
+
 /** Sprint 18A §17: the relationship layer's own authoritative verification vocabulary, consumed from (never re-implemented on top of) Sprint 11/12's existing ACH mandate / debit-card verification concepts — see relationshipFinancialAccountService.ts's doc comment. */
 export const financialAccountStatusEnum = pgEnum("financial_account_status", ["pending_verification", "verified", "failed", "disabled"]);
 

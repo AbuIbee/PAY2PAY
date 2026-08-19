@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
-import { AddFinancialAccountForm } from "@/components/AddFinancialAccountForm";
+import { BankConnectionForm } from "@/components/BankConnectionForm";
 
-export const metadata: Metadata = { title: "Add bank account" };
+export const metadata: Metadata = { title: "Connect bank account" };
 
 export default function AddBankAccountPage() {
   return (
     <div className="app-page">
       <div className="app-page__header">
-        <h1>Add bank account</h1>
+        <h1>Connect bank account</h1>
       </div>
-      <AddFinancialAccountForm accountType="bank_account" />
+      <BankConnectionForm />
     </div>
   );
 }

@@ -26,6 +26,7 @@ class PaymentAttemptAdminReaderAdapter implements AdminPaymentAttemptReader {
       providerPaymentId: r.providerPaymentId,
       amountMinorUnits: r.amountMinorUnits,
       currency: r.currency,
+      bankConnectionId: r.bankConnectionId,
       createdAt: r.createdAt,
     }));
   }

@@ -4,6 +4,7 @@ import { getDb } from "@/db/client";
 import { financialAccount, relationshipFinancialAccount } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
 import type {
+  BankAccountSubtype,
   FinancialAccountRecord,
   FinancialAccountType,
   FinancialAccountStatus,
@@ -47,6 +48,7 @@ function toAccountRecord(row: AccountRow): FinancialAccountRecord {
     cardExpiryMonth: row.cardExpiryMonth,
     cardExpiryYear: row.cardExpiryYear,
     cardBrand: row.cardBrand,
+    bankAccountSubtype: row.bankAccountSubtype as BankAccountSubtype | null,
     status: row.status as FinancialAccountStatus,
     addedByUserId: row.addedByUserId,
     createdAt: row.createdAt,

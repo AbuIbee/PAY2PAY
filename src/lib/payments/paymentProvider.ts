@@ -23,6 +23,29 @@ export interface LinkBankAccountResult {
   providerBankAccountRef: string;
 }
 
+/**
+ * Phase 6A (docs/prsprints/PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md): the fallback-architecture
+ * bank-account tokenization boundary — "if raw bank values must transit Paid2You... immediately
+ * exchange them for the provider's safe token/reference, discard them immediately after exchange."
+ * Every implementer of this method must accept the raw values, exchange them for a safe reference, and
+ * return ONLY non-sensitive fields — it must never persist, log, or otherwise retain
+ * `routingNumber`/`accountNumber` beyond the lifetime of this single call. The preferred, non-fallback
+ * architecture (a provider-hosted/tokenized collection widget) is not available in sandbox because no
+ * production financial provider has been selected (see docs/PRODUCTION_PROVIDER_READINESS.md) — this
+ * is the documented, deliberate fallback, not the target architecture.
+ */
+export interface TokenizeBankAccountInput {
+  profile: ProfileRef;
+  routingNumber: string;
+  accountNumber: string;
+  accountSubtype: "checking" | "savings";
+  accountHolderName: string;
+}
+export interface TokenizeBankAccountResult {
+  providerAccountRef: string;
+  maskedLast4: string;
+}
+
 export interface CreatePaymentMethodTokenInput {
   profile: ProfileRef;
   methodKind: "ach" | "debit_card";
@@ -92,6 +115,8 @@ export interface PaymentProvider {
   readonly providerEnvironment: "sandbox" | "production";
   createRecipientAccount(input: CreateRecipientAccountInput): Promise<CreateRecipientAccountResult>;
   linkBankAccount(input: LinkBankAccountInput): Promise<LinkBankAccountResult>;
+  /** See TokenizeBankAccountInput's own doc comment for the non-persistence contract every implementer must honor. */
+  tokenizeBankAccount(input: TokenizeBankAccountInput): Promise<TokenizeBankAccountResult>;
   createPaymentMethodToken(input: CreatePaymentMethodTokenInput): Promise<CreatePaymentMethodTokenResult>;
   createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult>;
   retrievePayment(providerPaymentId: string): Promise<RetrievePaymentResult>;
