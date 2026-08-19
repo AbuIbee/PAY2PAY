@@ -34,7 +34,7 @@ describe("OrganizationStaff", () => {
       "/api/auth/me": { id: "viewer-1" },
       "/api/staff?businessProfileId=biz-1": {
         staff: [
-          { id: "member-1", userId: "viewer-1", role: "accountant_viewer", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+          { id: "member-1", userId: "viewer-1", name: "Val Viewer", email: "viewer@example.com", role: "accountant_viewer", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
         ],
       },
       "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -50,7 +50,7 @@ describe("OrganizationStaff", () => {
       "/api/auth/me": { id: "owner-1" },
       "/api/staff?businessProfileId=biz-1": {
         staff: [
-          { id: "member-1", userId: "owner-1", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
+          { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
         ],
       },
       "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -65,8 +65,8 @@ describe("OrganizationStaff", () => {
       "/api/auth/me": { id: "owner-1" },
       "/api/staff?businessProfileId=biz-1": {
         staff: [
-          { id: "member-1", userId: "owner-1", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
-          { id: "member-2", userId: "staffer-1", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+          { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
+          { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
         ],
       },
       "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -75,13 +75,13 @@ describe("OrganizationStaff", () => {
     await waitFor(() => expect(screen.getByText(/team members/i)).toBeInTheDocument());
 
     // Owner's own row: no action buttons, just a "You" marker.
-    const ownRow = screen.getByText("owner-1…").closest("tr")!;
+    const ownRow = screen.getByText("Jane Owner").closest("tr")!;
     expect(ownRow).toHaveTextContent(/you/i);
     expect(within(ownRow).queryByRole("button", { name: /change role/i })).not.toBeInTheDocument();
     expect(within(ownRow).queryByRole("button", { name: /^remove$/i })).not.toBeInTheDocument();
 
     // The other member's row: both actions present.
-    const otherRow = screen.getByText("staffer-…").closest("tr")!;
+    const otherRow = screen.getByText("Sam Staffer").closest("tr")!;
     expect(within(otherRow).getByRole("button", { name: /change role/i })).toBeInTheDocument();
     expect(within(otherRow).getByRole("button", { name: /^remove$/i })).toBeInTheDocument();
   });
@@ -92,8 +92,8 @@ describe("OrganizationStaff", () => {
       "/api/auth/me": { id: "viewer-1" },
       "/api/staff?businessProfileId=biz-1": {
         staff: [
-          { id: "member-1", userId: "viewer-1", role: "accountant_viewer", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
-          { id: "member-2", userId: "staffer-1", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+          { id: "member-1", userId: "viewer-1", name: "Val Viewer", email: "viewer@example.com", role: "accountant_viewer", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+          { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
         ],
       },
       "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -112,8 +112,8 @@ describe("OrganizationStaff", () => {
         "/api/auth/me": { id: "owner-1" },
         "/api/staff?businessProfileId=biz-1": {
           staff: [
-            { id: "member-1", userId: "owner-1", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
-            { id: "member-2", userId: "staffer-1", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+            { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
+            { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
           ],
         },
         "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -127,7 +127,7 @@ describe("OrganizationStaff", () => {
     const user = userEvent.setup();
 
     render(<OrganizationStaff />);
-    const otherRow = (await screen.findByText("staffer-…")).closest("tr")!;
+    const otherRow = (await screen.findByText("Sam Staffer")).closest("tr")!;
     await user.click(within(otherRow).getByRole("button", { name: /^remove$/i }));
 
     expect(window.confirm).toHaveBeenCalled();
@@ -145,10 +145,10 @@ describe("OrganizationStaff", () => {
           status: 200,
           json: async () => ({
             staff: removed
-              ? [{ id: "member-1", userId: "owner-1", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() }]
+              ? [{ id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() }]
               : [
-                  { id: "member-1", userId: "owner-1", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
-                  { id: "member-2", userId: "staffer-1", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+                  { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
+                  { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
                 ],
           }),
         };
@@ -177,7 +177,7 @@ describe("OrganizationStaff", () => {
     const user = userEvent.setup();
 
     render(<OrganizationStaff />);
-    const otherRow = (await screen.findByText("staffer-…")).closest("tr")!;
+    const otherRow = (await screen.findByText("Sam Staffer")).closest("tr")!;
     await user.click(within(otherRow).getByRole("button", { name: /^remove$/i }));
 
     expect(await screen.findByText(/verify it's you/i)).toBeInTheDocument();
@@ -189,6 +189,6 @@ describe("OrganizationStaff", () => {
       expect(removeCalls).toHaveLength(2);
     });
     // Confirms the row list was refreshed after a successful removal.
-    await waitFor(() => expect(screen.queryByText("staffer-…")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("Sam Staffer")).not.toBeInTheDocument());
   });
 });

@@ -66,21 +66,21 @@ describe("AgreementCreateWizard", () => {
     const select = await screen.findByLabelText(/connection/i);
     await user.selectOptions(select, "rel-1");
 
-    expect(await screen.findByText(/you are the/i)).toBeInTheDocument();
-    expect(screen.getByText("creditor")).toBeInTheDocument();
+    expect(await screen.findByText(/you are/i)).toBeInTheDocument();
+    expect(screen.getByText(/receiving repayment \(creditor\)/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /next: terms/i }));
     await user.type(screen.getByLabelText(/^category$/i), "personal_loan");
-    await user.type(screen.getByLabelText(/^description$/i), "Test loan");
+    await user.type(screen.getByLabelText(/what is this repayment for/i), "Test loan");
     await user.type(screen.getByLabelText(/original amount/i), "500");
     await user.type(screen.getByLabelText(/first payment amount/i), "50");
     await user.type(screen.getByLabelText(/first payment date/i), "2026-10-01");
     await user.type(screen.getByLabelText(/recurring installment amount/i), "50");
-    await user.type(screen.getByLabelText(/early payoff terms/i), "Anytime");
-    await user.type(screen.getByLabelText(/hardship rules/i), "Case by case");
-    await user.type(screen.getByLabelText(/partial payment rules/i), "Allowed");
-    await user.type(screen.getByLabelText(/settlement rules/i), "Negotiable");
-    await user.type(screen.getByLabelText(/dispute procedure/i), "Contact support");
+    await user.type(screen.getByLabelText(/paid off early/i), "Anytime");
+    await user.type(screen.getByLabelText(/can't be made on time/i), "Case by case");
+    await user.type(screen.getByLabelText(/partial payments allowed/i), "Allowed");
+    await user.type(screen.getByLabelText(/settled for less than the full balance/i), "Negotiable");
+    await user.type(screen.getByLabelText(/how will disagreements be handled/i), "Contact support");
 
     await user.click(screen.getByRole("button", { name: /next: review/i }));
     await user.click(screen.getByRole("button", { name: /create draft agreement/i }));

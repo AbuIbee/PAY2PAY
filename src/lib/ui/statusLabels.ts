@@ -410,3 +410,25 @@ export const adminCapabilityLabel: Record<string, string> = {
   place_retention_hold: "Place legal holds",
   release_retention_hold: "Release legal holds",
 };
+
+/**
+ * PRSprint 25: plain-language party-role label ("Avoid overusing financial
+ * jargon" / master-spec item 49) — pairs the friendly phrase with the
+ * precise term in parentheses so a user who has learned "creditor"/"debtor"
+ * from elsewhere on the page isn't left guessing which one they are.
+ */
+export function partyRoleLabel(role: "creditor" | "debtor"): string {
+  return role === "creditor" ? "receiving repayment (creditor)" : "making repayment (debtor)";
+}
+
+/** PRSprint 25: plain-language fee-allocation label — never leak the raw `creditor_pays`/`debtor_pays` enum string into the UI. */
+export function feeAllocationLabel(allocation: "creditor_pays" | "debtor_pays" | "split_evenly"): string {
+  switch (allocation) {
+    case "creditor_pays":
+      return "Paid by the person receiving repayment";
+    case "debtor_pays":
+      return "Paid by the person making repayment";
+    case "split_evenly":
+      return "Split evenly between both parties";
+  }
+}

@@ -20,6 +20,7 @@ import {
   partialPaymentRequestStatusLabel,
   settlementProposalStatusLabel,
   agreementDisputeStatusLabel,
+  feeAllocationLabel,
   type ChipTone,
 } from "@/lib/ui/statusLabels";
 
@@ -377,7 +378,7 @@ export function AgreementDetail() {
           {data.version.frequency} installments of {formatMoney(terms.installmentAmountMinorUnits)} (
           {terms.numberOfInstallments} remaining, final payment {formatMoney(terms.finalPaymentMinorUnits)})
         </p>
-        <p style={{ margin: 0 }}>Fee allocation: {data.version.feeAllocation.replaceAll("_", " ")}</p>
+        <p style={{ margin: 0 }}>Fee allocation: {feeAllocationLabel(data.version.feeAllocation)}</p>
         {isSignedOrLater && (
           <button type="button" className="button button--ghost" style={{ marginTop: "0.75rem" }} onClick={() => void handleViewPdf()}>
             View signed PDF
@@ -460,11 +461,12 @@ export function AgreementDetail() {
               type="button"
               className="button button--ghost"
               disabled={actionStatus === "working"}
-              onClick={() =>
+              onClick={() => {
+                if (!window.confirm("Reject this agreement? This cannot be undone and the other party will be notified.")) return;
                 void runAction(() =>
                   apiFetch("/api/agreements/decide", { method: "POST", body: JSON.stringify({ agreementId: data.id, decision: "reject", reason: rejectReason || undefined }) }),
-                )
-              }
+                );
+              }}
             >
               Reject
             </button>

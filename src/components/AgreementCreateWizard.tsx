@@ -10,7 +10,7 @@ import {
 import type { SelectableProfile } from "./ProfileSwitcher";
 import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
 import { formatMoney } from "@/lib/ui/money";
-import { relationshipStatusLabel } from "@/lib/ui/statusLabels";
+import { relationshipStatusLabel, partyRoleLabel, feeAllocationLabel } from "@/lib/ui/statusLabels";
 
 interface RelationshipSummary {
   id: string;
@@ -246,8 +246,8 @@ export function AgreementCreateWizard() {
 
           {counterparty && myRole && (
             <div className="confirm-banner">
-              You are the <strong>{myRole}</strong>; the counterparty is the <strong>{counterparty.role}</strong> (
-              {counterparty.kind} party).
+              You are <strong>{partyRoleLabel(myRole)}</strong>; the counterparty is{" "}
+              <strong>{partyRoleLabel(counterparty.role)}</strong> ({counterparty.kind} party).
             </div>
           )}
 
@@ -283,7 +283,7 @@ export function AgreementCreateWizard() {
         <div style={{ display: "grid", gap: "1rem" }}>
           <div className="card">
             <p style={{ margin: 0 }}>
-              <strong>Role:</strong> {myRole}
+              <strong>You are:</strong> {partyRoleLabel(myRole)}
             </p>
             <p style={{ margin: 0 }}>
               <strong>Category:</strong> {terms.category}
@@ -296,7 +296,7 @@ export function AgreementCreateWizard() {
               {terms.firstPaymentDate}
             </p>
             <p style={{ margin: 0 }}>
-              <strong>Fee allocation:</strong> {terms.feeAllocation.replaceAll("_", " ")}
+              <strong>Fee allocation:</strong> {feeAllocationLabel(terms.feeAllocation)}
             </p>
           </div>
           {submitError && (

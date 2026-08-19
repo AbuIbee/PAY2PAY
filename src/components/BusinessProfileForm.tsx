@@ -64,11 +64,13 @@ export function BusinessProfileForm({ onCreated }: { onCreated: () => void }) {
     <form className="early-access-form" onSubmit={handleSubmit} noValidate style={{ maxWidth: "28rem" }}>
       <div className="field">
         <label htmlFor={`${formId}-legal`}>Legal business name</label>
-        <input id={`${formId}-legal`} name="legalBusinessName" type="text" required maxLength={200} />
+        <input id={`${formId}-legal`} name="legalBusinessName" type="text" required maxLength={200} placeholder="e.g. Doe Home Repairs LLC" />
+        <small>The name on your registration or tax documents.</small>
       </div>
       <div className="field">
         <label htmlFor={`${formId}-display`}>Display name</label>
-        <input id={`${formId}-display`} name="displayName" type="text" required maxLength={200} />
+        <input id={`${formId}-display`} name="displayName" type="text" required maxLength={200} placeholder="e.g. Doe Home Repairs" />
+        <small>What counterparties will see on agreements — can be shorter or friendlier than the legal name.</small>
       </div>
       <div className="field">
         <label htmlFor={`${formId}-entity`}>Entity type</label>

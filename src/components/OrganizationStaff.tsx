@@ -21,6 +21,8 @@ const ASSIGNABLE_ROLES = ["owner", "manager", "receivables_staff", "accountant_v
 interface StaffMember {
   id: string;
   userId: string;
+  name: string | null;
+  email: string | null;
   role: StaffRole;
   customRoleId: string | null;
   isAuthorizedRepresentative: boolean;
@@ -35,8 +37,9 @@ interface CustomRole {
 
 type LoadState = "loading" | "ready" | "not_business" | "error";
 
-function shortId(id: string): string {
-  return `${id.slice(0, 8)}…`;
+/** PRSprint 25: never show a raw/truncated user ID as the only identifier for a person — fall back to "Member" only when a name was genuinely never set. */
+function memberLabel(member: Pick<StaffMember, "name" | "email">): string {
+  return member.name ?? member.email ?? "Member";
 }
 
 /** Mirrors StaffService.hasCapability exactly (owner -> always; custom -> own role's permissions; else -> DEFAULT_ROLE_CAPABILITIES) — this is presentation-only, every mutating route independently re-checks server-side. */
@@ -352,7 +355,10 @@ function StaffMemberRow({
 
   return (
     <tr>
-      <td data-label="Member">{shortId(member.userId)}</td>
+      <td data-label="Member">
+        {memberLabel(member)}
+        {member.name && member.email && <><br /><small>{member.email}</small></>}
+      </td>
       <td data-label="Role">
         {editingRole ? (
           <div style={{ display: "grid", gap: "0.5rem" }}>
