@@ -21,6 +21,7 @@ import type {
  */
 export class SandboxKycProvider implements KycKybProvider {
   readonly providerName = "sandbox_kyc_mock";
+  readonly providerEnvironment = "sandbox" as const;
   private readonly verifications = new Map<string, KycVerificationStatus>();
 
   constructor(private readonly webhookSecret: string) {}

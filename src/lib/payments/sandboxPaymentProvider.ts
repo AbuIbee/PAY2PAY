@@ -38,6 +38,7 @@ interface StoredSandboxPayment {
  */
 export class SandboxPaymentProvider implements PaymentProvider {
   readonly providerName = "sandbox_mock";
+  readonly providerEnvironment = "sandbox" as const;
   private readonly payments = new Map<string, StoredSandboxPayment>();
 
   constructor(private readonly webhookSecret: string) {}

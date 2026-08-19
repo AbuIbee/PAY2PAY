@@ -67,6 +67,16 @@ const serverEnvSchema = z.object({
   // when a payment or KYC operation is actually attempted without one.
   PAYMENT_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
   KYC_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
+  // PRSprint 21 (docs/prsprints/PRSPRINT_21_PRODUCTION_FINANCIAL_PROVIDER_ARCHITECTURE.md): which
+  // registered provider implementation getPaymentProvider()/getKycProvider() construct — see
+  // src/lib/providers/providerCapabilities.ts for the full registry. Only "sandbox" is registered
+  // today; adding a real adapter later means adding its name to this enum, not changing any
+  // consuming code (PaymentService/KycVerificationService depend only on the interface). Rejecting
+  // an unregistered value at the schema level (rather than accepting any string) is deliberate —
+  // a typo or a not-yet-implemented provider name must fail loudly at startup, never silently fall
+  // through to sandbox behavior while claiming something else was selected.
+  PAYMENT_PROVIDER: z.enum(["sandbox"]).default("sandbox"),
+  KYC_PROVIDER: z.enum(["sandbox"]).default("sandbox"),
   // Sprint 13 (docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md): shared secret protecting
   // POST /api/scheduler/retry-failed-payments — Vercel Cron Jobs automatically send
   // `Authorization: Bearer <CRON_SECRET>` to the route(s) configured in vercel.json when this

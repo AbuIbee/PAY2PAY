@@ -83,6 +83,13 @@ export interface ParsedWebhookEvent {
  */
 export interface PaymentProvider {
   readonly providerName: string;
+  /**
+   * PRSprint 21 (docs/prsprints/PRSPRINT_21_PRODUCTION_FINANCIAL_PROVIDER_ARCHITECTURE.md): declares
+   * this instance's own environment — must always match the same provider's entry in
+   * src/lib/providers/providerCapabilities.ts's registry (getPaymentProvider() asserts this at
+   * construction time via assertProviderEnvironmentConsistency).
+   */
+  readonly providerEnvironment: "sandbox" | "production";
   createRecipientAccount(input: CreateRecipientAccountInput): Promise<CreateRecipientAccountResult>;
   linkBankAccount(input: LinkBankAccountInput): Promise<LinkBankAccountResult>;
   createPaymentMethodToken(input: CreatePaymentMethodTokenInput): Promise<CreatePaymentMethodTokenResult>;
