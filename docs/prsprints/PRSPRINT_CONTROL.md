@@ -64,6 +64,18 @@ fail-open behavior specifically).
    protected-route denial after logout PASS.
 5. If any of those fail, do not merge.
 
+## Phase 6A: Pre-Production Financial UX & Sandbox Removal Gate
+
+A mandatory gate between Phase 6 and PRSprint 25/Phase 7, separately authorized and separately
+numbered from the PRSprint 1-34 program (mirrors this file's own "Product Sprint 19 is separate from
+PRSprint 19" precedent above). **Status: COMPLETE.** Branch `phase-6a-preproduction-financial-ux`
+(merged, deleted), commits `c9bbb8e` → `cbc330c`, merged to `master` at `2aabe21` via PR #47 (CI green
+on the PR and the post-merge push, including the Supabase schema drift check). Migration
+`20260819090000_phase6a_bank_connection_ledger.sql` applied to the linked production Supabase project
+and confirmed. Full report, including the required Banking Invariant Report and A-AE verification
+matrix: `docs/prsprints/PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md`. Product Owner Review:
+PENDING — Claude does not self-approve. PRSprint 25/Phase 7 not started.
+
 ## Allowed Status Values
 
 - **PRSprint Status:** `NOT STARTED`, `IN PROGRESS`, `BLOCKED`, `IMPLEMENTATION COMPLETE`, `AWAITING REVIEW`, `APPROVED`, `FAILED`
