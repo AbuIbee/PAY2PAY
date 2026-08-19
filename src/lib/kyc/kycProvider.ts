@@ -52,6 +52,8 @@ export interface ParsedKycWebhookEvent {
  */
 export interface KycKybProvider {
   readonly providerName: string;
+  /** PRSprint 21 — see PaymentProvider.providerEnvironment's identical doc comment. */
+  readonly providerEnvironment: "sandbox" | "production";
   submitIndividualVerification(input: SubmitIndividualVerificationInput): Promise<SubmitVerificationResult>;
   submitBusinessVerification(input: SubmitBusinessVerificationInput): Promise<SubmitVerificationResult>;
   retrieveVerificationStatus(providerVerificationId: string): Promise<RetrieveVerificationStatusResult>;

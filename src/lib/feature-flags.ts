@@ -14,6 +14,18 @@
 export const FEATURE_FLAGS = {
   /** Placeholder flag demonstrating the mechanism; remove once a real flag needs it. */
   exampleFoundationFlag: false,
+  // PRSprint 21 (docs/prsprints/PRSPRINT_21_PRODUCTION_FINANCIAL_PROVIDER_ARCHITECTURE.md):
+  // "Unavailable live functions are feature-gated" (acceptance criterion) / SPRINT_18C item 93,
+  // "Production bank/card features should be feature-gated... until live provider approval exists."
+  // Both default false because no live (production-tagged) payment or KYC/KYB provider is registered
+  // anywhere in this codebase yet (see src/lib/providers/providerCapabilities.ts) — flipping either
+  // on ahead of a real provider actually being wired would violate the Hard Stop rule these PRSprints
+  // share ("never represent sandbox as live production functionality"). UI/routes that would offer a
+  // genuinely live capability (real bank-account linking, real debit-card issuance) must check the
+  // corresponding flag via isFeatureEnabled() before rendering/allowing it, alongside — not instead
+  // of — checking the actual provider's own `providerEnvironment`.
+  liveBankingEnabled: false,
+  liveCardIssuanceEnabled: false,
 } as const satisfies Record<string, boolean>;
 
 export type FeatureFlagName = keyof typeof FEATURE_FLAGS;

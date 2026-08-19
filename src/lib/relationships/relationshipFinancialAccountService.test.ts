@@ -98,6 +98,60 @@ describe("RelationshipFinancialAccountService", () => {
       expect(account.cardBrand).toBe("visa");
     });
 
+    it(
+      "PRSprint 22 (docs/prsprints/PRSPRINT_22_KYC_KYB_FINANCIAL_ACCOUNT_PROVISIONING.md): a repeated " +
+        "provisioning request (same providerAccountRef) returns the existing account idempotently, " +
+        "never creating a second row for the same underlying bank account/card",
+      async () => {
+        const userId = randomUUID();
+        const profileId = randomUUID();
+        ctx.profileOwners.set("personal", profileId, userId);
+        const input = {
+          actingUserId: userId,
+          actingParty: { kind: "personal" as const, id: profileId },
+          accountType: "bank_account" as const,
+          providerName: "sandbox",
+          providerAccountRef: "ref_retry_1",
+          maskedLast4: "1234",
+          institutionDisplayName: "Test Bank",
+        };
+        const first = await ctx.relationshipFinancialAccountService.addAccount(input);
+        const second = await ctx.relationshipFinancialAccountService.addAccount(input);
+        expect(second.id).toBe(first.id);
+
+        const all = await ctx.relationshipFinancialAccountService.listAccountsForParty(userId, { kind: "personal", id: profileId });
+        expect(all.filter((a) => a.providerAccountRef === "ref_retry_1")).toHaveLength(1);
+      },
+    );
+
+    it(
+      "re-adding the same providerAccountRef after the original was disabled creates a fresh account, not a resurrected disabled one",
+      async () => {
+        const userId = randomUUID();
+        const profileId = randomUUID();
+        ctx.profileOwners.set("personal", profileId, userId);
+        const input = {
+          actingUserId: userId,
+          actingParty: { kind: "personal" as const, id: profileId },
+          accountType: "bank_account" as const,
+          providerName: "sandbox",
+          providerAccountRef: "ref_readd_1",
+          maskedLast4: "1234",
+          institutionDisplayName: "Test Bank",
+        };
+        const first = await ctx.relationshipFinancialAccountService.addAccount(input);
+        await ctx.relationshipFinancialAccountService.disableAccount({
+          financialAccountId: first.id,
+          actingUserId: userId,
+          actingParty: { kind: "personal", id: profileId },
+          reason: "No longer using this account.",
+        });
+        const second = await ctx.relationshipFinancialAccountService.addAccount(input);
+        expect(second.id).not.toBe(first.id);
+        expect(second.status).toBe("pending_verification");
+      },
+    );
+
     it("rejects adding an account for a profile the caller does not own", async () => {
       const ownerUserId = randomUUID();
       const profileId = randomUUID();

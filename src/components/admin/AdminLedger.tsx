@@ -15,6 +15,42 @@ interface ReconciliationExceptionRecord {
   resolutionReason: string | null;
 }
 
+// PRSprint 23 (docs/prsprints/PRSPRINT_23_ACH_BANK_LINKING_RECONCILIATION.md) item 109: "Support
+// should see provider references" — this per-agreement lookup surfaces exactly that, never a raw
+// bank_account_ref/card_token (see ledgerAdminService.ts's own doc comment for what's omitted).
+interface AdminPaymentAttemptSummary {
+  id: string;
+  status: string;
+  paymentMethod: string | null;
+  providerName: string;
+  providerPaymentId: string | null;
+  amountMinorUnits: number;
+  currency: string;
+  createdAt: string;
+}
+interface AdminAchMandateSummary {
+  id: string;
+  status: string;
+  authorizedAt: string;
+  revokedAt: string | null;
+}
+interface AdminDebitCardMethodSummary {
+  id: string;
+  status: string;
+  cardLast4: string;
+  cardBrand: string | null;
+  expiresAtMonth: number;
+  expiresAtYear: number;
+}
+interface AgreementLedgerView {
+  balance: { originalPrincipalMinorUnits: number; amountPaidMinorUnits: number; remainingBalanceMinorUnits: number; settlementState: string; currency: string };
+  entries: { id: string; entryType: string; paymentAttemptId: string; createdAt: string }[];
+  exceptions: ReconciliationExceptionRecord[];
+  paymentAttempts: AdminPaymentAttemptSummary[];
+  activeAchMandate: AdminAchMandateSummary | null;
+  activeDebitCard: AdminDebitCardMethodSummary | null;
+}
+
 const ACCOUNT_TYPES = [
   "processor_clearing",
   "creditor_proceeds_payable",
@@ -29,6 +65,10 @@ export function AdminLedger() {
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [actionError, setActionError] = useState<string | null>(null);
   const [resolutionReasons, setResolutionReasons] = useState<Record<string, string>>({});
+
+  const [lookupAgreementId, setLookupAgreementId] = useState("");
+  const [lookupState, setLookupState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [lookupView, setLookupView] = useState<AgreementLedgerView | null>(null);
 
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
@@ -75,6 +115,20 @@ export function AdminLedger() {
       await load();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Something went wrong resolving this exception.");
+    }
+  }
+
+  async function handleLookup(event: React.FormEvent) {
+    event.preventDefault();
+    if (!lookupAgreementId.trim()) return;
+    setLookupState("loading");
+    try {
+      const view = await apiFetch<AgreementLedgerView>(`/api/admin/ledger/agreement?agreementId=${encodeURIComponent(lookupAgreementId.trim())}`);
+      setLookupView(view);
+      setLookupState("ready");
+    } catch {
+      setLookupView(null);
+      setLookupState("error");
     }
   }
 
@@ -167,6 +221,72 @@ export function AdminLedger() {
               </div>
             );
           })}
+      </div>
+
+      <div className="card">
+        <div className="card__header">
+          <h2>Agreement lookup — provider references</h2>
+        </div>
+        <form onSubmit={(e) => void handleLookup(e)} style={{ display: "flex", gap: "0.75rem", alignItems: "flex-end", flexWrap: "wrap", marginBottom: "1rem" }}>
+          <div className="field" style={{ flex: 1, minWidth: "16rem" }}>
+            <label htmlFor="lookup-agreement">Agreement ID</label>
+            <input id="lookup-agreement" value={lookupAgreementId} onChange={(e) => setLookupAgreementId(e.target.value)} />
+          </div>
+          <button type="submit" className="button button--primary" disabled={lookupState === "loading"}>
+            {lookupState === "loading" ? "Looking up…" : "Look up"}
+          </button>
+        </form>
+        {lookupState === "error" && (
+          <div className="form-status form-status--error" role="alert">
+            Could not load this agreement&apos;s ledger view.
+          </div>
+        )}
+        {lookupState === "ready" && lookupView && (
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <p style={{ margin: 0 }}>
+              Balance: {formatMoney(lookupView.balance.amountPaidMinorUnits, lookupView.balance.currency)} paid of{" "}
+              {formatMoney(lookupView.balance.originalPrincipalMinorUnits, lookupView.balance.currency)} (
+              {lookupView.balance.settlementState.replace(/_/g, " ")})
+            </p>
+            <div>
+              <h3 style={{ fontSize: "0.95rem" }}>Payment attempts</h3>
+              {lookupView.paymentAttempts.length === 0 ? (
+                <p style={{ color: "var(--ink-soft)" }}>None.</p>
+              ) : (
+                <ul style={{ margin: 0, paddingInlineStart: "1.25rem" }}>
+                  {lookupView.paymentAttempts.map((p) => (
+                    <li key={p.id} style={{ fontSize: "0.85rem" }}>
+                      {p.status} — {p.paymentMethod ?? "unspecified method"} —{" "}
+                      {formatMoney(p.amountMinorUnits, p.currency)} — provider: {p.providerName}
+                      {p.providerPaymentId ? ` (${p.providerPaymentId})` : ""}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <h3 style={{ fontSize: "0.95rem" }}>Active ACH mandate</h3>
+              {lookupView.activeAchMandate ? (
+                <p style={{ margin: 0, fontSize: "0.85rem" }}>
+                  {lookupView.activeAchMandate.status} — authorized {new Date(lookupView.activeAchMandate.authorizedAt).toLocaleDateString()}
+                </p>
+              ) : (
+                <p style={{ color: "var(--ink-soft)" }}>None.</p>
+              )}
+            </div>
+            <div>
+              <h3 style={{ fontSize: "0.95rem" }}>Active debit card on file</h3>
+              {lookupView.activeDebitCard ? (
+                <p style={{ margin: 0, fontSize: "0.85rem" }}>
+                  {lookupView.activeDebitCard.cardBrand ?? "Card"} ending {lookupView.activeDebitCard.cardLast4} — expires{" "}
+                  {lookupView.activeDebitCard.expiresAtMonth}/{lookupView.activeDebitCard.expiresAtYear} — {lookupView.activeDebitCard.status}
+                </p>
+              ) : (
+                <p style={{ color: "var(--ink-soft)" }}>None.</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {isOwner && (

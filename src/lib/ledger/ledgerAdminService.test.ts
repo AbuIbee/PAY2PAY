@@ -58,4 +58,53 @@ describe("LedgerAdminService", () => {
     expect(methodNames).not.toContain("updateEntry");
     expect(methodNames).not.toContain("deleteEntry");
   });
+
+  describe(
+    "PRSprint 23 (docs/prsprints/PRSPRINT_23_ACH_BANK_LINKING_RECONCILIATION.md) item 109: support-visible provider references",
+    () => {
+      it("surfaces payment attempts, an active ACH mandate, and an active debit card when the optional readers are wired", async () => {
+        const withReaders = new LedgerAdminService({
+          ledger: ctx.ledgerCtx.ledgerService,
+          balance: ctx.balanceCtx.balanceService,
+          reconciliation: ctx.reconciliationService,
+          payments: {
+            listByAgreementId: async () => [
+              {
+                id: "pay-1",
+                status: "succeeded",
+                paymentMethod: "ach",
+                providerName: "sandbox_mock",
+                providerPaymentId: "sandbox_pay_abc123",
+                amountMinorUnits: 5_000,
+                currency: "USD",
+                createdAt: new Date(),
+              },
+            ],
+          },
+          achMandates: {
+            findActiveForAgreement: async () => ({ id: "mandate-1", status: "active", authorizedAt: new Date(), revokedAt: null }),
+          },
+          debitCards: {
+            findActiveForAgreement: async () => null,
+          },
+        });
+        const view = await withReaders.getAgreementLedgerView("platform_admin", agreementId);
+        expect(view.paymentAttempts).toHaveLength(1);
+        expect(view.paymentAttempts[0]?.providerPaymentId).toBe("sandbox_pay_abc123");
+        expect(view.activeAchMandate).toMatchObject({ id: "mandate-1", status: "active" });
+        expect(view.activeDebitCard).toBeNull();
+        // Never a raw provider token — only the transaction-level providerPaymentId and non-sensitive
+        // mandate status/timestamps, matching AdminFinancialAccountAssignmentView's identical precedent.
+        expect(JSON.stringify(view)).not.toContain("bank_account_ref");
+        expect(JSON.stringify(view)).not.toContain("card_token");
+      });
+
+      it("returns empty/null (never throws) when the optional readers are omitted — every pre-PRSprint-23 test/call site is unaffected", async () => {
+        const view = await adminService.getAgreementLedgerView("platform_admin", agreementId);
+        expect(view.paymentAttempts).toEqual([]);
+        expect(view.activeAchMandate).toBeNull();
+        expect(view.activeDebitCard).toBeNull();
+      });
+    },
+  );
 });

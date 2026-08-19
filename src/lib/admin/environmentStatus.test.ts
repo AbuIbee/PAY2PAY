@@ -14,6 +14,10 @@ function baseEnv(overrides: Partial<ServerEnv> = {}): ServerEnv {
     SUPABASE_SERVICE_ROLE_KEY: undefined,
     PAYMENT_SANDBOX_WEBHOOK_SECRET: undefined,
     KYC_SANDBOX_WEBHOOK_SECRET: undefined,
+    PAYMENT_PROVIDER: "sandbox",
+    KYC_PROVIDER: "sandbox",
+    CARD_ISSUING_PROVIDER: "sandbox",
+    CARD_SANDBOX_WEBHOOK_SECRET: undefined,
     CRON_SECRET: undefined,
     RESEND_API_KEY: undefined,
     EMAIL_FROM_ADDRESS: undefined,
@@ -32,11 +36,22 @@ function baseEnv(overrides: Partial<ServerEnv> = {}): ServerEnv {
 describe("computeEnvironmentStatus", () => {
   it("never includes an actual secret value — every field is a boolean-like label", () => {
     const status = computeEnvironmentStatus(
-      baseEnv({ SUPABASE_URL: "https://proj.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "a-real-looking-secret-value", CRON_SECRET: "another-real-looking-secret" }),
+      baseEnv({
+        SUPABASE_URL: "https://proj.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY: "a-real-looking-secret-value",
+        CRON_SECRET: "another-real-looking-secret",
+        // PRSprint 21: the two provider-webhook HMAC secrets — confirmed never surfaced even though
+        // computeEnvironmentStatus now also derives paymentProvider/kycProvider (a *name*, not a
+        // secret) from PAYMENT_PROVIDER/KYC_PROVIDER.
+        PAYMENT_SANDBOX_WEBHOOK_SECRET: "payment-webhook-secret-value-should-never-leak",
+        KYC_SANDBOX_WEBHOOK_SECRET: "kyc-webhook-secret-value-should-never-leak",
+      }),
     );
     const serialized = JSON.stringify(status);
     expect(serialized).not.toContain("a-real-looking-secret-value");
     expect(serialized).not.toContain("another-real-looking-secret");
+    expect(serialized).not.toContain("payment-webhook-secret-value-should-never-leak");
+    expect(serialized).not.toContain("kyc-webhook-secret-value-should-never-leak");
   });
 
   it("reports database as not_configured when DATABASE_URL is empty", () => {
@@ -65,10 +80,23 @@ describe("computeEnvironmentStatus", () => {
   it("always reports payment/KYC providers as sandbox, regardless of APP_ENV — this codebase has no live adapter for either of them yet", () => {
     for (const appEnv of ["development", "test", "staging", "production"] as const) {
       const status = computeEnvironmentStatus(baseEnv({ APP_ENV: appEnv }));
-      expect(status.paymentProvider).toBe("sandbox");
-      expect(status.kycProvider).toBe("sandbox");
+      expect(status.paymentProvider).toBe("sandbox_mock");
+      expect(status.paymentProviderEnvironment).toBe("sandbox");
+      expect(status.kycProvider).toBe("sandbox_kyc_mock");
+      expect(status.kycProviderEnvironment).toBe("sandbox");
     }
   });
+
+  it(
+    "PRSprint 21 (docs/prsprints/PRSPRINT_21_PRODUCTION_FINANCIAL_PROVIDER_ARCHITECTURE.md): reads the " +
+      "selected provider from PAYMENT_PROVIDER/KYC_PROVIDER, the same input the real factories read — " +
+      "this view can never silently drift from what getPaymentProvider()/getKycProvider() actually do",
+    () => {
+      const status = computeEnvironmentStatus(baseEnv({ PAYMENT_PROVIDER: "sandbox", KYC_PROVIDER: "sandbox" }));
+      expect(status.paymentProvider).toBe("sandbox_mock");
+      expect(status.kycProvider).toBe("sandbox_kyc_mock");
+    },
+  );
 
   it("reports smsDelivery as console_log_only_no_provider when Twilio isn't fully configured", () => {
     expect(computeEnvironmentStatus(baseEnv()).smsDelivery).toBe("console_log_only_no_provider");
