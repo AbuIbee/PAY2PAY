@@ -1,4 +1,5 @@
 import "server-only";
+import { getMfaService } from "@/lib/auth/getMfaService";
 import { getPaymentProvider } from "@/lib/payments/getPaymentProvider";
 import { BankConnectionService } from "./bankConnectionService";
 import { getRelationshipFinancialAccountService } from "./getRelationshipFinancialAccountService";
@@ -11,6 +12,7 @@ export function getBankConnectionService(): BankConnectionService {
     cached = new BankConnectionService({
       provider: getPaymentProvider(),
       financialAccounts: getRelationshipFinancialAccountService(),
+      mfa: getMfaService(),
     });
   }
   return cached;

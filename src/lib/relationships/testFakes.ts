@@ -16,6 +16,7 @@ import { InMemoryEvidenceRepository, InMemoryAgreementWitnessRepository } from "
 import { WitnessReaderAdapter } from "@/lib/evidence/witnessReaderAdapter";
 import { BasicFileValidator } from "@/lib/evidence/fileValidator";
 import { InMemoryDocumentStorage } from "@/lib/documents/testFakes";
+import { createTestRiskEventService } from "@/lib/risk/testFakes";
 import type { PartyRole } from "@/lib/agreements/agreementService";
 import { RelationshipService } from "./relationshipService";
 import type {
@@ -355,22 +356,35 @@ export class InMemoryRelationshipFinancialAccountRepository implements Relations
   constructor(private readonly accounts: InMemoryFinancialAccountRepository) {}
 
   async insertAssignment(input: {
+    id?: string;
     relationshipId: string;
     relationshipParticipantId: string;
     financialAccountId: string;
     usage: FinancialAccountUsage;
     selectedByUserId: string;
   }): Promise<RelationshipFinancialAccountAssignmentRecord> {
+    // SPRINT_19_FraudRisk_SecurityHardening: mirrors the real DB's
+    // `relationship_financial_account_active_slot_unique` partial unique index (src/db/schema/
+    // financialAccount.ts) — only one *active* row may exist per (relationshipId, usage) — so a
+    // `Promise.all`-based concurrency test against this fake proves the same conflict-handling path
+    // RelationshipFinancialAccountService.replaceAccount exercises against the real database.
+    const alreadyActive = [...this.byId.values()].some(
+      (a) => a.relationshipId === input.relationshipId && a.usage === input.usage && a.status === "active",
+    );
+    if (alreadyActive) {
+      throw new Error("duplicate key value violates unique constraint \"relationship_financial_account_active_slot_unique\"");
+    }
     const now = new Date();
+    const { id, ...rest } = input;
     const record: RelationshipFinancialAccountAssignmentRecord = {
-      id: randomUUID(),
+      id: id ?? randomUUID(),
       status: "active",
       effectiveFrom: now,
       effectiveTo: null,
       supersededBy: null,
       createdAt: now,
       updatedAt: now,
-      ...input,
+      ...rest,
     };
     this.byId.set(record.id, record);
     return record;
@@ -508,6 +522,7 @@ export function createTestRelationshipServices() {
   const profileOwners = new InMemoryProfileOwnerReader();
   const staffCtx = createTestStaffService();
   const notifyCtx = createTestNotificationService();
+  const riskCtx = createTestRiskEventService();
 
   const agreements = new InMemoryAgreementRepository();
   const versions = new InMemoryAgreementVersionRepository();
@@ -595,12 +610,15 @@ export function createTestRelationshipServices() {
     staffService: staffCtx.staffService,
     notifications: notifyCtx.notificationService,
     audit: new AuditService(financialAccountAuditRepo),
+    mfa: staffCtx.mfaService,
+    riskEvents: riskCtx.riskEventService,
   });
 
   return {
     profileOwners,
     staffCtx,
     notifyCtx,
+    riskCtx,
     agreementService,
     agreements,
     versions,

@@ -1,6 +1,10 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import type { AuditService } from "@/lib/audit/auditService";
-import { ForbiddenError, ValidationError, ConflictError } from "@/lib/errors";
+import type { MfaService } from "@/lib/auth/mfaService";
+import { ForbiddenError, StepUpRequiredError, ValidationError, ConflictError } from "@/lib/errors";
+import { logger } from "@/lib/logger";
+import type { RiskEventService } from "@/lib/risk/riskEventService";
 import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
 import type { NotificationService } from "@/lib/notify/notificationService";
@@ -101,6 +105,15 @@ export interface FinancialAccountRepository {
 /** Real implementation: DrizzleRelationshipFinancialAccountRepository. Owns only the `relationship_financial_account` assignment table. */
 export interface RelationshipFinancialAccountRepository {
   insertAssignment(input: {
+    /**
+     * SPRINT_19_FraudRisk_SecurityHardening: optional, application-generated id. `replaceAccount`
+     * needs the new row's id BEFORE inserting it, to mark the old row superseded-by-it first (see
+     * that method's own doc comment for why the insert-then-supersede order this repository
+     * previously required would violate the DB's own partial unique index on every real replacement,
+     * not just a race). Omitted by `assignAccount` (no prior row to supersede) — the DB default
+     * (`gen_random_uuid()`) applies as before.
+     */
+    id?: string;
     relationshipId: string;
     relationshipParticipantId: string;
     financialAccountId: string;
@@ -127,6 +140,8 @@ export interface RelationshipFinancialAccountServiceDeps {
   staffService: StaffService;
   notifications: NotificationService;
   audit: AuditService;
+  mfa: MfaService;
+  riskEvents: RiskEventService;
 }
 
 /**
@@ -319,13 +334,26 @@ export class RelationshipFinancialAccountService {
       throw new ConflictError(`This relationship already has an active ${input.usage} account assigned. Use replaceAccount to change it.`);
     }
 
-    const assignment = await this.deps.assignments.insertAssignment({
-      relationshipId: input.relationshipId,
-      relationshipParticipantId: participant.id,
-      financialAccountId: account.id,
-      usage: input.usage,
-      selectedByUserId: input.actingUserId,
-    });
+    // SPRINT_19_FraudRisk_SecurityHardening: same insert-then-recheck-on-conflict pattern as
+    // replaceAccount below — two truly concurrent first-time assignAccount calls could both pass the
+    // `existing` check above before either writes; the DB's partial unique index still guarantees
+    // only one succeeds, this only turns the loser's raw constraint error into a clean domain one.
+    let assignment;
+    try {
+      assignment = await this.deps.assignments.insertAssignment({
+        relationshipId: input.relationshipId,
+        relationshipParticipantId: participant.id,
+        financialAccountId: account.id,
+        usage: input.usage,
+        selectedByUserId: input.actingUserId,
+      });
+    } catch (error) {
+      const raced = await this.deps.assignments.findActiveAssignment(input.relationshipId, input.usage);
+      if (raced) {
+        throw new ConflictError(`This relationship already has an active ${input.usage} account assigned. Use replaceAccount to change it.`);
+      }
+      throw error;
+    }
     await this.recordAssignmentAudit(input.relationshipId, input.actingUserId, "FINANCIAL_ACCOUNT_ASSIGNMENT_CREATED", {
       assignmentId: assignment.id,
       financialAccountId: account.id,
@@ -339,6 +367,7 @@ export class RelationshipFinancialAccountService {
   async replaceAccount(input: {
     relationshipId: string;
     actingUserId: string;
+    actingSessionId: string;
     financialAccountId: string;
     usage: FinancialAccountUsage;
   }): Promise<RelationshipFinancialAccountAssignmentRecord> {
@@ -350,6 +379,21 @@ export class RelationshipFinancialAccountService {
       throw new ValidationError("Only a verified financial account may be assigned to a relationship.");
     }
 
+    // SPRINT_19_FraudRisk_SecurityHardening: docs/SECURITY_MODEL.md threat #16 (payout redirection)
+    // requires elevated MFA before a bank/payout-detail change — replacing which account a
+    // relationship pays from/to is exactly that change. Checked after ownership/verification so a
+    // stranger never learns anything about an account they don't own via a step-up prompt.
+    const stepUpOk = await this.deps.mfa.requireStepUp({
+      userId: input.actingUserId,
+      sessionId: input.actingSessionId,
+      action: "replace_financial_account",
+    });
+    if (!stepUpOk) {
+      throw new StepUpRequiredError(
+        "Step-up verification is required before replacing a funding or payout account. Please complete a fresh verification challenge and try again.",
+      );
+    }
+
     const existing = await this.deps.assignments.findActiveAssignment(input.relationshipId, input.usage);
     if (existing && existing.relationshipParticipantId !== participant.id) {
       throw new ForbiddenError("You may only replace the account assigned by your own participation in this relationship.");
@@ -358,15 +402,57 @@ export class RelationshipFinancialAccountService {
       return existing; // idempotent — replacing with the same account is a no-op
     }
 
-    const assignment = await this.deps.assignments.insertAssignment({
-      relationshipId: input.relationshipId,
-      relationshipParticipantId: participant.id,
-      financialAccountId: account.id,
-      usage: input.usage,
-      selectedByUserId: input.actingUserId,
-    });
+    // SPRINT_19_FraudRisk_SecurityHardening: the DB has a real partial unique index — only one
+    // *active* row may exist per (relationshipId, usage) at a time
+    // (`relationship_financial_account_active_slot_unique`, src/db/schema/financialAccount.ts). This
+    // previously inserted the new active row BEFORE marking the old one superseded, which would
+    // violate that index on every ordinary (non-racing) replacement, not just a race — both rows
+    // would briefly be "active" simultaneously. Generating the new row's id up front lets the old row
+    // be superseded-by-it FIRST, so at insert time exactly zero active rows exist for this slot.
+    let assignment;
     if (existing) {
-      await this.deps.assignments.markSuperseded(existing.id, assignment.id);
+      const newAssignmentId = randomUUID();
+      await this.deps.assignments.markSuperseded(existing.id, newAssignmentId);
+      try {
+        assignment = await this.deps.assignments.insertAssignment({
+          id: newAssignmentId,
+          relationshipId: input.relationshipId,
+          relationshipParticipantId: participant.id,
+          financialAccountId: account.id,
+          usage: input.usage,
+          selectedByUserId: input.actingUserId,
+        });
+      } catch (error) {
+        // The old row is already superseded either way — a losing concurrent replaceAccount call
+        // collides with the WINNER's new active row here, not with the (already-superseded) old one.
+        const raced = await this.deps.assignments.findActiveAssignment(input.relationshipId, input.usage);
+        if (raced && raced.id !== existing.id) {
+          throw new ConflictError(
+            "This funding/payout account was just replaced by another concurrent request. Please refresh and try again.",
+          );
+        }
+        throw error;
+      }
+    } else {
+      // No prior active row for this slot — nothing to supersede, so a concurrent race here is a
+      // genuine simultaneous first-time assignment, handled the same way assignAccount handles it.
+      try {
+        assignment = await this.deps.assignments.insertAssignment({
+          relationshipId: input.relationshipId,
+          relationshipParticipantId: participant.id,
+          financialAccountId: account.id,
+          usage: input.usage,
+          selectedByUserId: input.actingUserId,
+        });
+      } catch (error) {
+        const raced = await this.deps.assignments.findActiveAssignment(input.relationshipId, input.usage);
+        if (raced) {
+          throw new ConflictError(
+            "This funding/payout account was just assigned by another concurrent request. Please refresh and try again.",
+          );
+        }
+        throw error;
+      }
     }
     await this.recordAssignmentAudit(input.relationshipId, input.actingUserId, "FINANCIAL_ACCOUNT_ASSIGNMENT_REPLACED", {
       assignmentId: assignment.id,
@@ -374,6 +460,30 @@ export class RelationshipFinancialAccountService {
       financialAccountId: account.id,
       usage: input.usage,
     });
+    if (existing) {
+      // SPRINT_19_FraudRisk_SecurityHardening §12: "frequent bank changes" is one of this sprint's
+      // own named risk indicators, and docs/SECURITY_MODEL.md threat #16 (payout redirection) is
+      // exactly "an attacker changes a creditor's connected bank account." Recorded on every actual
+      // replacement (not the idempotent same-account no-op above) — never blocks; a real windowed
+      // frequency count (vs. this per-event record) is additive follow-up, not built here, per this
+      // sprint's own "do not invent financial policy as fact." Never fails the replacement itself.
+      try {
+        await this.deps.riskEvents.recordSignal({
+          userId: input.actingUserId,
+          signalType: "frequent_bank_connection_change",
+          severity: "low",
+          outcome: "flagged",
+          relatedResourceType: "relationship_financial_account_assignment",
+          relatedResourceId: assignment.id,
+          detail: { relationshipId: input.relationshipId, usage: input.usage },
+        });
+      } catch (error) {
+        logger.error("risk_signal_record_failed", {
+          signalType: "frequent_bank_connection_change",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     await this.deps.relationshipSync.syncFromFinancialAccounts(input.relationshipId);
 
     if (existing && participant.representedByUserId) {
@@ -441,6 +551,17 @@ export class RelationshipFinancialAccountService {
     const account = await this.deps.financialAccounts.findById(id);
     if (!account) throw new ValidationError("Financial account not found.");
     return account;
+  }
+
+  /**
+   * SPRINT_19_FraudRisk_SecurityHardening: public wrapper so BankConnectionService (a collaborator,
+   * not a subclass — it holds this service via composition to call `addAccount`) can authorize the
+   * acting party BEFORE requiring MFA step-up, matching SignatureService.sign's established
+   * "authorize, then step-up" ordering — a stranger to a profile should never even reach a step-up
+   * prompt for it.
+   */
+  async requireOwnedParty(actingUserId: string, party: PartyRef): Promise<void> {
+    return this.authorizeParty(actingUserId, party);
   }
 
   private async authorizeParty(actingUserId: string, party: PartyRef): Promise<void> {

@@ -37,7 +37,7 @@ const connectSchema = z.object({
  */
 export function createBankConnectHandler(authService: AuthService, bankConnectionService: BankConnectionService) {
   return async function handleConnect(request: NextRequest): Promise<Response> {
-    const { userId } = await requireSession(request, authService);
+    const { userId, sessionId } = await requireSession(request, authService);
     const rawBody: unknown = await request.json().catch(() => null);
     const parsed = connectSchema.safeParse(rawBody);
     if (!parsed.success) {
@@ -48,6 +48,7 @@ export function createBankConnectHandler(authService: AuthService, bankConnectio
     }
     const account = await bankConnectionService.connectBankAccount({
       actingUserId: userId,
+      actingSessionId: sessionId,
       actingParty: parsed.data.actingParty,
       institutionDisplayName: parsed.data.institutionDisplayName ?? null,
       accountHolderName: parsed.data.accountHolderName,

@@ -6,6 +6,7 @@ import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/test
 import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
 import { BankConnectionService } from "@/lib/relationships/bankConnectionService";
 import { createTestRelationshipServices } from "@/lib/relationships/testFakes";
+import { grantStepUp } from "@/lib/staff/testFakes";
 import { createBankConnectHandler } from "./route";
 
 /**
@@ -31,6 +32,7 @@ describe("POST /api/relationships/accounts/bank/connect", () => {
     bankConnectionService = new BankConnectionService({
       provider: new SandboxPaymentProvider("test-webhook-secret"),
       financialAccounts: relCtx.relationshipFinancialAccountService,
+      mfa: relCtx.staffCtx.mfaService,
     });
 
     const owner = await authCtx.authService.signup({
@@ -51,6 +53,10 @@ describe("POST /api/relationships/accounts/bank/connect", () => {
     strangerToken = stranger.token;
     ownerProfileId = randomUUID();
     relCtx.profileOwners.set("personal", ownerProfileId, owner.user.id);
+
+    // SPRINT_19_FraudRisk_SecurityHardening: connectBankAccount now requires a fresh MFA step-up.
+    const ownerSessionId = (await authCtx.authService.validateSession(ownerToken))!.sessionId;
+    await grantStepUp(relCtx.staffCtx, owner.user.id, ownerSessionId);
   });
 
   function handler() {

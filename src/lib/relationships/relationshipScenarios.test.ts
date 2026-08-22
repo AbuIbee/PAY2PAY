@@ -372,6 +372,7 @@ describe("Sprint 18A relationship scenarios", () => {
       ctx.relationshipFinancialAccountService.replaceAccount({
         relationshipId: relationship.id,
         actingUserId: staffUserId,
+        actingSessionId: randomUUID(),
         financialAccountId: staffPersonalAccount.id,
         usage: "payout",
       }),

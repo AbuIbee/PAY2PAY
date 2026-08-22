@@ -60,6 +60,7 @@ function toAccountRecord(row: AccountRow): FinancialAccountRecord {
 
 export class DrizzleRelationshipFinancialAccountRepository implements RelationshipFinancialAccountRepository {
   async insertAssignment(input: {
+    id?: string;
     relationshipId: string;
     relationshipParticipantId: string;
     financialAccountId: string;

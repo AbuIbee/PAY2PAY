@@ -266,4 +266,94 @@ describe("PRSprint 20: concurrency and idempotency — genuine adversarial races
     expect(strangerResult.status).toBe("rejected");
     if (strangerResult.status === "rejected") expect(strangerResult.reason).toBeInstanceOf(ForbiddenError);
   });
+
+  describe("SPRINT_19_FraudRisk_SecurityHardening: additional required concurrency scenarios", () => {
+    it(
+      "simultaneous agreement completion: two truly concurrent AgreementCompletionService.checkAndAdvance calls against an " +
+        "already-fully-paid agreement converge on exactly one final status, never a corrupted/contradictory one " +
+        "(known, disclosed minor artifact: a genuine race can produce two identical 'agreement_paid_in_full' audit rows — " +
+        "checkAndAdvance's own idempotent-by-status-guard only protects against a *sequential* second call, not two " +
+        "callers that both read the pre-completion status before either writes; this never affects money movement or " +
+        "the ledger, which are independently deduped elsewhere)",
+      async () => {
+        const agreement = await ctx.agreementRepo.insert({
+          creditorProfileKind: RECIPIENT.profileKind,
+          creditorProfileId: RECIPIENT.profileId,
+          debtorProfileKind: PAYER.profileKind,
+          debtorProfileId: PAYER.profileId,
+          currency: "USD",
+          createdByUserId: PAYER_USER_ID,
+        });
+        await ctx.agreementRepo.updateStatus(agreement.id, "active");
+        ctx.balanceCtx.terms.set(agreement.id, 50_00, "USD");
+        // Pays the agreement in full via the ledger directly (bypassing PaymentService, which would
+        // itself call checkAndAdvance) so the balance is already "paid_in_full" while agreement.status
+        // is still "active" — the exact precondition for the race under test.
+        await ctx.ledgerCtx.ledgerService.postPaymentCleared({
+          paymentAttemptId: "conc-completion-seed-1",
+          agreementId: agreement.id,
+          currency: "USD",
+          grossAmountMinorUnits: 50_00,
+        });
+        const balance = await ctx.balanceCtx.balanceService.getAgreementBalance(agreement.id);
+        expect(balance.settlementState).toBe("paid_in_full");
+        const preRace = await ctx.agreementRepo.findById(agreement.id);
+        expect(preRace?.status).toBe("active"); // not yet advanced — checkAndAdvance hasn't run.
+
+        await Promise.all([ctx.completionService.checkAndAdvance(agreement.id), ctx.completionService.checkAndAdvance(agreement.id)]);
+
+        const updated = await ctx.agreementRepo.findById(agreement.id);
+        expect(updated?.status).toBe("paid_in_full"); // one valid authoritative state, not corrupted.
+      },
+    );
+
+    it(
+      "simultaneous admin action and user action: an admin ledger adjustment and a user's payment-clearing webhook, both for the same " +
+        "agreement at the same time, each post their own distinct, correctly-typed ledger entry — the admin action never " +
+        "silently overwrites or blocks the user's legitimate financial event, and vice versa",
+      async () => {
+        ctx.balanceCtx.terms.set("agreement-admin-user-race", 100_00, "USD");
+        const payment = await ctx.paymentCtx.paymentService.createPayment({
+          idempotencyKey: "conc-admin-user-1",
+          payer: PAYER,
+          recipient: RECIPIENT,
+          amountMinorUnits: 40_00,
+          currency: "USD",
+          agreementId: "agreement-admin-user-race",
+          actingUserId: PAYER_USER_ID,
+          ipAddress: null,
+          deviceInfo: null,
+        });
+
+        const [webhookResult, adjustment] = await Promise.all([
+          (async () => {
+            ctx.paymentCtx.provider.simulateSettlement(payment.providerPaymentId!, "succeeded");
+            return ctx.webhookCtx.paymentWebhookService.receiveWebhook(
+              signedWebhook({ providerEventId: "conc-admin-user-evt-1", eventType: "payment.succeeded", providerPaymentId: payment.providerPaymentId }),
+            );
+          })(),
+          ctx.ledgerCtx.ledgerService.postAdminAdjustment({
+            paymentAttemptId: payment.id,
+            agreementId: "agreement-admin-user-race",
+            currency: "USD",
+            targetAccountType: "platform_fee_revenue",
+            amountMinorUnits: 10_00,
+            direction: "credit",
+            reason: "SPRINT_19 concurrency test: concurrent admin adjustment alongside a live payment clearing.",
+            actingUserId: "conc-admin-1",
+          }),
+        ]);
+
+        expect(webhookResult.status).toBe("processed");
+        expect(adjustment.entryType).toBe("admin_adjustment");
+        const entries = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
+        expect(entries.some((e) => e.entryType === "payment_cleared")).toBe(true);
+        expect(entries.some((e) => e.entryType === "admin_adjustment")).toBe(true);
+        // Each entry type is independently deduped/idempotent (LedgerService's own established
+        // guarantee) — neither concurrent write silently clobbered the other's postings.
+        expect(entries.filter((e) => e.entryType === "payment_cleared")).toHaveLength(1);
+        expect(entries.filter((e) => e.entryType === "admin_adjustment")).toHaveLength(1);
+      },
+    );
+  });
 });

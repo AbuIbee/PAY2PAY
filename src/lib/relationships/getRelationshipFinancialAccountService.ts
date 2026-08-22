@@ -1,7 +1,9 @@
 import "server-only";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
+import { getMfaService } from "@/lib/auth/getMfaService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
+import { getRiskEventService } from "@/lib/risk/getRiskEventService";
 import { getStaffService } from "@/lib/staff/getStaffService";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { RelationshipFinancialAccountService } from "./relationshipFinancialAccountService";
@@ -26,6 +28,8 @@ export function getRelationshipFinancialAccountService(): RelationshipFinancialA
       staffService: getStaffService(),
       notifications: getNotificationService(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
+      mfa: getMfaService(),
+      riskEvents: getRiskEventService(),
     });
   }
   return cached;
