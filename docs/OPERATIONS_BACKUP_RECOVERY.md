@@ -5,7 +5,7 @@
 **Status of this document:** operational runbook — read alongside `docs/prsprints/PHASE_7_COMPLETION_REPORT.md`
 § PRSprint 29 for the verification evidence behind each claim below.
 
-## 1. Database backup status — VERIFIED, NOT SATISFACTORY
+## 1. Database backup status — VERIFIED, DEFERRED (Product Owner decision)
 
 Checked directly against the linked production Supabase project (`Paid2You` / `lmpicrmmixpvkwwhcxbh`,
 `ca-central-1`) via `supabase backups list`:
@@ -25,8 +25,10 @@ and enabling it is an account/billing change outside what this session is author
 unilaterally (a plan/billing change requires the Product Owner's own action, consistent with this
 project's "changing account settings requires explicit permission" rule).
 
-**EXTERNAL BLOCKER — PRODUCT OWNER ACTION REQUIRED**: enable Point-in-Time Recovery (or, at minimum,
-scheduled daily backups) on the linked Supabase project. Until this is done:
+**EXTERNAL BLOCKER — DEFERRED by explicit Product Owner decision (2026-08-22): not required during the
+current pre-production window; must be enabled and verified before Paid2You begins live financial
+transactions or real customer money movement.** Until PITR (or, at minimum, scheduled daily backups) is
+enabled on the linked Supabase project:
 
 - There is no way to recover the production database from accidental data loss, a bad migration, or
   a compromised/corrupted write beyond what a manual `pg_dump` (not currently scheduled) would capture.
@@ -48,11 +50,19 @@ is possible with zero backups present, and the task instruction was explicit not
 Supabase CLI exposes no `billing`/`addons`/plan-tier command, so whether the current plan already
 includes PITR (and it simply hasn't been toggled on) or requires a plan upgrade first could not be
 determined from this session's tooling — that one fact requires checking the Supabase Dashboard's
-Settings → Billing page directly. **Status: BLOCKED (external, Product Owner action required)** — this
-is not a "strongest available backup control" situation with a lesser fallback in place; zero backups
-of any kind (PITR or otherwise) currently exist for this project, so there is currently no way to
-recover this production database from any data-loss event. This has not regressed since PRSprint 29 —
-it was never resolved — but it is re-confirmed current as of this date rather than assumed unchanged.
+Settings → Billing page directly. This is not a "strongest available backup control" situation with a
+lesser fallback in place; zero backups of any kind (PITR or otherwise) currently exist for this
+project, so there is currently no way to recover this production database from any data-loss event.
+This has not regressed since PRSprint 29 — it was never resolved — but it is re-confirmed current as of
+this date rather than assumed unchanged.
+
+**Status: DEFERRED (Product Owner decision, 2026-08-22)** — not required during the current
+pre-production window (no live financial transactions or real customer money movement are occurring).
+**Must be enabled and verified before that changes.** Do not classify this item `RESOLVED` on the
+strength of a dashboard toggle alone — resolution requires re-running `supabase backups list
+--project-ref lmpicrmmixpvkwwhcxbh` and confirming `pitr_enabled: true` with at least one entry under
+`backups`, at which point this document's §4 (Financial Recovery) restore-to-a-branch drill becomes
+performable and should be done before real funds move.
 
 ## 2. Application/deployment rollback — VERIFIED, WORKING
 

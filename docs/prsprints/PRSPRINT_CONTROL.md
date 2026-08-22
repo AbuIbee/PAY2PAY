@@ -139,8 +139,10 @@ the current Supabase plan already supports PITR (just needs toggling on) or requ
 could not be determined from this session — that requires the Product Owner checking the Dashboard's
 Settings → Billing page directly. There is no lesser fallback control in place either (zero backups of
 any kind). Full detail: `docs/OPERATIONS_BACKUP_RECOVERY.md` §1 (updated same date).
-**Classification: BLOCKED** (external, Product Owner + Supabase billing action required; unchanged
-from PRSprint 29, now re-confirmed current rather than assumed).
+**Classification: DEFERRED** (Product Owner decision, 2026-08-22: not required during the current
+pre-production window; must be enabled and verified before Paid2You begins live financial transactions
+or real customer money movement — not to be classified `RESOLVED` until PITR has actually been enabled
+and re-verified via `supabase backups list`, not merely toggled in a dashboard and assumed).
 
 **2. GitHub `master` branch protection — applied, then verified:** Product Owner selected Option 1
 from `docs/OPERATIONS_CI_CD.md` §2 (live authorization, this session). Configured via
@@ -170,6 +172,7 @@ authorized live by the Product Owner (Control Rule 6 — Claude did not self-app
 - **Product Owner Review:** `PENDING`, `APPROVED`, `CHANGES REQUIRED`
 - **Merge:** `NOT READY`, `READY`, `MERGED`, `NOT REQUIRED`
 - **External Blocker:** `NONE`, `YES`
+- **Infrastructure Hardening Classification (Step 2):** `RESOLVED`, `PARTIALLY RESOLVED`, `BLOCKED`, `DEFERRED` (consciously postponed by Product Owner decision, not currently required, but must be resolved before a named future trigger — never used to silently drop an item)
 
 ## PRSprint Tracker
 
