@@ -134,6 +134,51 @@ row.
 4. Only after 1-3: re-run this certification (or a lighter-weight re-verification of just what
    changed) before any real-money controlled beta begins.
 
+## 8. Post-Merge Update (2026-08-22) — PR #48 merged, launch still NOT authorized
+
+This section records what happened after this report was written; it does not retroactively change
+§§1-7's assessment of PRSprints 25-33 individually, and it does **not** authorize any launch.
+
+**Merge:** `phase-7-continue` was pushed and opened as draft PR #48, titled to make its own
+not-ready status explicit. Per Control Rule 6, Claude did not self-approve. The Product Owner
+explicitly authorized the merge in a live session; that authorization is recorded as a PR #48 comment
+(not fabricated by Claude) and in `docs/prsprints/PRSPRINT_CONTROL.md`'s "Phase 7: Production Readiness
+Merge Gate" section. Merged to `master` via merge commit `f96b1f8` (matching PRs #45/#46/#47's
+convention). PRSprints 25-33 remain individually `Product Owner Review: PENDING` — the merge
+authorization was a merge-level decision, not a line-by-line PRSprint review, and does not close §2's
+19+9 pending-review gap.
+
+**What §5 said couldn't be verified from this session, now verified for real:**
+- GitHub Actions CI: ran on PR #48 (`Lint, typecheck, test, build` PASS, `Fresh-database migration
+  test` PASS) and again on the post-merge push to `master` (all 4 applicable jobs PASS).
+- Vercel: production deployment for `f96b1f8` succeeded; verified live at the canonical domain
+  `https://paid2you.com` (200) and `/api/admin/health` correctly returns 401 unauthenticated, not 500,
+  post-deploy.
+- Supabase schema-drift check: ran, but its GitHub Actions "PASS" turned out to be a **silent no-op
+  skip** — `SUPABASE_ACCESS_TOKEN` is not configured as a repo secret, confirmed directly from the job
+  log (`SUPABASE_ACCESS_TOKEN not set — skipping`). This is a pre-existing gap affecting every prior
+  PRSprint row that cites this check as evidence, not something new to Phase 7, but it means the "PASS"
+  in those earlier rows should be read the same way.
+- Because of that gap, the real check was run manually via the Supabase CLI against the actual linked
+  production project (`Paid2You`, ref `lmpicrmmixpvkwwhcxbh`, confirmed `linked: true` and
+  `ACTIVE_HEALTHY`): it found the `consent_record` (PRSprint 32) and `beta_invite_code` (PRSprint 33)
+  migrations applied locally but **missing from production**, even though the merged code already
+  referencing those tables was live. Applied both via `supabase migration up --linked` — purely
+  additive (`CREATE TABLE`/`CREATE TYPE`/`ENABLE ROW LEVEL SECURITY`/`ADD CONSTRAINT`/`REVOKE`, zero
+  destructive statements, already confirmed by PRSprint 30's migration-safety linter). Re-ran the
+  check: all 35 migrations now match exactly between the repo and production. Both tables carry RLS
+  enabled with zero `CREATE POLICY` statements (deny-all for anon/authenticated), matching this
+  schema's PRSprint-02-established convention.
+- `master` branch protection: re-confirmed still absent (`gh api .../branches/master/protection` → 404
+  "Branch not protected") — unchanged by this merge, not falsely marked resolved.
+
+**§3's 7 open EXTERNAL BLOCKER items are unresolved by this merge** — Twilio SMS, live payment/KYC/
+banking provider, Supabase PITR/backups, master branch protection, legal/Sharia review, and placeholder
+provider contacts/transaction limits all remain exactly as described in §3. Sprint 19 (Product) and
+SPRINT_19_FraudRisk_SecurityHardening remain frozen, not started. §7's recommended path (Product Owner
+review of PRSprints 25-33, then resolve all 7 blockers, then re-certify) still governs before any
+real-money controlled beta.
+
 ## Required Final Response
 
 ```text
