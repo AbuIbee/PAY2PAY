@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger";
 import type { NotificationEventType } from "@/lib/notify/eventTypes";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
+import type { RiskEventService } from "@/lib/risk/riskEventService";
 import type { PaymentProvider } from "./paymentProvider";
 import type { AgreementCompletionChecker, PaymentAttemptRecord, PaymentAttemptRepository, PaymentAttemptStatus } from "./paymentService";
 
@@ -39,6 +40,27 @@ export interface PaymentWebhookEventRepository {
   /** Sprint 10: reconciliation's full-scan entry point (batch, not a per-request hot path). */
   listAll(): Promise<PaymentWebhookEventRecord[]>;
 }
+
+/**
+ * SPRINT_19_FraudRisk_SecurityHardening: docs/PAYMENT_STATE_MACHINE.md §1 — once a payment reaches
+ * one of these, the diagram shows no further outgoing transition (`--> [*]`). Before this guard,
+ * `applyEvent` applied `EVENT_TYPE_TO_STATUS` unconditionally regardless of the payment's current
+ * status, so a stale/out-of-order/duplicate-but-differently-typed webhook (e.g. a delayed
+ * "payment.failed" arriving after "payment.refunded" already posted) could regress a terminal
+ * payment's status field and re-run the ledger/notification/completion side effects for the new
+ * (incorrect) status. `LedgerService.postPaymentCleared`/`reversePayment` already dedupe financial
+ * effects on `(paymentAttemptId, entryType)`, so this was never a double-financial-effect risk — it
+ * was a status-field/audit-trail integrity gap. "disputed" and "succeeded" are deliberately excluded:
+ * both have real documented forward transitions (disputed -> refunded/paid-out; succeeded ->
+ * returned/reversed/disputed).
+ */
+const TERMINAL_PAYMENT_STATUSES: ReadonlySet<PaymentAttemptStatus> = new Set([
+  "failed",
+  "returned",
+  "reversed",
+  "refunded",
+  "canceled",
+]);
 
 const EVENT_TYPE_TO_STATUS: Record<string, PaymentAttemptStatus> = {
   "payment.succeeded": "succeeded",
@@ -131,6 +153,15 @@ export class PaymentWebhookService {
        * unaffected.
        */
       completion?: AgreementCompletionChecker;
+      /**
+       * SPRINT_19_FraudRisk_SecurityHardening §12: records a "repeated payment failure" signal on
+       * every failed transition (not gated on installmentScheduleItemId, unlike
+       * `failedPaymentWorkflow` — this covers ad-hoc/manual-flow payments too). Optional, mirroring
+       * every other post-Sprint-17 hook on this class; requires `profileOwners` to resolve the
+       * payer's userId. Never fails the webhook (same "never fail the webhook" contract as
+       * `postLedgerEntry`/`runFailedPaymentWorkflow`).
+       */
+      riskEvents?: RiskEventService;
     },
   ) {}
 
@@ -188,6 +219,16 @@ export class PaymentWebhookService {
     const newStatus = EVENT_TYPE_TO_STATUS[eventType];
     if (!newStatus) return;
 
+    if (TERMINAL_PAYMENT_STATUSES.has(payment.status)) {
+      logger.warn("payment_webhook_stale_event_ignored", {
+        paymentAttemptId: payment.id,
+        eventType,
+        currentStatus: payment.status,
+        attemptedStatus: newStatus,
+      });
+      return;
+    }
+
     // Sprint 13 fix: this previously always passed `{}` here, silently discarding
     // `data.failureCategory` on every "payment.failed" webhook since Sprint 9 — no
     // non-sensitive failure category was ever actually stored, only ever asserted on `status` in
@@ -226,6 +267,31 @@ export class PaymentWebhookService {
     await this.runFailedPaymentWorkflow(newStatus, updated, failureCategory ?? null);
     await this.checkCompletion(newStatus, updated);
     await this.notifyPaymentStatus(newStatus, updated);
+    await this.recordFailureRiskSignal(newStatus, updated);
+  }
+
+  /** SPRINT_19_FraudRisk_SecurityHardening §12: see this class's own doc comment for riskEvents. */
+  private async recordFailureRiskSignal(status: PaymentAttemptStatus, payment: PaymentAttemptRecord): Promise<void> {
+    if (!this.deps.riskEvents || !this.deps.profileOwners || status !== "failed") return;
+    try {
+      const payerUserId = await this.deps.profileOwners.getOwnerUserId(payment.payerProfileKind, payment.payerProfileId);
+      if (!payerUserId) return;
+      await this.deps.riskEvents.recordSignal({
+        userId: payerUserId,
+        signalType: "repeated_payment_failure",
+        severity: "low",
+        outcome: "flagged",
+        relatedResourceType: "payment_attempt",
+        relatedResourceId: payment.id,
+        detail: { agreementId: payment.agreementId },
+      });
+    } catch (error) {
+      logger.error("risk_signal_record_failed", {
+        signalType: "repeated_payment_failure",
+        paymentAttemptId: payment.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

@@ -6,6 +6,7 @@ import { getAgreementCompletionService } from "@/lib/ledger/getAgreementCompleti
 import { getLedgerService } from "@/lib/ledger/getLedgerService";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
+import { getRiskEventService } from "@/lib/risk/getRiskEventService";
 import { DrizzlePaymentAttemptRepository } from "./drizzlePaymentAttemptRepository";
 import { DrizzlePaymentWebhookEventRepository } from "./drizzlePaymentWebhookEventRepository";
 import { getPaymentProvider } from "./getPaymentProvider";
@@ -25,6 +26,7 @@ export function getPaymentWebhookService(): PaymentWebhookService {
       notifications: getNotificationService(),
       profileOwners: new DrizzleProfileOwnerReader(),
       completion: getAgreementCompletionService(),
+      riskEvents: getRiskEventService(),
     });
   }
   return cached;
