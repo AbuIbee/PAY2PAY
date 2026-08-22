@@ -76,6 +76,54 @@ and confirmed. Full report, including the required Banking Invariant Report and 
 matrix: `docs/prsprints/PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md`. Product Owner Review:
 PENDING — Claude does not self-approve. PRSprint 25/Phase 7 not started.
 
+## Phase 7: Production Readiness Merge Gate (PRSprints 25-34)
+
+**Status: MERGED to `master`. Controlled/broad launch remains NOT authorized** — this section records
+the code-merge event only; it does not resolve the external blockers below.
+
+Branch `phase-7-continue` (forked from `phase-7-production-readiness`), 16 commits, opened as draft
+PR #48. Certification: `docs/prsprints/PHASE_7_FINAL_CERTIFICATION_REPORT.md` (PRSprint 34) explicitly
+declined to authorize any launch and recommended: push/open PR → Product Owner review → resolve
+external blockers → re-certify. Step 1 (push/PR/CI) had already happened; the Product Owner then
+explicitly authorized this merge in a live session on 2026-08-22, satisfying Control Rule 6 (Claude
+recorded, did not self-approve — see PR #48 comment). PRSprints 25-33 remain individually
+`Product Owner Review: PENDING` per PRSprint-level review (the merge authorization covers the merge
+decision, not a line-by-line review of each PRSprint).
+
+**Verification performed against the real PR head (`origin/phase-7-continue`, not a locally stale
+branch), then re-verified post-merge:**
+- CI on PR #48: `Lint, typecheck, test, build` PASS; `Fresh-database migration test` PASS. Merged via
+  merge commit `f96b1f8` (matching PRs #45/#46/#47's convention).
+- CI on `master` post-merge (run 32581544102): all four applicable jobs PASS, including
+  `Supabase schema drift check` — **note:** this job's "PASS" is a silent no-op skip
+  (`SUPABASE_ACCESS_TOKEN` is not configured as a GitHub Actions secret in this repo, confirmed from
+  the job log), not an actual verification. This is a pre-existing gap in every prior PRSprint row
+  that cites this check, not something new to Phase 7.
+- Real drift check run manually against the linked production Supabase project (`Paid2You`,
+  ref `lmpicrmmixpvkwwhcxbh`) via `supabase migration list --linked`: found migrations
+  `20260819100000` (consent_record) and `20260819110000` (beta_invite_code) applied locally but
+  **not present on production** — a genuine gap the GitHub Actions skip had been masking. Applied both
+  via `supabase migration up --linked` (purely additive: `CREATE TABLE`/`CREATE TYPE`/`ENABLE ROW LEVEL
+  SECURITY`/`ADD CONSTRAINT`/`REVOKE`, zero destructive statements, already confirmed by PRSprint 30's
+  migration-safety linter). Re-ran the drift check: 35/35 migrations now match exactly between repo and
+  production. RLS pattern on both new tables: enabled, zero `CREATE POLICY` statements (deny-all for
+  anon/authenticated), matching this schema's PRSprint-02-established convention.
+- Vercel: production deployment for merge commit `f96b1f8` succeeded
+  (`https://vercel.com/pay2-pay/pay-2-pay/8djXu6XzSDVbhsTmDFwNHRHfNSjg`). Verified live at the canonical
+  domain `https://paid2you.com` (200) and `/api/admin/health` correctly returns 401 unauthenticated
+  (not 500) post-deploy.
+- `master` branch protection: confirmed still absent (`gh api .../branches/master/protection` → 404
+  "Branch not protected") — unchanged, not falsely marked resolved.
+
+**Known EXTERNAL BLOCKER items, unresolved by this merge (see PHASE_7_FINAL_CERTIFICATION_REPORT.md §3
+for full detail and owning party):** no live Twilio SMS credentials; no live payment/KYC/banking
+provider selected (`liveBankingEnabled`/`liveCardIssuanceEnabled` both `false`); production Supabase
+project has PITR disabled and zero backups; `master` has no branch protection; full legal/Sharia
+compliance review not performed; real provider contacts and production transaction-limit values remain
+placeholders. Product Owner Review (per-PRSprint, PRSprints 25-33 individually): PENDING — Claude does
+not self-approve. Sprint 19 (Product) and SPRINT_19_FraudRisk_SecurityHardening remain frozen,
+not started.
+
 ## Allowed Status Values
 
 - **PRSprint Status:** `NOT STARTED`, `IN PROGRESS`, `BLOCKED`, `IMPLEMENTATION COMPLETE`, `AWAITING REVIEW`, `APPROVED`, `FAILED`
