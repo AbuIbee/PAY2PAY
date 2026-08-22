@@ -1,9 +1,10 @@
 import "server-only";
-import { eq, or, and } from "drizzle-orm";
+import { desc, eq, or, and } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { agreement } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
+import type { PageParams } from "@/lib/pagination";
 import type { AgreementRecord, AgreementRepository, AgreementStatus } from "./agreementService";
 
 type Row = typeof agreement.$inferSelect;
@@ -57,9 +58,9 @@ export class DrizzleAgreementRepository implements AgreementRepository {
     await db.update(agreement).set({ currentVersionId: versionId }).where(eq(agreement.id, id));
   }
 
-  async listForProfile(profileKind: ProfileKind, profileId: string): Promise<AgreementRecord[]> {
+  async listForProfile(profileKind: ProfileKind, profileId: string, pageParams?: PageParams): Promise<AgreementRecord[]> {
     const db = getDb();
-    const rows = await db
+    const query = db
       .select()
       .from(agreement)
       .where(
@@ -67,7 +68,9 @@ export class DrizzleAgreementRepository implements AgreementRepository {
           and(eq(agreement.creditorProfileKind, profileKind), eq(agreement.creditorProfileId, profileId)),
           and(eq(agreement.debtorProfileKind, profileKind), eq(agreement.debtorProfileId, profileId)),
         ),
-      );
+      )
+      .orderBy(desc(agreement.createdAt));
+    const rows = pageParams ? await query.limit(pageParams.limit).offset(pageParams.offset) : await query;
     return rows.map(toRecord);
   }
 }

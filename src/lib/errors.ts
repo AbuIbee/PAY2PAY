@@ -137,6 +137,26 @@ export class RateLimitedError extends AppError {
   }
 }
 
+/**
+ * PRSprint 28 (docs/prsprints/PRSPRINT_28_ERROR_HANDLING_OBSERVABILITY_HEALTH_MONITORING.md):
+ * "Do not turn all errors into generic 500s if a more accurate safe status is appropriate."
+ * Distinguishes a downstream dependency (database, financial provider, email/SMS sender) being
+ * unreachable/failing from an actual internal bug — 503, not 500, and a message that tells the caller
+ * this is transient and worth retrying rather than a defect in their request. Never constructed with
+ * provider-internal detail in its message (callers pass a safe, generic description; the real
+ * exception is logged separately by the caller before throwing this).
+ */
+export class DependencyError extends AppError {
+  constructor(message = "A required service is temporarily unavailable. Please try again shortly.") {
+    super(message, {
+      statusCode: 503,
+      code: "DEPENDENCY_UNAVAILABLE",
+      isOperational: true,
+    });
+    this.name = "DependencyError";
+  }
+}
+
 export interface SafeErrorResponse {
   message: string;
   code: string;
@@ -158,4 +178,15 @@ export function toSafeErrorResponse(error: unknown): SafeErrorResponse {
     code: "INTERNAL_ERROR",
     statusCode: 500,
   };
+}
+
+/**
+ * PRSprint 28: "Users should receive a stable user-facing error identifier/correlation ID where
+ * useful so support can locate the corresponding operational event." Only meaningful for a genuinely
+ * unexpected failure (5xx) — an ordinary validation/auth/rate-limit rejection (4xx) doesn't need one,
+ * the message alone is actionable. `withErrorHandling` logs the identical id server-side alongside the
+ * full error, so support can grep for it directly.
+ */
+export function isServerFault(statusCode: number): boolean {
+  return statusCode >= 500;
 }

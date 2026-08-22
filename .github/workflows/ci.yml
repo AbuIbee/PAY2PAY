@@ -5,11 +5,23 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  # PRSprint 30 (docs/prsprints/PRSPRINT_30_CI_CD_DEPLOYMENT_GATES_SCHEMA_DRIFT_PREVENTION.md),
+  # master-spec item 129: manually triggered post-deploy smoke test, run against a real deployment
+  # URL (e.g. a Vercel preview or production URL) after a release. Not wired to fire automatically
+  # right after a deploy — that needs Vercel API credentials this repo's CI does not have configured;
+  # see scripts/smoke-test.mjs's own doc comment.
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Deployment URL to smoke-test (e.g. https://pay2pay.vercel.app)"
+        required: true
+        type: string
 
 jobs:
   validate:
     name: Lint, typecheck, test, build
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
     env:
       # Dummy, non-production values so env validation succeeds in CI.
       # Real secrets are never stored in this workflow file.
@@ -50,6 +62,47 @@ jobs:
       - name: Tooling script tests
         run: npm run test:tooling
 
+  fresh-migration-test:
+    name: Fresh-database migration test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    # PRSprint 30 (docs/prsprints/PRSPRINT_30_CI_CD_DEPLOYMENT_GATES_SCHEMA_DRIFT_PREVENTION.md),
+    # master-spec item 191: proves the full migration set applies cleanly to a genuinely empty
+    # database, on every push/PR — unlike schema-drift below, this needs no external credentials
+    # (a disposable service-container Postgres, not the linked Supabase project), so it runs as a
+    # real merge gate rather than a post-merge-only check.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: pay2pay_fresh_migration_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply every migration to an empty database
+        env:
+          DATABASE_URL: postgres://ci:ci@localhost:5432/pay2pay_fresh_migration_test
+        run: npm run db:fresh-migration-test
+
   schema-drift:
     name: Supabase schema drift check
     runs-on: ubuntu-latest
@@ -78,3 +131,23 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: npm run db:check-drift
+
+  smoke-test:
+    name: Post-deploy smoke test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run smoke tests against the given deployment URL
+        run: npm run smoke-test -- --url "${{ inputs.url }}"

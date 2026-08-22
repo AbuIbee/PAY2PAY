@@ -50,9 +50,20 @@ export interface RelationshipInvitationRepository {
   findByRelationshipId(relationshipId: string): Promise<RelationshipInvitationRecord[]>;
   setResolvedInviteeUser(id: string, userId: string): Promise<RelationshipInvitationRecord>;
   markViewed(id: string): Promise<RelationshipInvitationRecord>;
-  markAccepted(id: string): Promise<RelationshipInvitationRecord>;
-  markDeclined(id: string): Promise<RelationshipInvitationRecord>;
-  markCancelled(id: string): Promise<RelationshipInvitationRecord>;
+  /**
+   * PRSprint 31 (docs/prsprints/PRSPRINT_31_E2E_NEGATIVE_SECURITY_CONCURRENCY_TEST_COMPLETION.md):
+   * these three are mutually-exclusive terminal decisions on the same invitation (accept vs. decline
+   * vs. the inviter cancelling) — a genuine concurrency bug existed here: the prior single-argument
+   * signature updated the row unconditionally (`WHERE id = $1`, no status guard), so two of these
+   * racing (e.g. "recipient accepts" concurrently with "inviter cancels") could both appear to
+   * succeed, silently overwriting each other with no error to either caller. Now atomic — succeeds
+   * only if the row is still in one of `fromStatuses` at write time (mirrors a real
+   * `UPDATE ... WHERE status IN (...)`), returning `null` if another decision already won the race,
+   * which the caller must treat as "no longer open," not retry-and-overwrite.
+   */
+  markAccepted(id: string): Promise<RelationshipInvitationRecord | null>;
+  markDeclined(id: string): Promise<RelationshipInvitationRecord | null>;
+  markCancelled(id: string): Promise<RelationshipInvitationRecord | null>;
   /** Cron-scan entry point, mirroring PaymentRetryRepository.findDueForFiring's precedent. */
   findDueForExpiry(now: Date): Promise<RelationshipInvitationRecord[]>;
   markExpired(id: string): Promise<RelationshipInvitationRecord>;
@@ -231,6 +242,26 @@ export class RelationshipInvitationService {
     this.requireInviteeMatch(invitation, input.actingUserId, input.rawToken ?? null);
     await this.authorizeParty(input.actingUserId, input.actingParty, "send_invitation");
 
+    // PRSprint 31: claim the "accepted" state atomically *first* — before creating the participant
+    // or any other side effect — so a concurrent cancelInvitation/declineInvitation either loses this
+    // race cleanly (this call proceeds, that one gets `null` and reports "no longer open") or wins it
+    // cleanly (we get `null` here and throw *before* anything else has been created; nothing to roll
+    // back). The reverse ordering — insert the participant, then discover we lost the race — would
+    // leave an orphaned participant row implying acceptance succeeded when it didn't.
+    const updated = await this.deps.invitations.markAccepted(invitation.id);
+    if (!updated) {
+      // Lost the race — find out what actually won. If it was a genuinely concurrent duplicate of
+      // this same acceptance (e.g. a double-click), stay idempotent rather than erroring: the pre-
+      // existing "repeated acceptance is idempotent" guarantee must hold under true concurrency, not
+      // just sequential replay. Only a *different* outcome (cancelled/declined) is a real error.
+      const current = await this.requireInvitation(invitation.id);
+      if (current.status === "accepted") {
+        const relationship = await this.deps.relationships.findById(current.relationshipId);
+        if (relationship) return relationship;
+      }
+      throw new ValidationError("This invitation is no longer open — it was cancelled or declined just now.");
+    }
+
     await this.deps.participants.insert({
       relationshipId: invitation.relationshipId,
       individualProfileId: input.actingParty.kind === "personal" ? input.actingParty.id : null,
@@ -243,7 +274,6 @@ export class RelationshipInvitationService {
     if (!invitation.resolvedInviteeUserId) {
       await this.deps.invitations.setResolvedInviteeUser(invitation.id, input.actingUserId);
     }
-    const updated = await this.deps.invitations.markAccepted(invitation.id);
     await this.deps.relationships.markCounterpartyLinked(invitation.relationshipId);
 
     await this.recordAudit(invitation.relationshipId, input.actingUserId, "RELATIONSHIP_INVITATION_ACCEPTED", { invitationId: invitation.id });
@@ -266,7 +296,6 @@ export class RelationshipInvitationService {
       payload: { relationshipId: invitation.relationshipId, invitationId: invitation.id },
       dedupeKey: `relationship_accepted:${invitation.id}`,
     });
-    void updated;
     return relationship;
   }
 
@@ -279,6 +308,9 @@ export class RelationshipInvitationService {
     this.requireInviteeMatch(invitation, input.actingUserId, input.rawToken ?? null);
 
     const updated = await this.deps.invitations.markDeclined(invitation.id);
+    if (!updated) {
+      throw new ValidationError("This invitation is no longer open — it was already accepted or cancelled.");
+    }
     await this.recordAudit(invitation.relationshipId, input.actingUserId, "RELATIONSHIP_INVITATION_DECLINED", { invitationId: invitation.id });
     await this.cancelRelationshipIfNeverLinked(invitation.relationshipId, input.actingUserId);
     await this.deps.notifications.notify({
@@ -300,6 +332,9 @@ export class RelationshipInvitationService {
       throw new ValidationError(`This invitation is no longer open (status "${invitation.status}").`);
     }
     const updated = await this.deps.invitations.markCancelled(invitation.id);
+    if (!updated) {
+      throw new ValidationError("This invitation is no longer open — the recipient already accepted or declined it.");
+    }
     await this.recordAudit(invitation.relationshipId, input.actingUserId, "RELATIONSHIP_INVITATION_CANCELLED", { invitationId: invitation.id });
     await this.cancelRelationshipIfNeverLinked(invitation.relationshipId, input.actingUserId);
     return updated;

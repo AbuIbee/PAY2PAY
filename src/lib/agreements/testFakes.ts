@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
+import type { PageParams } from "@/lib/pagination";
 import { InMemoryProfileOwnerReader } from "@/lib/profiles/testFakes";
 import { createTestStaffService } from "@/lib/staff/testFakes";
 import { AgreementService } from "./agreementService";
@@ -88,12 +89,16 @@ export class InMemoryAgreementRepository implements AgreementRepository {
     if (record) record.currentVersionId = versionId;
   }
 
-  async listForProfile(profileKind: ProfileKind, profileId: string): Promise<AgreementRecord[]> {
-    return [...this.byId.values()].filter(
-      (a) =>
-        (a.creditorProfileKind === profileKind && a.creditorProfileId === profileId) ||
-        (a.debtorProfileKind === profileKind && a.debtorProfileId === profileId),
-    );
+  async listForProfile(profileKind: ProfileKind, profileId: string, pageParams?: PageParams): Promise<AgreementRecord[]> {
+    const matches = [...this.byId.values()]
+      .filter(
+        (a) =>
+          (a.creditorProfileKind === profileKind && a.creditorProfileId === profileId) ||
+          (a.debtorProfileKind === profileKind && a.debtorProfileId === profileId),
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    if (!pageParams) return matches;
+    return matches.slice(pageParams.offset, pageParams.offset + pageParams.limit);
   }
 }
 

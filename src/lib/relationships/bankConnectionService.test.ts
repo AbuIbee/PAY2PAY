@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
 import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
 import { BankConnectionService } from "./bankConnectionService";
 import { createTestRelationshipServices } from "./testFakes";
@@ -152,4 +152,30 @@ describe("BankConnectionService.connectBankAccount", () => {
     const accounts = await ctx.relationshipFinancialAccountService.listAccountsForParty(userId, { kind: "personal", id: partyId });
     expect(accounts).toHaveLength(0);
   });
+
+  describe(
+    "PRSprint 29 (docs/prsprints/PRSPRINT_29_BACKUPS_RECOVERY_ROLLBACK_INCIDENT_CONTROLS.md): " +
+      "bankConnectionEnabled kill switch",
+    () => {
+      afterEach(() => {
+        delete process.env.FEATURE_BANK_CONNECTION_ENABLED;
+      });
+
+      it("blocks a new bank connection when the switch is disabled", async () => {
+        process.env.FEATURE_BANK_CONNECTION_ENABLED = "false";
+        await expect(
+          service.connectBankAccount({
+            actingUserId: userId,
+            actingParty: { kind: "personal", id: partyId },
+            institutionDisplayName: null,
+            accountHolderName: "Jordan Payer",
+            routingNumber: VALID_ROUTING,
+            accountNumber: VALID_ACCOUNT,
+            accountNumberConfirm: VALID_ACCOUNT,
+            accountSubtype: "checking",
+          }),
+        ).rejects.toThrow(DependencyError);
+      });
+    },
+  );
 });

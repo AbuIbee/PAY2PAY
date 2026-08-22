@@ -87,27 +87,32 @@ export class InMemoryAgreementInvitationRepository implements AgreementInvitatio
     return record;
   }
 
-  async markAccepted(id: string, input: { acceptedAt: Date; claimedAt: Date; agreementId: string }): Promise<AgreementInvitationRecord> {
+  /** PRSprint 31: synchronous, no-await-before-write — mirrors a real DB's atomic `UPDATE ... WHERE status IN (...)` (see DrizzleAgreementInvitationRepository's identical guarded methods). Returns `null`, never throws, if another decision already won the race. */
+  private claimGuarded(id: string, status: "accepted" | "declined" | "revoked", timestampField: "acceptedAt" | "declinedAt" | "revokedAt", timestamp: Date): AgreementInvitationRecord | null {
     const record = this.require(id);
-    record.status = "accepted";
+    if (record.status !== "pending" && record.status !== "viewed") return null;
+    record.status = status;
+    record[timestampField] = timestamp;
+    record.updatedAt = new Date();
+    return record;
+  }
+
+  async claimAcceptance(id: string, acceptedAt: Date): Promise<AgreementInvitationRecord | null> {
+    return this.claimGuarded(id, "accepted", "acceptedAt", acceptedAt);
+  }
+
+  async attachAcceptedAgreement(id: string, input: { claimedAt: Date; agreementId: string }): Promise<AgreementInvitationRecord> {
+    const record = this.require(id);
     Object.assign(record, input, { updatedAt: new Date() });
     return record;
   }
 
-  async markDeclined(id: string, declinedAt: Date): Promise<AgreementInvitationRecord> {
-    const record = this.require(id);
-    record.status = "declined";
-    record.declinedAt = declinedAt;
-    record.updatedAt = new Date();
-    return record;
+  async markDeclined(id: string, declinedAt: Date): Promise<AgreementInvitationRecord | null> {
+    return this.claimGuarded(id, "declined", "declinedAt", declinedAt);
   }
 
-  async markRevoked(id: string, revokedAt: Date): Promise<AgreementInvitationRecord> {
-    const record = this.require(id);
-    record.status = "revoked";
-    record.revokedAt = revokedAt;
-    record.updatedAt = new Date();
-    return record;
+  async markRevoked(id: string, revokedAt: Date): Promise<AgreementInvitationRecord | null> {
+    return this.claimGuarded(id, "revoked", "revokedAt", revokedAt);
   }
 
   async markExpired(id: string): Promise<AgreementInvitationRecord> {

@@ -119,7 +119,17 @@ export class DrizzleNotificationEventRepository implements NotificationEventRepo
       .select()
       .from(notificationEvent)
       .where(eq(notificationEvent.recipientUserId, recipientUserId))
-      .orderBy(desc(notificationEvent.createdAt));
+      .orderBy(desc(notificationEvent.createdAt))
+      // PRSprint 26 (docs/prsprints/PRSPRINT_26_SEARCH_FILTER_PAGINATION_RECORD_MANAGEMENT.md): a hard
+      // safety cap — "do not load an unbounded production dataset into the browser." Each logical
+      // notification fans out to 2-3 channel rows (email/sms/in_app), so 300 raw rows covers roughly
+      // the most recent 100-150 notifications, which is generous for the Notification Center's own
+      // recent-activity purpose. A full incremental "load older" UI (matching AgreementsList's
+      // offset-based pagination) is a reasonable follow-up, not built this PRSprint — grouping
+      // (listGroupedForUser) happens after this fetch, so true offset-based pagination on the grouped
+      // result needs either a dedicated grouped-count query or a materialized "logical notification"
+      // table; out of scope for this pass.
+      .limit(300);
     return rows.map(toRecord);
   }
 

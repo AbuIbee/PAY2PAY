@@ -190,7 +190,7 @@ export function InviteToAgreement() {
         <input id="invite-installment" type="number" min="0.01" step="0.01" required value={installment} onChange={(e) => setInstallment(e.target.value)} />
       </div>
       <div className="field">
-        <label htmlFor="invite-frequency">Frequency</label>
+        <label htmlFor="invite-frequency">How often will payments be made?</label>
         <select id="invite-frequency" value={frequency} onChange={(e) => setFrequency(e.target.value as Frequency)}>
           {Object.entries(FREQUENCY_LABEL).map(([value, label]) => (
             <option key={value} value={value}>{label}</option>

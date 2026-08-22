@@ -10,6 +10,18 @@ describe("RelationshipInvitationService", () => {
     ctx = createTestRelationshipServices();
   });
 
+  function setupInvitation() {
+    const creditorUserId = randomUUID();
+    const creditorProfileId = randomUUID();
+    ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+    return ctx.relationshipInvitationService.createInvitation({
+      actingUserId: creditorUserId,
+      actingParty: { kind: "personal", id: creditorProfileId },
+      inviteeEmail: "invitee@example.com",
+      inviteeRole: "debtor",
+    });
+  }
+
   describe("createInvitation", () => {
     it("creates a relationship + inviter participant, and notifies an existing-user invitee without ever exposing the raw token", async () => {
       const creditorUserId = randomUUID();
@@ -123,28 +135,13 @@ describe("RelationshipInvitationService", () => {
   });
 
   describe("acceptInvitation — token/identity security", () => {
-    async function setupInvitation(inviteeEmail: string | null) {
-      const creditorUserId = randomUUID();
-      const creditorProfileId = randomUUID();
-      ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
-      if (inviteeEmail) {
-        // no-op — resolvedInviteeUserId is set only if the email matches an existing user via ctx.users
-      }
-      return ctx.relationshipInvitationService.createInvitation({
-        actingUserId: creditorUserId,
-        actingParty: { kind: "personal", id: creditorProfileId },
-        inviteeEmail: "invitee@example.com",
-        inviteeRole: "debtor",
-      });
-    }
-
     it("an existing, resolved invitee can accept using only their session (no token needed)", async () => {
       const debtorUserId = randomUUID();
       const debtorProfileId = randomUUID();
       ctx.users.set("invitee@example.com", debtorUserId);
       ctx.profileOwners.set("personal", debtorProfileId, debtorUserId);
 
-      const { invitation } = await setupInvitation("invitee@example.com");
+      const { invitation } = await setupInvitation();
       const relationship = await ctx.relationshipInvitationService.acceptInvitation({
         invitationId: invitation.id,
         actingUserId: debtorUserId,
@@ -156,7 +153,7 @@ describe("RelationshipInvitationService", () => {
     it("rejects a different logged-in user attempting to accept an invitation resolved to someone else", async () => {
       const debtorUserId = randomUUID();
       ctx.users.set("invitee@example.com", debtorUserId);
-      const { invitation } = await setupInvitation("invitee@example.com");
+      const { invitation } = await setupInvitation();
 
       const impostorUserId = randomUUID();
       const impostorProfileId = randomUUID();
@@ -172,7 +169,7 @@ describe("RelationshipInvitationService", () => {
     });
 
     it("a new user must present the correct raw token; a tampered/wrong token is rejected", async () => {
-      const { invitation, rawToken } = await setupInvitation(null);
+      const { invitation, rawToken } = await setupInvitation();
       const newUserId = randomUUID();
       const newProfileId = randomUUID();
       ctx.profileOwners.set("personal", newProfileId, newUserId);
@@ -196,7 +193,7 @@ describe("RelationshipInvitationService", () => {
     });
 
     it("a repeated, identical acceptance is idempotent rather than erroring", async () => {
-      const { invitation, rawToken } = await setupInvitation(null);
+      const { invitation, rawToken } = await setupInvitation();
       const newUserId = randomUUID();
       const newProfileId = randomUUID();
       ctx.profileOwners.set("personal", newProfileId, newUserId);
@@ -219,7 +216,7 @@ describe("RelationshipInvitationService", () => {
     });
 
     it("rejects accepting an already-expired invitation", async () => {
-      const { invitation, rawToken } = await setupInvitation(null);
+      const { invitation, rawToken } = await setupInvitation();
       const stored = await ctx.invitations.byId.get(invitation.id);
       if (stored) stored.expiresAt = new Date(Date.now() - 1000);
 
@@ -234,6 +231,85 @@ describe("RelationshipInvitationService", () => {
           rawToken,
         }),
       ).rejects.toThrow(ValidationError);
+    });
+
+    it("PRSprint 31: rejects accepting an invitation the inviter already cancelled", async () => {
+      const { invitation, rawToken } = await setupInvitation();
+      const creditorUserId = (await ctx.invitations.findById(invitation.id))!.inviterUserId;
+      await ctx.relationshipInvitationService.cancelInvitation({ invitationId: invitation.id, actingUserId: creditorUserId });
+
+      const newUserId = randomUUID();
+      const newProfileId = randomUUID();
+      ctx.profileOwners.set("personal", newProfileId, newUserId);
+      await expect(
+        ctx.relationshipInvitationService.acceptInvitation({
+          invitationId: invitation.id,
+          actingUserId: newUserId,
+          actingParty: { kind: "personal", id: newProfileId },
+          rawToken,
+        }),
+      ).rejects.toThrow(ValidationError);
+    });
+  });
+
+  describe("PRSprint 31: concurrency — genuine adversarial races", () => {
+    it("the inviter cancelling and the recipient accepting at the exact same time: exactly one wins, the other is cleanly rejected — never both silently succeeding", async () => {
+      const { invitation, rawToken } = await setupInvitation();
+      const creditorUserId = (await ctx.invitations.findById(invitation.id))!.inviterUserId;
+      const newUserId = randomUUID();
+      const newProfileId = randomUUID();
+      ctx.profileOwners.set("personal", newProfileId, newUserId);
+
+      const results = await Promise.allSettled([
+        ctx.relationshipInvitationService.cancelInvitation({ invitationId: invitation.id, actingUserId: creditorUserId }),
+        ctx.relationshipInvitationService.acceptInvitation({
+          invitationId: invitation.id,
+          actingUserId: newUserId,
+          actingParty: { kind: "personal", id: newProfileId },
+          rawToken,
+        }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      // Exactly one side wins — never both (that would mean the invitation is simultaneously
+      // "cancelled" and "accepted"), and never neither (a legitimate race must still resolve).
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      const stored = await ctx.invitations.findById(invitation.id);
+      expect(["accepted", "cancelled"]).toContain(stored!.status);
+
+      const participants = await ctx.participants.listForRelationship(invitation.relationshipId);
+      if (stored!.status === "accepted") {
+        // Accept won: a real participant was created — the cancel side must have been rejected, not
+        // silently swallowed (already asserted above via `rejected` count).
+        expect(participants).toHaveLength(2);
+      } else {
+        // Cancel won: no participant was ever created for the recipient's losing accept attempt.
+        expect(participants).toHaveLength(1); // just the original inviter
+      }
+    });
+
+    it("two concurrent accept attempts for the same invitation (replay/double-click) never create two participant rows", async () => {
+      const { invitation, rawToken } = await setupInvitation();
+      const newUserId = randomUUID();
+      const newProfileId = randomUUID();
+      ctx.profileOwners.set("personal", newProfileId, newUserId);
+
+      const input = {
+        invitationId: invitation.id,
+        actingUserId: newUserId,
+        actingParty: { kind: "personal" as const, id: newProfileId },
+        rawToken,
+      };
+      const [first, second] = await Promise.all([
+        ctx.relationshipInvitationService.acceptInvitation(input),
+        ctx.relationshipInvitationService.acceptInvitation(input),
+      ]);
+      expect(first.id).toBe(second.id);
+      const participants = await ctx.participants.listForRelationship(first.id);
+      expect(participants).toHaveLength(2); // inviter + one debtor — never a duplicate
     });
   });
 

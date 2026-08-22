@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
+import { partyRoleLabel } from "@/lib/ui/statusLabels";
 
 interface SelectableProfile {
   kind: "personal" | "business";
@@ -158,8 +159,8 @@ export function InviteConnectionWizard() {
         <div style={{ display: "grid", gap: "1rem" }}>
           <div className="card" style={{ background: "var(--forest-50)" }}>
             <p style={{ margin: 0 }}>
-              <strong>{selectedProfile.displayName}</strong> ({myRole === "creditor" ? "creditor" : "debtor"}) is inviting{" "}
-              <strong>{inviteeEmail}</strong> as {myRole === "creditor" ? "debtor" : "creditor"}.
+              <strong>{selectedProfile.displayName}</strong>, {partyRoleLabel(myRole)}, is inviting{" "}
+              <strong>{inviteeEmail}</strong>, who will be {partyRoleLabel(myRole === "creditor" ? "debtor" : "creditor")}.
             </p>
           </div>
           {submitError && (

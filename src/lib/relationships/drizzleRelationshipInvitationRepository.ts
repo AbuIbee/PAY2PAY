@@ -80,16 +80,16 @@ export class DrizzleRelationshipInvitationRepository implements RelationshipInvi
     return this.setStatus(id, "viewed", { viewedAt: new Date() });
   }
 
-  async markAccepted(id: string): Promise<RelationshipInvitationRecord> {
-    return this.setStatus(id, "accepted", { acceptedAt: new Date() });
+  async markAccepted(id: string): Promise<RelationshipInvitationRecord | null> {
+    return this.setStatusGuarded(id, "accepted", { acceptedAt: new Date() });
   }
 
-  async markDeclined(id: string): Promise<RelationshipInvitationRecord> {
-    return this.setStatus(id, "declined", { declinedAt: new Date() });
+  async markDeclined(id: string): Promise<RelationshipInvitationRecord | null> {
+    return this.setStatusGuarded(id, "declined", { declinedAt: new Date() });
   }
 
-  async markCancelled(id: string): Promise<RelationshipInvitationRecord> {
-    return this.setStatus(id, "cancelled", { cancelledAt: new Date() });
+  async markCancelled(id: string): Promise<RelationshipInvitationRecord | null> {
+    return this.setStatusGuarded(id, "cancelled", { cancelledAt: new Date() });
   }
 
   async markExpired(id: string): Promise<RelationshipInvitationRecord> {
@@ -123,5 +123,28 @@ export class DrizzleRelationshipInvitationRepository implements RelationshipInvi
       .returning();
     if (!row) throw new ConfigurationError(`relationship_invitation setStatus(${status}) found no row`);
     return toRecord(row);
+  }
+
+  /**
+   * PRSprint 31: accept/decline/cancel are mutually-exclusive terminal decisions on the same
+   * invitation — unlike `setStatus` above (used only for `markViewed`/`markExpired`, which are not in
+   * contention with each other), these must only succeed while the row is still `sent`/`viewed`,
+   * atomically, in the same statement as the write (`WHERE status IN (...)` — never a separate
+   * read-then-write, which is exactly the TOCTOU gap that let a concurrent accept and cancel both
+   * appear to succeed). Returns `null` — never throws — when another decision already won the race;
+   * the caller (relationshipInvitationService.ts) turns that into its own "no longer open" error.
+   */
+  private async setStatusGuarded(
+    id: string,
+    status: RelationshipInvitationStatus,
+    extra: Partial<{ acceptedAt: Date; declinedAt: Date; cancelledAt: Date }>,
+  ): Promise<RelationshipInvitationRecord | null> {
+    const db = getDb();
+    const [row] = await db
+      .update(relationshipInvitation)
+      .set({ status, updatedAt: new Date(), ...extra })
+      .where(and(eq(relationshipInvitation.id, id), or(eq(relationshipInvitation.status, "sent"), eq(relationshipInvitation.status, "viewed"))))
+      .returning();
+    return row ? toRecord(row) : null;
   }
 }

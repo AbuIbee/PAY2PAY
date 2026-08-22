@@ -20,6 +20,7 @@ import {
   partialPaymentRequestStatusLabel,
   settlementProposalStatusLabel,
   agreementDisputeStatusLabel,
+  feeAllocationLabel,
   type ChipTone,
 } from "@/lib/ui/statusLabels";
 
@@ -377,7 +378,7 @@ export function AgreementDetail() {
           {data.version.frequency} installments of {formatMoney(terms.installmentAmountMinorUnits)} (
           {terms.numberOfInstallments} remaining, final payment {formatMoney(terms.finalPaymentMinorUnits)})
         </p>
-        <p style={{ margin: 0 }}>Fee allocation: {data.version.feeAllocation.replaceAll("_", " ")}</p>
+        <p style={{ margin: 0 }}>Fee allocation: {feeAllocationLabel(data.version.feeAllocation)}</p>
         {isSignedOrLater && (
           <button type="button" className="button button--ghost" style={{ marginTop: "0.75rem" }} onClick={() => void handleViewPdf()}>
             View signed PDF
@@ -460,11 +461,12 @@ export function AgreementDetail() {
               type="button"
               className="button button--ghost"
               disabled={actionStatus === "working"}
-              onClick={() =>
+              onClick={() => {
+                if (!window.confirm("Reject this agreement? This cannot be undone and the other party will be notified.")) return;
                 void runAction(() =>
                   apiFetch("/api/agreements/decide", { method: "POST", body: JSON.stringify({ agreementId: data.id, decision: "reject", reason: rejectReason || undefined }) }),
-                )
-              }
+                );
+              }}
             >
               Reject
             </button>
@@ -1177,6 +1179,13 @@ function DisputePanel({ agreementId, disputes, onChanged }: { agreementId: strin
           </button>
         )}
       </div>
+      <p style={{ margin: "0 0 0.75rem", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
+        PAY2PAY records both parties&apos; statements and evidence here so there is a shared, dated
+        record. It does not investigate, judge, or decide who is right, and it does not reverse a
+        payment on its own — it is a record-keeping tool for a disagreement you and the other party
+        need to work out directly. For account, payment, or platform issues, see{" "}
+        <a href="/support">Support</a>.
+      </p>
 
       {disputes.length === 0 ? (
         <p className="form-status">No disputes on this agreement.</p>

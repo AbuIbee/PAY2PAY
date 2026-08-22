@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
 import { createTestPaymentService } from "./testFakes";
 import type { ProfileKind } from "./paymentProvider";
 
@@ -263,4 +263,89 @@ describe("PaymentService", () => {
       expect(results).toEqual([]);
     });
   });
+
+  describe(
+    "PRSprint 29 (docs/prsprints/PRSPRINT_29_BACKUPS_RECOVERY_ROLLBACK_INCIDENT_CONTROLS.md): " +
+      "paymentInitiationEnabled kill switch",
+    () => {
+      afterEach(() => {
+        delete process.env.FEATURE_PAYMENT_INITIATION_ENABLED;
+      });
+
+      it("blocks a genuinely new payment when the switch is disabled", async () => {
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        process.env.FEATURE_PAYMENT_INITIATION_ENABLED = "false";
+        await expect(ctx.paymentService.createPayment(baseInput({ idempotencyKey: "kill-switch-1" }))).rejects.toThrow(
+          DependencyError,
+        );
+      });
+
+      it("still returns the existing record for a retried idempotency key even while the switch is disabled (never blocks a replay of an already-succeeded payment)", async () => {
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        const original = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "kill-switch-2" }));
+
+        process.env.FEATURE_PAYMENT_INITIATION_ENABLED = "false";
+        const replay = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "kill-switch-2" }));
+        expect(replay.id).toBe(original.id);
+      });
+    },
+  );
+
+  describe(
+    "PRSprint 33 (docs/prsprints/PRSPRINT_33_FINAL_PRODUCTION_LAUNCH_CONTROLS_CLOSED_BETA.md): transaction limits & review flagging",
+    () => {
+      afterEach(() => {
+        delete process.env.MAX_PAYMENT_MINOR_UNITS;
+        delete process.env.PAYMENT_REVIEW_THRESHOLD_MINOR_UNITS;
+      });
+
+      it("rejects a single payment above the configured maximum", async () => {
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        process.env.MAX_PAYMENT_MINOR_UNITS = "50000"; // $500
+        await expect(ctx.paymentService.createPayment(baseInput({ idempotencyKey: "limit-1", amountMinorUnits: 60_000 }))).rejects.toThrow(
+          ValidationError,
+        );
+      });
+
+      it("allows a payment at or below the configured maximum", async () => {
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        process.env.MAX_PAYMENT_MINOR_UNITS = "50000";
+        const record = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "limit-2", amountMinorUnits: 50_000 }));
+        expect(record.status).not.toBe("failed");
+      });
+
+      it("flags (but never blocks) a payment at or above the review threshold, via the existing audit log", async () => {
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        process.env.PAYMENT_REVIEW_THRESHOLD_MINOR_UNITS = "10000"; // $100
+        const record = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "review-1", amountMinorUnits: 15_000 }));
+        expect(record.status).not.toBe("failed");
+        const flags = ctx.auditRepo.events.filter((e) => e.action === "payment_flagged_for_review");
+        expect(flags).toHaveLength(1);
+      });
+
+      it("does not flag a payment below the review threshold", async () => {
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        process.env.PAYMENT_REVIEW_THRESHOLD_MINOR_UNITS = "10000";
+        await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "review-2", amountMinorUnits: 5_000 }));
+        const flags = ctx.auditRepo.events.filter((e) => e.action === "payment_flagged_for_review");
+        expect(flags).toHaveLength(0);
+      });
+
+      it("never re-flags or re-validates a retried idempotency key against a limit set after the original succeeded", async () => {
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        const original = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "limit-3", amountMinorUnits: 60_000 }));
+
+        process.env.MAX_PAYMENT_MINOR_UNITS = "50000"; // now below the already-succeeded amount
+        const replay = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "limit-3", amountMinorUnits: 60_000 }));
+        expect(replay.id).toBe(original.id);
+      });
+    },
+  );
 });

@@ -211,4 +211,28 @@ describe("AgreementDetail", () => {
 
     await waitFor(() => expect(screen.getByText(/verify it's you/i)).toBeInTheDocument());
   });
+
+  it("PRSprint 25: rejecting an agreement requires confirmation — declining the dialog never calls the API", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockImplementation(mockFetchByUrl({
+      "/api/agreements/detail": { body: detailBody({ status: "awaiting_creditor_acceptance" }) },
+      "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+      "/api/agreements/evidence?": { body: { evidence: [] } },
+      "/api/agreements/witnesses?": { body: { witnesses: [] } },
+      "/api/agreements/amendments?": { body: { amendments: [] } },
+      "/api/agreements/partial-payments?": { body: { requests: [] } },
+      "/api/agreements/settlements?": { body: { proposals: [] } },
+      "/api/agreements/disputes?": { body: { disputes: [] } },
+      "/api/agreements/decide": { body: { status: "rejected" } },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<AgreementDetail />);
+    const rejectButton = await screen.findByRole("button", { name: /^reject$/i });
+    await user.click(rejectButton);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/decide"))).toBe(false);
+  });
 });

@@ -58,12 +58,22 @@ const ADMIN_LINKS: NavLinkItem[] = [
   { href: "/admin/audit", label: "Audit log" },
 ];
 
+interface ActiveProfileSummary {
+  kind: "personal" | "business";
+  displayName: string;
+}
+
 export function AppNav() {
   const pathname = usePathname();
   const router = useRouter();
   const [email, setEmail] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [unreadCount, setUnreadCount] = useState<number | null>(null);
+  // PRSprint 27 (docs/prsprints/PRSPRINT_27_DASHBOARDS_ONBOARDING_ROLE_AWARE_UX.md): "acting as
+  // business" clarity — previously the active profile was only visible on the 4 pages that happened
+  // to embed a ProfileSwitcher inline; a user on any other page (e.g. /organization/staff, /payments)
+  // had no persistent cue of which business (if any) they were currently acting as.
+  const [activeProfile, setActiveProfile] = useState<ActiveProfileSummary | null>(null);
   // PRSprint 10A (docs/prsprints/PRSPRINT_10A_AUTHENTICATION_SIGNOUT_UI_REMEDIATION.md): the
   // mobile drawer state — see app-shell.css's own doc comment on `.app-nav--mobile-open` for the
   // root cause this closes (the entire nav, the only place Sign Out lived, was unconditionally
@@ -95,6 +105,15 @@ export function AppNav() {
         if (!cancelled) setIsAdmin(body.isAdmin);
       })
       .catch(() => {});
+    fetch("/api/profiles/active")
+      .then(async (response) => {
+        if (cancelled || !response.ok) return;
+        const body = (await response.json()) as ActiveProfileSummary;
+        if (!cancelled) setActiveProfile({ kind: body.kind, displayName: body.displayName });
+      })
+      .catch(() => {
+        if (!cancelled) setActiveProfile(null);
+      });
     fetch("/api/notifications")
       .then(async (response) => {
         if (cancelled || !response.ok) return;
@@ -129,6 +148,11 @@ export function AppNav() {
           <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
           <span>PAY2PAY</span>
         </Link>
+        {activeProfile?.kind === "business" && (
+          <span className="app-topbar__acting-as" title={`Acting as ${activeProfile.displayName}`}>
+            Acting as {activeProfile.displayName}
+          </span>
+        )}
         <div className="app-topbar__actions">
           <button
             type="button"
@@ -221,6 +245,7 @@ export function AppNav() {
           <div className="app-nav__user">
             <strong>Signed in</strong>
             <span>{email}</span>
+            {activeProfile?.kind === "business" && <span>Acting as {activeProfile.displayName}</span>}
           </div>
         )}
         <button type="button" className="app-nav__logout" onClick={() => void handleLogout()}>

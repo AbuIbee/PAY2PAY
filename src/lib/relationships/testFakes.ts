@@ -218,16 +218,34 @@ export class InMemoryRelationshipInvitationRepository implements RelationshipInv
     return this.setStatus(id, "viewed", "viewedAt");
   }
 
-  async markAccepted(id: string): Promise<RelationshipInvitationRecord> {
-    return this.setStatus(id, "accepted", "acceptedAt");
+  /**
+   * PRSprint 31: synchronous, no-await-before-write — mirrors a real DB's atomic
+   * `UPDATE ... WHERE status IN (...)` (see DrizzleRelationshipInvitationRepository.setStatusGuarded's
+   * identical doc comment). Returns `null`, never throws, if another decision already won the race.
+   */
+  private setStatusGuarded(
+    id: string,
+    status: RelationshipInvitationStatus,
+    timestampField: "acceptedAt" | "declinedAt" | "cancelledAt",
+  ): RelationshipInvitationRecord | null {
+    const record = this.mustFind(id);
+    if (record.status !== "sent" && record.status !== "viewed") return null;
+    record.status = status;
+    record[timestampField] = new Date();
+    record.updatedAt = new Date();
+    return record;
   }
 
-  async markDeclined(id: string): Promise<RelationshipInvitationRecord> {
-    return this.setStatus(id, "declined", "declinedAt");
+  async markAccepted(id: string): Promise<RelationshipInvitationRecord | null> {
+    return this.setStatusGuarded(id, "accepted", "acceptedAt");
   }
 
-  async markCancelled(id: string): Promise<RelationshipInvitationRecord> {
-    return this.setStatus(id, "cancelled", "cancelledAt");
+  async markDeclined(id: string): Promise<RelationshipInvitationRecord | null> {
+    return this.setStatusGuarded(id, "declined", "declinedAt");
+  }
+
+  async markCancelled(id: string): Promise<RelationshipInvitationRecord | null> {
+    return this.setStatusGuarded(id, "cancelled", "cancelledAt");
   }
 
   async markExpired(id: string): Promise<RelationshipInvitationRecord> {

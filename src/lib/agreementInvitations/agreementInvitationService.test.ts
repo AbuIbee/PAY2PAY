@@ -273,6 +273,62 @@ describe("AgreementInvitationService", () => {
     });
   });
 
+  describe("PRSprint 31: concurrency — genuine adversarial races", () => {
+    async function setupOpenInvitation() {
+      const { invitation, rawToken } = await createInvitation();
+      const recipientUserId = randomUUID();
+      const recipientProfile = { kind: "personal" as const, id: randomUUID() };
+      ctx.agreementCtx.profileOwners.set("personal", recipientProfile.id, recipientUserId);
+      ctx.userEmails.register(recipientUserId, "recipient@example.com");
+      return { invitation, rawToken, recipientUserId, recipientProfile };
+    }
+
+    it("the inviter revoking and the recipient accepting at the exact same time: exactly one wins — a losing revoke never leaves an agreement created behind it, and a losing accept never creates one at all", async () => {
+      const { invitation, rawToken, recipientUserId, recipientProfile } = await setupOpenInvitation();
+
+      const results = await Promise.allSettled([
+        ctx.invitationService.revokeInvitation(invitation.id, inviterUserId),
+        ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      // Exactly one side wins — never both (the original bug: a revoke could report success while
+      // acceptPlan still finished creating a real agreement anyway) and never neither.
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      const stored = await ctx.invitations.findById(invitation.id);
+      expect(["accepted", "revoked"]).toContain(stored!.status);
+
+      if (stored!.status === "accepted") {
+        expect(stored!.agreementId).toBeTruthy();
+        const agreement = await ctx.agreementCtx.agreements.findById(stored!.agreementId!);
+        expect(agreement).not.toBeNull();
+      } else {
+        // Revoke won: acceptPlan must never have created an agreement at all — not even a draft left
+        // behind. This is the exact defect this PRSprint found and fixed: the old code claimed
+        // "accepted" only *after* fully creating and activating the agreement, so a losing accept
+        // still left a real agreement in place even though revoke had already "succeeded."
+        expect(stored!.agreementId).toBeNull();
+        const allAgreements = await ctx.agreementCtx.agreements.listForProfile("personal", recipientProfile.id);
+        expect(allAgreements).toHaveLength(0);
+      }
+    });
+
+    it("two concurrent accept attempts for the same invitation (replay/double-click): exactly one succeeds, never two agreements — this service treats a second accept as an error, not idempotent success (matching its own pre-existing sequential-replay behavior)", async () => {
+      const { rawToken, recipientUserId, recipientProfile } = await setupOpenInvitation();
+      const input = { rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile };
+
+      const results = await Promise.allSettled([ctx.invitationService.acceptPlan(input), ctx.invitationService.acceptPlan(input)]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+
+      const allAgreements = await ctx.agreementCtx.agreements.listForProfile("personal", recipientProfile.id);
+      expect(allAgreements).toHaveLength(1);
+    });
+  });
+
   describe("Anonymous review restrictions", () => {
     it("never reveals internal IDs, inviter's account identity, or unrelated fields", async () => {
       const { rawToken } = await createInvitation();

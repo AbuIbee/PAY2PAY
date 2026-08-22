@@ -86,9 +86,22 @@ export interface AgreementInvitationRepository {
     },
   ): Promise<AgreementInvitationRecord>;
   bindRecipient(id: string, input: { recipientUserId: string; recipientProfileKind: ProfileKind; recipientProfileId: string }): Promise<AgreementInvitationRecord>;
-  markAccepted(id: string, input: { acceptedAt: Date; claimedAt: Date; agreementId: string }): Promise<AgreementInvitationRecord>;
-  markDeclined(id: string, declinedAt: Date): Promise<AgreementInvitationRecord>;
-  markRevoked(id: string, revokedAt: Date): Promise<AgreementInvitationRecord>;
+  /**
+   * PRSprint 31 (docs/prsprints/PRSPRINT_31_E2E_NEGATIVE_SECURITY_CONCURRENCY_TEST_COMPLETION.md):
+   * split from the old single-step `markAccepted(id, {acceptedAt, claimedAt, agreementId})`, which was
+   * called only *after* `acceptPlan` had already created and fully activated a real agreement — with
+   * no atomic guard on the write. That meant a concurrent `revokeInvitation`/`declinePublic` could
+   * "win" (the sender sees a successful revoke, believing no agreement was created) while `acceptPlan`
+   * still finished creating and activating one anyway, silently overwriting the revoked/declined
+   * status back to "accepted." `claimAcceptance` is now the *first* thing `acceptPlan` does — atomic,
+   * `WHERE status IN ('pending','viewed')`, before any agreement is created — so a losing accept never
+   * creates an agreement at all. `attachAcceptedAgreement` is the unconditional second step, called
+   * only after the claim already succeeded (nothing left to race against).
+   */
+  claimAcceptance(id: string, acceptedAt: Date): Promise<AgreementInvitationRecord | null>;
+  attachAcceptedAgreement(id: string, input: { claimedAt: Date; agreementId: string }): Promise<AgreementInvitationRecord>;
+  markDeclined(id: string, declinedAt: Date): Promise<AgreementInvitationRecord | null>;
+  markRevoked(id: string, revokedAt: Date): Promise<AgreementInvitationRecord | null>;
   markExpired(id: string): Promise<AgreementInvitationRecord>;
   regenerateToken(id: string, tokenHash: string, expiresAt: Date): Promise<AgreementInvitationRecord>;
   /** Cron-scan entry point, mirroring PaymentRetryRepository/RelationshipInvitationRepository's identical `findDueForFiring`/`findDueForExpiry` precedent. */
@@ -376,6 +389,20 @@ export class AgreementInvitationService {
       throw new ForbiddenError("There is no recipient response yet for you to accept.");
     }
 
+    // PRSprint 31: claim "accepted" atomically *before* creating any agreement — a concurrent
+    // revokeInvitation/declinePublic (or a second concurrent acceptPlan replay — this service treats
+    // *any* second accept as an error, matching the pre-existing sequential-replay behavior: "consumed
+    // token replay (accept twice) -> denied", never idempotent success) either loses this race cleanly
+    // (proceeds below; the other call gets `null` and reports "no longer open") or wins it cleanly (we
+    // get `null` here and throw before an agreement has ever been created — nothing to roll back). See
+    // claimAcceptance's own doc comment on the repository interface for why the old ordering was a
+    // real financial-integrity bug.
+    const now = new Date();
+    const claimed = await this.deps.invitations.claimAcceptance(bound.id, now);
+    if (!claimed) {
+      throw new ValidationError("This invitation is no longer open — it was already accepted, revoked, or declined.");
+    }
+
     const inviter: ProfileRef = { kind: bound.inviterProfileKind, id: bound.inviterProfileId };
     const recipient: ProfileRef = { kind: bound.recipientProfileKind!, id: bound.recipientProfileId! };
     const creditor = bound.inviterRole === "creditor" ? inviter : recipient;
@@ -397,8 +424,9 @@ export class AgreementInvitationService {
     await this.deps.agreements.acknowledgeDebt(agreementId, debtorUserId);
     await this.deps.agreements.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" });
 
-    const now = new Date();
-    const accepted = await this.deps.invitations.markAccepted(bound.id, { acceptedAt: now, claimedAt: now, agreementId });
+    // Unconditional — our claim on "accepted" already succeeded above, so there is nothing left to
+    // race against; this just attaches the now-created agreement's id.
+    await this.deps.invitations.attachAcceptedAgreement(bound.id, { claimedAt: new Date(), agreementId });
     await this.recordAudit(bound.id, input.actingUserId, "agreement_invitation_accepted", { agreementId });
 
     await this.deps.notifications.notify({
@@ -408,7 +436,6 @@ export class AgreementInvitationService {
       payload: { action: "accepted" },
       dedupeKey: `agreement_invitation_response:${bound.id}:accepted`,
     });
-    void accepted;
     return { agreementId };
   }
 
@@ -421,7 +448,12 @@ export class AgreementInvitationService {
    */
   async declinePublic(rawToken: string): Promise<void> {
     const invitation = await this.requireOpenInvitation(await this.findByTokenOrThrow(rawToken));
-    await this.deps.invitations.markDeclined(invitation.id, new Date());
+    const declined = await this.deps.invitations.markDeclined(invitation.id, new Date());
+    if (!declined) {
+      // Lost a genuine race against acceptPlan/revokeInvitation — never report success for a decline
+      // that didn't actually take effect.
+      throw new ValidationError("This invitation is no longer open — it was already accepted or revoked.");
+    }
     await this.recordAudit(invitation.id, null, "agreement_invitation_declined", null);
     await this.deps.notifications.notify({
       recipientUserId: invitation.inviterUserId,
@@ -441,6 +473,12 @@ export class AgreementInvitationService {
       throw new ValidationError(`This invitation is no longer open (status "${invitation.status}").`);
     }
     const revoked = await this.deps.invitations.markRevoked(invitation.id, new Date());
+    if (!revoked) {
+      // Lost a genuine race against acceptPlan/declinePublic — never report a successful revoke that
+      // didn't actually take effect (the original bug this PRSprint found: a revoke could appear to
+      // succeed while acceptPlan finished creating a real agreement anyway).
+      throw new ValidationError("This invitation is no longer open — it was just accepted or declined.");
+    }
     await this.recordAudit(invitation.id, actingUserId, "agreement_invitation_revoked", null);
     return revoked;
   }
