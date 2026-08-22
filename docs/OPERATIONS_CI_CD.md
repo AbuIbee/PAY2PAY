@@ -32,7 +32,32 @@ that list without Product-Owner sign-off; the doc comment on the list says so di
 makes "every migration to date has been additive" (§2 of the backup/recovery doc) a checked invariant
 rather than just a convention.
 
-## 2. IMPORTANT — CI is not currently a hard merge gate
+## 2. Branch protection on `master` — RESOLVED 2026-08-22 (Step 2 infrastructure hardening)
+
+The Product Owner selected **Option 1** below (live authorization, Step 2 infrastructure hardening
+session, after Phase 7/PR #48 merged). Applied via `gh api --method PUT
+repos/AbuIbee/PAY2PAY/branches/master/protection` and re-read back to verify:
+
+- `required_pull_request_reviews`: present (`required_approving_review_count: 0` — a PR is required for
+  any non-admin pusher; no reviewer count is enforced, matching this project's single-maintainer reality).
+- `required_status_checks.checks`: `["Lint, typecheck, test, build", "Fresh-database migration test"]`,
+  `strict: true`. Deliberately **excludes** `Supabase schema drift check` and `Post-deploy smoke test` —
+  both only run post-merge-push-to-master or via manual `workflow_dispatch` respectively (see §1), so
+  requiring either as a PR merge gate would block every PR forever waiting for a check that never runs
+  on a PR event.
+- `allow_force_pushes: false`, `allow_deletions: false` — apply unconditionally (not admin-exemptable in
+  the classic branch-protection API), and don't affect the existing plain (non-force) direct-push
+  tracker-commit workflow.
+- `enforce_admins: false` — preserves repo-admin direct push to `master` for that same tracker-commit
+  workflow (see §2 below, "established, deliberate pattern of direct pushes").
+
+This resolves the original finding below (kept verbatim as the historical record of what was found and
+why each option existed) — CI is now an enforced merge gate for anyone without admin access, while the
+admin bypass this project already depends on remains intact.
+
+### Original finding (PRSprint 30, superseded by the above)
+
+**IMPORTANT — CI was not, at the time, a hard merge gate**
 
 `docs/OPERATIONS_BACKUP_RECOVERY.md` §2 previously stated "Every deploy to `master` is gated by CI...
 A bad deploy requires either a CI failure to have been bypassed (it can't be, on the required branch)."

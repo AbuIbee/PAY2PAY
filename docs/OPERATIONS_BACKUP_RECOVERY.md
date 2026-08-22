@@ -39,6 +39,21 @@ or above) and confirm a first successful backup appears in `supabase backups lis
 this document's §4 (Financial Recovery) and a real restore-to-a-branch test become possible and should
 be performed before any real customer funds move through this system.
 
+**Re-verified 2026-08-22 (Step 2 infrastructure hardening, post-Phase-7-merge)**: confirmed against the
+same linked project (`Paid2You` / `lmpicrmmixpvkwwhcxbh`, re-confirmed via `supabase projects list` as
+the correct, `linked: true`, `ACTIVE_HEALTHY` project — not a different project by the same name) via
+`supabase backups list --project-ref lmpicrmmixpvkwwhcxbh`. **Result: unchanged** —
+`walg_enabled: true`, `pitr_enabled: false`, `backups: []`. No destructive restore was attempted (none
+is possible with zero backups present, and the task instruction was explicit not to attempt one). The
+Supabase CLI exposes no `billing`/`addons`/plan-tier command, so whether the current plan already
+includes PITR (and it simply hasn't been toggled on) or requires a plan upgrade first could not be
+determined from this session's tooling — that one fact requires checking the Supabase Dashboard's
+Settings → Billing page directly. **Status: BLOCKED (external, Product Owner action required)** — this
+is not a "strongest available backup control" situation with a lesser fallback in place; zero backups
+of any kind (PITR or otherwise) currently exist for this project, so there is currently no way to
+recover this production database from any data-loss event. This has not regressed since PRSprint 29 —
+it was never resolved — but it is re-confirmed current as of this date rather than assumed unchanged.
+
 ## 2. Application/deployment rollback — VERIFIED, WORKING
 
 Unlike the database, application rollback is real and already proven throughout this project's own
@@ -50,14 +65,19 @@ history:
   production traffic at any previous immutable build without a new code change.
 - **CI runs on every push/PR to `master`** (lint/typecheck/test/build, a fresh-database migration
   test, and — on the `master` push specifically — the Supabase schema drift check; see
-  `docs/OPERATIONS_CI_CD.md` §1). **Correction (PRSprint 30):** this section previously claimed a bad
-  deploy "requires... a CI failure to have been bypassed (it can't be, on the required branch)" — that
-  was inaccurate. PRSprint 30 checked directly (`gh api repos/AbuIbee/PAY2PAY/branches/master/
-  protection`) and found `master` has no branch protection configured at all: CI is visible but not
-  currently enforced as a merge/push gate. See `docs/OPERATIONS_CI_CD.md` §2 for the full finding and
-  the options flagged for Product Owner decision. Rollback itself is unaffected by this: "promote the
-  previous Vercel deployment" requires no database change and is safe by construction regardless of
-  how a bad deploy got there (see §4).
+  `docs/OPERATIONS_CI_CD.md` §1). **Update (Step 2 infrastructure hardening, 2026-08-22):** PRSprint 30
+  had found `master` with no branch protection at all, and flagged Option 1 of `docs/OPERATIONS_CI_CD.md`
+  §2 for Product Owner decision. The Product Owner selected Option 1; it is now applied and verified
+  (`gh api repos/AbuIbee/PAY2PAY/branches/master/protection`): a pull request is required to merge for
+  non-admin pushers, with `Lint, typecheck, test, build` and `Fresh-database migration test` as required
+  status checks (the two jobs that actually run at PR/merge time — deliberately excluding `Supabase
+  schema drift check` and `Post-deploy smoke test`, which only run post-merge or via manual dispatch and
+  would otherwise block every PR forever), force pushes and branch deletion disabled, and
+  `enforce_admins: false` preserving repo-admin direct-push (the established tracker-commit-recording
+  workflow this file's own §2 history documents). See `docs/OPERATIONS_CI_CD.md` §2 for the full
+  before/after record. Rollback itself is unaffected by this: "promote the previous Vercel deployment"
+  requires no database change and is safe by construction regardless of how a bad deploy got there
+  (see §4).
 - **Migration rollback strategy**: this project has no automated "down" migrations (standard for this
   codebase's drizzle-kit-generated migration style — every migration to date has been additive:
   new tables/columns, never a destructive `DROP`/`ALTER ... TYPE` that would need reversing). The

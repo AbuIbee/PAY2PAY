@@ -179,6 +179,24 @@ SPRINT_19_FraudRisk_SecurityHardening remain frozen, not started. §7's recommen
 review of PRSprints 25-33, then resolve all 7 blockers, then re-certify) still governs before any
 real-money controlled beta.
 
+## 9. Step 2 Infrastructure Hardening Update (2026-08-22)
+
+Two of §3's 7 blockers were re-verified/addressed in a dedicated Step 2 session, explicitly scoped to
+verification of these two items only — it does not touch, and does not authorize starting, Sprint 19
+(Product) or SPRINT_19_FraudRisk_SecurityHardening (both remain frozen), and it does not change §1-§8's
+"launch not authorized" conclusion. Full detail: `docs/prsprints/PRSPRINT_CONTROL.md`'s "Step 2:
+Infrastructure Hardening" section, `docs/OPERATIONS_BACKUP_RECOVERY.md` §1, `docs/OPERATIONS_CI_CD.md`
+§2.
+
+| §3 row | Blocker | Result | Classification |
+|---|---|---|---|
+| 29 | Supabase PITR disabled, zero backups | Re-verified against the correct linked `Paid2You` project (ref `lmpicrmmixpvkwwhcxbh`): unchanged — `pitr_enabled: false`, `backups: []`. No destructive restore attempted. Plan/billing tier could not be determined from available tooling (no CLI billing command); Product Owner must check the Supabase Dashboard directly. No lesser fallback backup control exists either. | **BLOCKED** (external — unresolved) |
+| 30 | `master` had zero branch protection | Product Owner selected and authorized Option 1 (`docs/OPERATIONS_CI_CD.md` §2); applied and verified: PR required for non-admins, required status checks scoped to the two actual PR-time jobs only, force-push and branch-deletion disabled, admin bypass preserved for the established tracker-commit workflow. | **RESOLVED** |
+
+The remaining 5 blockers in §3 (Twilio SMS, live payment/KYC/banking provider, legal/Sharia review,
+placeholder provider contacts/transaction limits) were out of scope for this Step 2 session and remain
+exactly as described in §3 — not addressed, not re-verified, not reclassified.
+
 ## Required Final Response
 
 ```text

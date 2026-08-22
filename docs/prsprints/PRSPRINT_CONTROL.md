@@ -124,6 +124,43 @@ placeholders. Product Owner Review (per-PRSprint, PRSprints 25-33 individually):
 not self-approve. Sprint 19 (Product) and SPRINT_19_FraudRisk_SecurityHardening remain frozen,
 not started.
 
+## Step 2: Infrastructure Hardening (post-Phase-7-merge, 2026-08-22)
+
+Verification-only session (per its own scope) covering the two infrastructure items flagged as
+EXTERNAL BLOCKER in the Phase 7 merge gate above. Does **not** begin Sprint 19 (Product) or
+SPRINT_19_FraudRisk_SecurityHardening — both remain frozen.
+
+**1. Supabase production backup/PITR — re-verified against the correct linked project
+(`Paid2You`, ref `lmpicrmmixpvkwwhcxbh`, confirmed `linked: true`, `ACTIVE_HEALTHY`):**
+`supabase backups list --project-ref lmpicrmmixpvkwwhcxbh` → `walg_enabled: true`,
+`pitr_enabled: false`, `backups: []`. No destructive restore attempted (none possible — zero backups
+exist; the task explicitly forbade one anyway). No CLI command exposes plan/billing tier, so whether
+the current Supabase plan already supports PITR (just needs toggling on) or requires an upgrade first
+could not be determined from this session — that requires the Product Owner checking the Dashboard's
+Settings → Billing page directly. There is no lesser fallback control in place either (zero backups of
+any kind). Full detail: `docs/OPERATIONS_BACKUP_RECOVERY.md` §1 (updated same date).
+**Classification: BLOCKED** (external, Product Owner + Supabase billing action required; unchanged
+from PRSprint 29, now re-confirmed current rather than assumed).
+
+**2. GitHub `master` branch protection — applied, then verified:** Product Owner selected Option 1
+from `docs/OPERATIONS_CI_CD.md` §2 (live authorization, this session). Configured via
+`gh api --method PUT repos/AbuIbee/PAY2PAY/branches/master/protection`; read back and confirmed: PR
+required before merge for non-admins (`required_approving_review_count: 0`); required status checks
+are exactly `Lint, typecheck, test, build` and `Fresh-database migration test` (the two jobs that
+actually run at PR time — `Supabase schema drift check` and `Post-deploy smoke test` deliberately
+excluded, as neither runs on a PR event and either would block every PR forever) with `strict: true`;
+`allow_force_pushes: false`; `allow_deletions: false`; `enforce_admins: false` (preserves the
+established repo-admin direct-push tracker-commit-recording workflow this same file's rows depend on).
+Full detail: `docs/OPERATIONS_CI_CD.md` §2 (updated same date). **Classification: RESOLVED.**
+
+**Validation performed after both:** `git fetch origin master` confirmed local and `origin/master`
+identical, no ahead/behind, no tracked changes lost (`git diff --stat HEAD` empty). Production
+re-confirmed live and healthy post-hardening: `https://paid2you.com` → 200;
+`/api/admin/health` and `/api/account/export` → 401 (correctly auth-gated, not 500 — Phase 7's
+merged migrations remain intact). Product Owner Review: this Step 2 verification was explicitly
+authorized live by the Product Owner (Control Rule 6 — Claude did not self-approve). Sprint 19
+(Product) and SPRINT_19_FraudRisk_SecurityHardening remain frozen, not started.
+
 ## Allowed Status Values
 
 - **PRSprint Status:** `NOT STARTED`, `IN PROGRESS`, `BLOCKED`, `IMPLEMENTATION COMPLETE`, `AWAITING REVIEW`, `APPROVED`, `FAILED`
