@@ -1,5 +1,6 @@
 import "server-only";
-import { DependencyError, ValidationError } from "@/lib/errors";
+import type { MfaService } from "@/lib/auth/mfaService";
+import { DependencyError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { accountNumbersMatch, isValidAccountNumber, isValidRoutingNumber } from "@/lib/finance/bankAccountValidation";
 import type { PaymentProvider } from "@/lib/payments/paymentProvider";
@@ -28,11 +29,13 @@ export class BankConnectionService {
     private readonly deps: {
       provider: PaymentProvider;
       financialAccounts: RelationshipFinancialAccountService;
+      mfa: MfaService;
     },
   ) {}
 
   async connectBankAccount(input: {
     actingUserId: string;
+    actingSessionId: string;
     actingParty: PartyRef;
     institutionDisplayName: string | null;
     accountHolderName: string;
@@ -47,6 +50,22 @@ export class BankConnectionService {
     // deploy required and no effect on already-connected accounts.
     if (!isFeatureEnabled("bankConnectionEnabled")) {
       throw new DependencyError("Bank account connection is temporarily unavailable. Please try again shortly.");
+    }
+    // SPRINT_19_FraudRisk_SecurityHardening: authorize the acting party BEFORE requiring step-up
+    // (mirrors SignatureService.sign's ordering) — a stranger to this profile gets ForbiddenError
+    // without ever being prompted for MFA. Only after that does docs/SECURITY_MODEL.md threat #16's
+    // (payout redirection) elevated-MFA requirement apply: this is the one place in the codebase
+    // that ever receives a raw routing/account number.
+    await this.deps.financialAccounts.requireOwnedParty(input.actingUserId, input.actingParty);
+    const stepUpOk = await this.deps.mfa.requireStepUp({
+      userId: input.actingUserId,
+      sessionId: input.actingSessionId,
+      action: "connect_bank_account",
+    });
+    if (!stepUpOk) {
+      throw new StepUpRequiredError(
+        "Step-up verification is required before connecting a bank account. Please complete a fresh verification challenge and try again.",
+      );
     }
     if (!input.accountHolderName.trim()) {
       throw new ValidationError("Account holder name is required.");

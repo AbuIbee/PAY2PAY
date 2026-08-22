@@ -183,6 +183,28 @@ describe("PaymentService", () => {
       await expect(ctx.paymentService.submitPending(record.id, PAYER_USER_ID)).rejects.toThrow(ValidationError);
     });
 
+    // SPRINT_19_FraudRisk_SecurityHardening (P0): submitPending previously had NO ownership check —
+    // any authenticated user who knew/guessed a scheduled payment_attempt's id could force it to
+    // submit to the provider early, regardless of tenant. These prove the fix: only the payer may
+    // submit, and the provider is never called on a rejected attempt.
+    it("submitPending rejects an unrelated user attempting to submit someone else's scheduled payment", async () => {
+      const scheduled = await ctx.paymentService.schedulePayment(baseInput({ idempotencyKey: "sched-idor-1" }));
+      const originalCreatePayment = ctx.provider.createPayment.bind(ctx.provider);
+      let providerCalled = false;
+      ctx.provider.createPayment = async (...args: Parameters<typeof originalCreatePayment>) => {
+        providerCalled = true;
+        return originalCreatePayment(...args);
+      };
+      await expect(ctx.paymentService.submitPending(scheduled.id, OTHER_USER_ID)).rejects.toThrow(ForbiddenError);
+      expect(providerCalled).toBe(false);
+      ctx.provider.createPayment = originalCreatePayment;
+    });
+
+    it("submitPending rejects the payment's own recipient — only the payer may submit", async () => {
+      const scheduled = await ctx.paymentService.schedulePayment(baseInput({ idempotencyKey: "sched-idor-2" }));
+      await expect(ctx.paymentService.submitPending(scheduled.id, RECIPIENT_USER_ID)).rejects.toThrow(ForbiddenError);
+    });
+
     it("cancelPayment cancels a scheduled payment locally, without calling the provider", async () => {
       const scheduled = await ctx.paymentService.schedulePayment(baseInput({ idempotencyKey: "sched-5" }));
       const originalCancel = ctx.provider.cancelPayment.bind(ctx.provider);
@@ -192,6 +214,71 @@ describe("PaymentService", () => {
       const canceled = await ctx.paymentService.cancelPayment(scheduled.id, PAYER_USER_ID);
       expect(canceled.status).toBe("canceled");
       ctx.provider.cancelPayment = originalCancel;
+    });
+  });
+
+  describe("SPRINT_19_FraudRisk_SecurityHardening: rolling 24h daily amount/count limits", () => {
+    beforeEach(async () => {
+      await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+      await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+    });
+
+    afterEach(() => {
+      delete process.env.DAILY_PAYMENT_AMOUNT_LIMIT_MINOR_UNITS;
+      delete process.env.DAILY_PAYMENT_ATTEMPT_COUNT_LIMIT;
+    });
+
+    it("rejects a payment that would push the payer's rolling 24h total over the daily amount limit", async () => {
+      process.env.DAILY_PAYMENT_AMOUNT_LIMIT_MINOR_UNITS = "15000"; // $150
+      await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-amt-1", amountMinorUnits: 10_000 }));
+      await expect(
+        ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-amt-2", amountMinorUnits: 10_000 })),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("does not count a failed attempt's amount toward the daily amount limit", async () => {
+      process.env.DAILY_PAYMENT_AMOUNT_LIMIT_MINOR_UNITS = "15000"; // $150
+      const first = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-amt-3", amountMinorUnits: 10_000 }));
+      await ctx.payments.updateStatus(first.id, "failed", {});
+      // The failed $100 payment must not count against the $150 daily amount cap — a fresh $100
+      // payment should still fit.
+      await expect(
+        ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-amt-4", amountMinorUnits: 10_000 })),
+      ).resolves.toMatchObject({ status: expect.any(String) });
+    });
+
+    it("does not count activity older than the rolling 24h window", async () => {
+      process.env.DAILY_PAYMENT_AMOUNT_LIMIT_MINOR_UNITS = "15000"; // $150
+      const old = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-amt-5", amountMinorUnits: 10_000 }));
+      ctx.payments.setCreatedAt(old.id, new Date(Date.now() - 25 * 60 * 60 * 1000)); // 25h ago
+      await expect(
+        ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-amt-6", amountMinorUnits: 10_000 })),
+      ).resolves.toMatchObject({ status: expect.any(String) });
+    });
+
+    it("rejects a payment that would push the payer's rolling 24h attempt count over the daily count limit", async () => {
+      process.env.DAILY_PAYMENT_ATTEMPT_COUNT_LIMIT = "2";
+      await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-cnt-1" }));
+      await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-cnt-2" }));
+      await expect(ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-cnt-3" }))).rejects.toThrow(ValidationError);
+    });
+
+    it("still counts a failed attempt toward the daily attempt-count limit (velocity/card-testing control)", async () => {
+      process.env.DAILY_PAYMENT_ATTEMPT_COUNT_LIMIT = "2";
+      const first = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-cnt-4" }));
+      await ctx.payments.updateStatus(first.id, "failed", {});
+      await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-cnt-5" }));
+      await expect(ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-cnt-6" }))).rejects.toThrow(ValidationError);
+    });
+
+    it("never re-runs the daily-limit check against an idempotent replay of an already-created payment", async () => {
+      // A single $100 payment fits under $150; counting it TWICE (as a naive re-check on replay
+      // would, since the payment's own amount is now part of the payer's recent activity) would not
+      // ($100 + $100 = $200 > $150) — proving the idempotency short-circuit runs first.
+      process.env.DAILY_PAYMENT_AMOUNT_LIMIT_MINOR_UNITS = "15000";
+      const first = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-replay-1", amountMinorUnits: 10_000 }));
+      const replay = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "daily-replay-1", amountMinorUnits: 10_000 }));
+      expect(replay.id).toBe(first.id);
     });
   });
 

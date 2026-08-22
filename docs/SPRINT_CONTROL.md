@@ -325,6 +325,87 @@ No code in this sprint reads or writes `relationship`/`relationship_participant`
 
 **No UI was built**, matching every prior sprint's own precedent (only Sprint 1's marketing site and Sprint 6A's admin dashboard have UI). 19 new API routes, all `requireSession` + zod + `withErrorHandling`: `POST /api/admin/roles/{assign,revoke}`, `POST /api/admin/retention/holds/{place,release}`, `GET /api/admin/retention/holds`, `POST /api/admin/restrictions/{place,lift}`, `GET /api/admin/restrictions`, `POST /api/admin/support-cases/{open,status}`, `GET /api/admin/support-cases`, `POST /api/appeals/submit`, `GET /api/appeals` (the caller's own appeals only, mirroring Sprint 17's `GET /api/notifications` precedent), `POST /api/admin/appeals/{assign,decide}`, `GET /api/admin/appeals`, `GET /api/admin/review/{verification,dispute,audit-log}`.
 
+### Sprint 19 implementation notes
+
+**Status: IMPLEMENTATION COMPLETE — PROVIDER REVALIDATION PENDING.** Full report:
+`docs/sprints/SPRINT_19_COMPLETION_REPORT.md`; required deliverable per the original Sprint 19 spec:
+`docs/SECURITY_AUDIT_REPORT.md`. Branch `sprint-19-fraud-risk-security-hardening`.
+
+Six parallel pre-flight investigations audited the actual implementation (not design docs, not prior
+claims) before any code change — most of this codebase's security posture was already sound
+(PRSprint 02/05/06/11A/31's prior hardening), so this sprint found and closed genuine gaps rather than
+rebuilding what worked. One P0 and two P1 findings, all fixed and regression-tested; no unresolved
+P0/P1 provider-independent defect remains.
+
+**P0 (fixed):** `PaymentService.submitPending` had no ownership check at all —
+`AchPaymentService`/`DebitCardPaymentService`'s `submitScheduledPayment` and both HTTP routes
+(`/api/ach/payments/submit`, `/api/debit-card/payments/submit`) passed straight through with only
+`requireSession`. Any authenticated user who knew/guessed a `scheduled` payment's id could force a
+*different tenant's* payment to submit to the real provider early. Fixed via a new `"payer_only"` mode
+on the existing `getAuthorizedRecord` helper.
+
+**P1 (fixed) — a functional-correctness bug, not only a race:**
+`RelationshipFinancialAccountService.replaceAccount` inserted the new "active" assignment row *before*
+marking the prior one superseded. The database's own partial unique index
+(`relationship_financial_account_active_slot_unique`) would reject that on **every real, non-racing**
+replacement — masked entirely by an in-memory test fake that never enforced the same constraint. Fixed
+by generating the new row's id in application code so the old row can be superseded first; the
+in-memory fake was also corrected to enforce the same constraint, so this class of bug cannot hide
+behind an inaccurate fake again. A companion race-handling gap (a genuine concurrent
+`replaceAccount`/`assignAccount` collision surfacing a raw DB error) was closed with a clean
+`ConflictError`.
+
+**P1 (fixed):** MFA step-up was not enforced on bank-connection creation (`BankConnectionService.
+connectBankAccount`) or replacement (`replaceAccount`), despite `docs/SECURITY_MODEL.md` threat #16
+(payout redirection) explicitly requiring it — this codebase already had a proven `requireStepUp`
+pattern (signing, settlements, staff/admin actions) that these two call sites simply never used. Both
+now require step-up, checked after ownership so a stranger never reaches a step-up prompt for an
+account they don't own.
+
+**P2s built/fixed:** a webhook stale/out-of-order-event guard (a differently-typed delayed webhook
+could regress an already-terminal payment's status field — ledger effects were always independently
+deduped, so this was a status/audit-trail gap, not a financial one); the daily-amount/daily-count
+transaction-limit enforcement architecture PRSprint 33 had explicitly left unbuilt (actual numeric
+values remain Product Owner configuration, same as the pre-existing per-transaction cap); the
+fraud/risk signal model (master-spec §12/§13) confirmed entirely missing and built from scratch
+(`risk_event` table, `RiskEventService`, two admin routes gated by the `review_fraud_alert` capability
+`adminCapabilities.ts` had already reserved for this exact purpose, two concrete signal integrations —
+bank-connection-replacement frequency and repeated-payment-failure); a high-severity `nanoid`
+dependency advisory (transitive via `postcss`, dev-build-time only) fixed via a non-breaking
+`npm audit fix`.
+
+**Security headers** (CSP/HSTS/X-Content-Type-Options/Referrer-Policy/Permissions-Policy/
+frame-ancestors) were confirmed entirely absent from this repository and added via `next.config.ts`,
+verified against a real production build and server — every asset the rendered HTML references is
+same-origin, so the CSP doesn't break anything observable. `script-src`/`style-src` keep
+`'unsafe-inline'` (a disclosed, not-fully-strict-CSP limitation — a nonce-based CSP needs new
+middleware wiring this pass could not fully browser-QA).
+
+**Concurrency:** PRSprint 20's 11-scenario suite re-run, still passing; three additional scenarios this
+sprint's own instructions named are now covered (simultaneous bank-connection replacement — found the
+P1 above; simultaneous agreement completion — converges correctly, one disclosed P3 duplicate-audit-
+event artifact under a true race, no state corruption; simultaneous admin action + user action — an
+admin ledger adjustment and a user's payment-clearing webhook each post their own distinct,
+independently-deduped entry). Simultaneous invitation acceptance was already covered by PRSprint 31.
+
+**Provider-dependent, correctly left unverified, not marked PASS:** Twilio OTP/SMS security under a
+live account, and live financial-provider webhook/credential-isolation security under real
+credentials — both architecturally sound against sandbox providers, both require production provider
+activation (pre-existing, unchanged `docs/PRODUCTION_PROVIDER_READINESS.md` blocker) to actually
+re-verify.
+
+**Full regression:** 182 test files / 1362 tests, all passing (no skips, no waived flakes). Typecheck
+clean. Lint clean on the live `src/` tree (0 errors, 8 pre-existing warnings, matching the
+PRSprint-34-documented baseline) — the plain `npm run lint` command reports a much larger count only
+because `eslint.config.mjs` doesn't exclude `.claude/worktrees/**`, a pre-existing directory of stale
+git worktrees from prior sessions; flagged as a minor tooling-hygiene recommendation, not a code
+defect. Production build succeeds. Migration-safety linter: 0 destructive statements across 38
+migration files. `db:fresh-migration-test` could not run in this sandboxed environment (no local
+Postgres) — will run in GitHub Actions CI on push/PR.
+
+Sprint 20 (`SPRINT_20_ClosedBetaRediness`) not started; awaiting Product Owner review of this sprint's
+PR and explicit authorization, per this sprint's own stop condition.
+
 ### Sprint 17 implementation notes
 
 **`NotificationService.notify`'s signature changed — the one deliberate behavioral change to a prior sprint's (Sprint 13's) own file, and exactly the hand-off that sprint's own doc comment anticipated.** The old signature took caller-supplied `subject`/`body` strings; every notification is now rendered from `NOTIFICATION_TEMPLATES` (`src/lib/notify/templates.ts`) keyed by a closed `NotificationEventType` union (`src/lib/notify/eventTypes.ts`), matching this sprint's own "Implement: templates" requirement. The sole existing caller, `FailedPaymentWorkflowService` (Sprint 13), was updated to pass `payload: { failureCategory }` instead of pre-rendered text — the `payment_failed` template's own subject/body strings are byte-identical to what `FailedPaymentWorkflowService.failureBody` used to build inline, so `paymentRetryService.test.ts`'s pre-existing `emailSender.sent` assertions needed no changes and still pass unmodified. "No unrestricted chat" (this sprint's own instruction, verbatim) is enforced by construction from this same change: there is no method anywhere in `NotificationService` that accepts caller-supplied free-text subject/body for delivery — only a fixed, closed set of event types can ever be rendered and sent.

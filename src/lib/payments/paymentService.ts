@@ -2,7 +2,7 @@ import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
 import { ConfigurationError, DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
 import { isFeatureEnabled } from "@/lib/feature-flags";
-import { getMaxPaymentMinorUnits, getReviewThresholdMinorUnits } from "./transactionLimits";
+import { getDailyAmountLimitMinorUnits, getDailyAttemptCountLimit, getMaxPaymentMinorUnits, getReviewThresholdMinorUnits, getRollingWindowMs, summarizeRecentActivity } from "./transactionLimits";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { PaymentProvider, ProfileRef } from "./paymentProvider";
@@ -122,6 +122,14 @@ export interface PaymentAttemptRepository {
   listAll(): Promise<PaymentAttemptRecord[]>;
   /** Sprint 18B: the Payments UI needs a scoped list, not the cron-only listAll() above. */
   listByAgreementId(agreementId: string): Promise<PaymentAttemptRecord[]>;
+  /**
+   * SPRINT_19_FraudRisk_SecurityHardening: backs transactionLimits.ts's daily amount/count
+   * enforcement. Returns every attempt this payer created since `sinceDate`, terminal or not — the
+   * caller (not this repository) decides which statuses count toward "amount actually moved or still
+   * in flight" vs. "attempt count" (a failed/canceled attempt never moved money but still counts as
+   * an attempt for velocity/card-testing-style abuse detection).
+   */
+  listRecentByPayer(payer: ProfileRef, sinceDate: Date): Promise<PaymentAttemptRecord[]>;
 }
 
 /**
@@ -302,8 +310,14 @@ export class PaymentService {
    * provider-call step.
    */
   async submitPending(id: string, actingUserId: string, ipAddress: string | null = null, deviceInfo: unknown = null): Promise<PaymentAttemptRecord> {
-    const record = await this.deps.payments.findById(id);
-    if (!record) throw new ValidationError("Payment not found.");
+    // SPRINT_19_FraudRisk_SecurityHardening (P0): this previously called `findById` directly with no
+    // ownership check at all — any authenticated user who knew/guessed a `scheduled` payment_attempt
+    // UUID belonging to a DIFFERENT tenant's agreement could force it to submit to the real provider
+    // early, via POST /api/ach/payments/submit or /api/debit-card/payments/submit (both pass a
+    // client-supplied id straight through with only `requireSession`, no per-payment authorization).
+    // Submission is a payer action (it triggers the actual charge), mirroring `reserveAttempt`'s own
+    // "You may only create a payment as the payer" rule.
+    const record = await this.getAuthorizedRecord(id, actingUserId, "payer_only");
     if (record.status !== "scheduled") {
       throw new ValidationError("Only a scheduled payment can be submitted.");
     }
@@ -385,6 +399,18 @@ export class PaymentService {
     // not an approved production limit.
     if (input.amountMinorUnits > getMaxPaymentMinorUnits()) {
       throw new ValidationError("This payment exceeds the maximum amount currently allowed. Please contact support for a higher-value transfer.");
+    }
+    // SPRINT_19_FraudRisk_SecurityHardening: rolling 24h daily amount/count limits (master-spec item
+    // 154) — see transactionLimits.ts's own doc comment for why the values are placeholders and why
+    // amount/count use different status filters.
+    const since = new Date(Date.now() - getRollingWindowMs());
+    const recent = await this.deps.payments.listRecentByPayer(input.payer, since);
+    const activity = summarizeRecentActivity(recent);
+    if (activity.amountMinorUnits + input.amountMinorUnits > getDailyAmountLimitMinorUnits()) {
+      throw new ValidationError("This payment would exceed your daily transaction amount limit. Please try again later or contact support.");
+    }
+    if (activity.attemptCount + 1 > getDailyAttemptCountLimit()) {
+      throw new ValidationError("You have reached your daily transaction attempt limit. Please try again later or contact support.");
     }
     if (input.agreementId) {
       await this.assertNotOverpaying(input.agreementId, input.amountMinorUnits);
@@ -660,7 +686,7 @@ export class PaymentService {
   private async getAuthorizedRecord(
     id: string,
     actingUserId: string,
-    mode: "payer_or_recipient" | "recipient_only",
+    mode: "payer_or_recipient" | "recipient_only" | "payer_only",
   ): Promise<PaymentAttemptRecord> {
     const record = await this.deps.payments.findById(id);
     if (!record) throw new ValidationError("Payment not found.");
@@ -674,6 +700,9 @@ export class PaymentService {
 
     if (mode === "recipient_only" && !isRecipient) {
       throw new ForbiddenError("Only the payment's recipient may perform this action.");
+    }
+    if (mode === "payer_only" && !isPayer) {
+      throw new ForbiddenError("Only the payment's payer may perform this action.");
     }
     if (mode === "payer_or_recipient" && !isPayer && !isRecipient) {
       throw new ForbiddenError("You do not have access to this payment.");

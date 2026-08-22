@@ -101,6 +101,28 @@ describe("PaymentWebhookService", () => {
     expect(result.status).toBe("processed");
   });
 
+  // SPRINT_19_FraudRisk_SecurityHardening: previously applyEvent applied EVENT_TYPE_TO_STATUS
+  // unconditionally regardless of the payment's current status. A stale/out-of-order webhook
+  // (different event type, so the (provider, providerEventId) replay-dedup above never catches it)
+  // arriving after a terminal status was already reached could regress it — e.g. a delayed
+  // "payment.failed" landing after "payment.refunded" already posted would flip status back to
+  // "failed" and re-run the failed-payment workflow against an already-refunded payment.
+  it("ignores a stale out-of-order event that would regress an already-terminal payment status", async () => {
+    const record = await createPendingPayment("wh-stale-1");
+    const succeed = signedWebhook({ providerEventId: "evt_stale_1a", eventType: "payment.succeeded", providerPaymentId: record.providerPaymentId });
+    await webhookCtx.paymentWebhookService.receiveWebhook(succeed);
+    const refund = signedWebhook({ providerEventId: "evt_stale_1b", eventType: "payment.refunded", providerPaymentId: record.providerPaymentId });
+    await webhookCtx.paymentWebhookService.receiveWebhook(refund);
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refunded");
+
+    // A delayed "payment.failed" for the same payment arrives after the refund already posted.
+    const stale = signedWebhook({ providerEventId: "evt_stale_1c", eventType: "payment.failed", providerPaymentId: record.providerPaymentId });
+    const result = await webhookCtx.paymentWebhookService.receiveWebhook(stale);
+    expect(result.status).toBe("processed");
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refunded");
+    expect(webhookCtx.auditRepo.events.filter((e) => e.action === "payment_webhook_payment.failed")).toHaveLength(0);
+  });
+
   it("silently accepts (as processed) an event type it does not recognize", async () => {
     const record = await createPendingPayment("wh-4");
     const { rawBody, signatureHeader } = signedWebhook({
@@ -151,6 +173,38 @@ describe("PaymentWebhookService", () => {
       );
       expect(result.status).toBe("processed");
       expect((await paymentCtx.payments.findById(record.id))?.status).toBe("succeeded");
+    });
+  });
+
+  describe("SPRINT_19_FraudRisk_SecurityHardening: repeated-payment-failure risk signal", () => {
+    it("records a risk signal for the payer on a failed transition", async () => {
+      const wired = createTestPaymentWebhookService(paymentCtx, undefined, undefined, undefined, paymentCtx.verificationCtx.profileOwners);
+      const record = await createPendingPayment("wh-risk-1");
+      await wired.paymentWebhookService.receiveWebhook(
+        signedWebhook({ providerEventId: "evt_risk_1", eventType: "payment.failed", providerPaymentId: record.providerPaymentId }),
+      );
+      const signals = wired.riskCtx.riskEvents.events.filter((e) => e.signalType === "repeated_payment_failure");
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.userId).toBe(PAYER_USER_ID);
+      expect(signals[0]?.relatedResourceId).toBe(record.id);
+    });
+
+    it("does not record a signal on a non-failure transition", async () => {
+      const wired = createTestPaymentWebhookService(paymentCtx, undefined, undefined, undefined, paymentCtx.verificationCtx.profileOwners);
+      const record = await createPendingPayment("wh-risk-2");
+      await wired.paymentWebhookService.receiveWebhook(
+        signedWebhook({ providerEventId: "evt_risk_2", eventType: "payment.succeeded", providerPaymentId: record.providerPaymentId }),
+      );
+      expect(wired.riskCtx.riskEvents.events).toHaveLength(0);
+    });
+
+    it("never fails the webhook when profileOwners is not wired — riskEvents remains optional", async () => {
+      // The shared beforeEach's webhookCtx was constructed without profileOwners at all.
+      const record = await createPendingPayment("wh-risk-3");
+      const result = await webhookCtx.paymentWebhookService.receiveWebhook(
+        signedWebhook({ providerEventId: "evt_risk_3", eventType: "payment.failed", providerPaymentId: record.providerPaymentId }),
+      );
+      expect(result.status).toBe("processed");
     });
   });
 });

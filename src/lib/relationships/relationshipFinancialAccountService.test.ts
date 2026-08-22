@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ConflictError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { ConflictError, ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
+import { grantStepUp } from "@/lib/staff/testFakes";
 import { createTestRelationshipServices } from "./testFakes";
 
 describe("RelationshipFinancialAccountService", () => {
@@ -389,9 +390,12 @@ describe("RelationshipFinancialAccountService", () => {
         institutionDisplayName: null,
       });
       await ctx.relationshipFinancialAccountService.applyVerificationResult(accountB.id, "verified");
+      const debtorSessionId = randomUUID();
+      await grantStepUp(ctx.staffCtx, debtorUserId, debtorSessionId);
       const replacement = await ctx.relationshipFinancialAccountService.replaceAccount({
         relationshipId: relationship.id,
         actingUserId: debtorUserId,
+        actingSessionId: debtorSessionId,
         financialAccountId: accountB.id,
         usage: "funding",
       });
@@ -403,6 +407,11 @@ describe("RelationshipFinancialAccountService", () => {
 
       const creditorNotifications = await ctx.notifyCtx.events.listForUser(creditorUserId);
       expect(creditorNotifications.some((n) => n.notificationType === "relationship_funding_account_replaced")).toBe(true);
+
+      // SPRINT_19_FraudRisk_SecurityHardening §12: "frequent bank changes" risk signal is recorded
+      // on a real replacement (docs/SECURITY_MODEL.md threat #16, payout redirection).
+      const riskSignals = await ctx.riskCtx.riskEventService.listForUserAdmin("admin-test-1", "platform_owner", debtorUserId);
+      expect(riskSignals.some((r) => r.signalType === "frequent_bank_connection_change" && r.relatedResourceId === replacement.id)).toBe(true);
     });
 
     it("is idempotent when replacing with the same account", async () => {
@@ -423,13 +432,43 @@ describe("RelationshipFinancialAccountService", () => {
         financialAccountId: account.id,
         usage: "funding",
       });
+      const debtorSessionId = randomUUID();
+      await grantStepUp(ctx.staffCtx, debtorUserId, debtorSessionId);
       const second = await ctx.relationshipFinancialAccountService.replaceAccount({
         relationshipId: relationship.id,
         actingUserId: debtorUserId,
+        actingSessionId: debtorSessionId,
         financialAccountId: account.id,
         usage: "funding",
       });
       expect(second.id).toBe(first.id);
+      // No risk signal for an idempotent same-account no-op or a first-time assignment — only a real
+      // replacement is a "bank change."
+      const riskSignals = await ctx.riskCtx.riskEventService.listForUserAdmin("admin-test-1", "platform_owner", debtorUserId);
+      expect(riskSignals.filter((r) => r.signalType === "frequent_bank_connection_change")).toHaveLength(0);
+    });
+
+    it("rejects replacing an account without a fresh MFA step-up (docs/SECURITY_MODEL.md threat #16, payout redirection)", async () => {
+      const { relationship, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+      const account = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_stepup",
+        maskedLast4: null,
+        institutionDisplayName: null,
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(account.id, "verified");
+      await expect(
+        ctx.relationshipFinancialAccountService.replaceAccount({
+          relationshipId: relationship.id,
+          actingUserId: debtorUserId,
+          actingSessionId: randomUUID(), // no grantStepUp for this session
+          financialAccountId: account.id,
+          usage: "funding",
+        }),
+      ).rejects.toThrow(StepUpRequiredError);
     });
 
     it("rejects a participant replacing another participant's assigned account", async () => {
@@ -465,10 +504,87 @@ describe("RelationshipFinancialAccountService", () => {
         ctx.relationshipFinancialAccountService.replaceAccount({
           relationshipId: relationship.id,
           actingUserId: creditorUserId,
+          actingSessionId: randomUUID(),
           financialAccountId: creditorOwnAccount.id,
           usage: "funding",
         }),
       ).rejects.toThrow(ForbiddenError);
+    });
+
+    // SPRINT_19_FraudRisk_SecurityHardening: two truly concurrent replaceAccount calls for the same
+    // slot both read `existing` before either writes. This previously threw a raw, unhandled DB
+    // constraint error for the loser (and — a separate, more severe bug this same fix closed — even
+    // the ordinary *sequential* case briefly held two "active" rows and would have violated the DB's
+    // real partial unique index outside this in-memory fake). Now: exactly one winner, one clean
+    // ConflictError for the loser, and never two active rows for the same slot.
+    it("two truly concurrent replaceAccount calls for the same slot: exactly one wins, the other gets a clean ConflictError, never two active rows", async () => {
+      const { relationship, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+      const original = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_conc_orig",
+        maskedLast4: null,
+        institutionDisplayName: null,
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(original.id, "verified");
+      await ctx.relationshipFinancialAccountService.assignAccount({
+        relationshipId: relationship.id,
+        actingUserId: debtorUserId,
+        financialAccountId: original.id,
+        usage: "funding",
+      });
+
+      const accountA = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_conc_a",
+        maskedLast4: null,
+        institutionDisplayName: null,
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(accountA.id, "verified");
+      const accountB = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_conc_b",
+        maskedLast4: null,
+        institutionDisplayName: null,
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(accountB.id, "verified");
+
+      const sessionA = randomUUID();
+      const sessionB = randomUUID();
+      await grantStepUp(ctx.staffCtx, debtorUserId, sessionA);
+      await grantStepUp(ctx.staffCtx, debtorUserId, sessionB);
+
+      const results = await Promise.allSettled([
+        ctx.relationshipFinancialAccountService.replaceAccount({
+          relationshipId: relationship.id,
+          actingUserId: debtorUserId,
+          actingSessionId: sessionA,
+          financialAccountId: accountA.id,
+          usage: "funding",
+        }),
+        ctx.relationshipFinancialAccountService.replaceAccount({
+          relationshipId: relationship.id,
+          actingUserId: debtorUserId,
+          actingSessionId: sessionB,
+          financialAccountId: accountB.id,
+          usage: "funding",
+        }),
+      ]);
+
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.find((r) => r.status === "rejected");
+      expect(rejected && (rejected as PromiseRejectedResult).reason).toBeInstanceOf(ConflictError);
+
+      const activeRows = (await ctx.assignments.listForRelationship(relationship.id)).filter((a) => a.status === "active" && a.usage === "funding");
+      expect(activeRows).toHaveLength(1); // never two active rows for the same slot.
     });
   });
 

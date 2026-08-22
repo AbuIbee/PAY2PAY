@@ -20,7 +20,7 @@ const replaceSchema = z.object({
 /** POST /api/relationships/accounts/replace — Phase 18's financial-account replacement: never overwrites history, see RelationshipFinancialAccountService.replaceAccount's own doc comment for why no counterparty approval is required. */
 export function createRelationshipAccountReplaceHandler(authService: AuthService, financialAccountService: RelationshipFinancialAccountService) {
   return async function handleReplace(request: NextRequest): Promise<Response> {
-    const { userId } = await requireSession(request, authService);
+    const { userId, sessionId } = await requireSession(request, authService);
     const rawBody: unknown = await request.json().catch(() => null);
     const parsed = replaceSchema.safeParse(rawBody);
     if (!parsed.success) {
@@ -29,6 +29,7 @@ export function createRelationshipAccountReplaceHandler(authService: AuthService
     const assignment = await financialAccountService.replaceAccount({
       relationshipId: parsed.data.relationshipId,
       actingUserId: userId,
+      actingSessionId: sessionId,
       financialAccountId: parsed.data.financialAccountId,
       usage: parsed.data.usage,
     });

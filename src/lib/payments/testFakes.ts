@@ -4,6 +4,7 @@ import { createTestLedgerService } from "@/lib/ledger/testFakes";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import { createTestVerificationService } from "@/lib/profiles/testFakes";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
+import { createTestRiskEventService } from "@/lib/risk/testFakes";
 import { PaymentService } from "./paymentService";
 import type {
   AgreementBalanceReader,
@@ -137,6 +138,12 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     return [...this.byId.values()]
       .filter((r) => r.agreementId === agreementId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async listRecentByPayer(payer: ProfileRef, sinceDate: Date): Promise<PaymentAttemptRecord[]> {
+    return [...this.byId.values()].filter(
+      (r) => r.payerProfileKind === payer.profileKind && r.payerProfileId === payer.profileId && r.createdAt >= sinceDate,
+    );
   }
 
   /** Test-only helper (not part of PaymentAttemptRepository) — backdates a record for staleness tests. */
@@ -281,6 +288,10 @@ export function createTestPaymentWebhookService(
 ) {
   const events = new InMemoryPaymentWebhookEventRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForPayments();
+  // SPRINT_19_FraudRisk_SecurityHardening: always wired here (unlike the caller-supplied optional
+  // params above) so any test can inspect `riskCtx.riskEvents.events` — the signal itself still only
+  // fires when `profileOwners` is also provided (recordFailureRiskSignal's own gate).
+  const riskCtx = createTestRiskEventService();
   const paymentWebhookService = new PaymentWebhookService({
     provider: paymentCtx.provider,
     events,
@@ -291,6 +302,7 @@ export function createTestPaymentWebhookService(
     notifications,
     profileOwners,
     completion,
+    riskEvents: riskCtx.riskEventService,
   });
-  return { events, auditRepo, ledgerCtx, paymentWebhookService };
+  return { events, auditRepo, ledgerCtx, riskCtx, paymentWebhookService };
 }

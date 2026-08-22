@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { DependencyError, ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
+import { grantStepUp } from "@/lib/staff/testFakes";
 import { BankConnectionService } from "./bankConnectionService";
 import { createTestRelationshipServices } from "./testFakes";
 
@@ -15,24 +16,33 @@ describe("BankConnectionService.connectBankAccount", () => {
   let ctx: ReturnType<typeof createTestRelationshipServices>;
   let service: BankConnectionService;
   let userId: string;
+  let sessionId: string;
   let partyId: string;
   const VALID_ROUTING = "021000021"; // Chase's real, publicly documented routing number — a well-known valid checksum, not a secret.
   const VALID_ACCOUNT = "123456789012";
 
-  beforeEach(() => {
+  beforeEach(async () => {
     ctx = createTestRelationshipServices();
     service = new BankConnectionService({
       provider: new SandboxPaymentProvider("test-webhook-secret"),
       financialAccounts: ctx.relationshipFinancialAccountService,
+      mfa: ctx.staffCtx.mfaService,
     });
     userId = randomUUID();
+    sessionId = randomUUID();
     partyId = randomUUID();
     ctx.profileOwners.set("personal", partyId, userId);
+    // SPRINT_19_FraudRisk_SecurityHardening: connectBankAccount now requires a fresh MFA step-up
+    // (docs/SECURITY_MODEL.md threat #16, payout redirection). Granted here so every pre-existing
+    // test below keeps exercising its own original scenario; the step-up-specific tests further down
+    // deliberately skip this.
+    await grantStepUp(ctx.staffCtx, userId, sessionId);
   });
 
   it("connects a bank account, storing only safe fields, and marks it verified", async () => {
     const account = await service.connectBankAccount({
       actingUserId: userId,
+      actingSessionId: sessionId,
       actingParty: { kind: "personal", id: partyId },
       institutionDisplayName: "Example Bank",
       accountHolderName: "Jordan Payer",
@@ -53,6 +63,7 @@ describe("BankConnectionService.connectBankAccount", () => {
   it("invariant 1 & 2: never persists the full account number or routing number anywhere in the stored record", async () => {
     const account = await service.connectBankAccount({
       actingUserId: userId,
+      actingSessionId: sessionId,
       actingParty: { kind: "personal", id: partyId },
       institutionDisplayName: "Example Bank",
       accountHolderName: "Jordan Payer",
@@ -74,6 +85,7 @@ describe("BankConnectionService.connectBankAccount", () => {
   it("invariant 3: no field name resembling an encrypted full account/routing number exists on the stored record", async () => {
     const account = await service.connectBankAccount({
       actingUserId: userId,
+      actingSessionId: sessionId,
       actingParty: { kind: "personal", id: partyId },
       institutionDisplayName: "Example Bank",
       accountHolderName: "Jordan Payer",
@@ -93,6 +105,7 @@ describe("BankConnectionService.connectBankAccount", () => {
     await expect(
       service.connectBankAccount({
         actingUserId: userId,
+        actingSessionId: sessionId,
         actingParty: { kind: "personal", id: partyId },
         institutionDisplayName: null,
         accountHolderName: "Jordan Payer",
@@ -108,6 +121,7 @@ describe("BankConnectionService.connectBankAccount", () => {
     await expect(
       service.connectBankAccount({
         actingUserId: userId,
+        actingSessionId: sessionId,
         actingParty: { kind: "personal", id: partyId },
         institutionDisplayName: null,
         accountHolderName: "Jordan Payer",
@@ -124,6 +138,7 @@ describe("BankConnectionService.connectBankAccount", () => {
     await expect(
       service.connectBankAccount({
         actingUserId: strangerId,
+        actingSessionId: sessionId,
         actingParty: { kind: "personal", id: partyId },
         institutionDisplayName: null,
         accountHolderName: "Jordan Payer",
@@ -139,6 +154,7 @@ describe("BankConnectionService.connectBankAccount", () => {
     await expect(
       service.connectBankAccount({
         actingUserId: userId,
+        actingSessionId: sessionId,
         actingParty: { kind: "personal", id: partyId },
         institutionDisplayName: null,
         accountHolderName: "Jordan Payer",
@@ -151,6 +167,43 @@ describe("BankConnectionService.connectBankAccount", () => {
     // Nothing should have been created.
     const accounts = await ctx.relationshipFinancialAccountService.listAccountsForParty(userId, { kind: "personal", id: partyId });
     expect(accounts).toHaveLength(0);
+  });
+
+  describe("SPRINT_19_FraudRisk_SecurityHardening: MFA step-up required (docs/SECURITY_MODEL.md threat #16, payout redirection)", () => {
+    it("rejects connecting a bank account without a fresh step-up, even for the account's own owner", async () => {
+      const freshSessionId = randomUUID(); // no grantStepUp called for this session
+      await expect(
+        service.connectBankAccount({
+          actingUserId: userId,
+          actingSessionId: freshSessionId,
+          actingParty: { kind: "personal", id: partyId },
+          institutionDisplayName: "Example Bank",
+          accountHolderName: "Jordan Payer",
+          routingNumber: VALID_ROUTING,
+          accountNumber: VALID_ACCOUNT,
+          accountNumberConfirm: VALID_ACCOUNT,
+          accountSubtype: "checking",
+        }),
+      ).rejects.toThrow(StepUpRequiredError);
+    });
+
+    it("still rejects a stranger with ForbiddenError, never prompting them for step-up first", async () => {
+      const strangerId = randomUUID();
+      const strangerSessionId = randomUUID(); // no grantStepUp — proves ownership is checked first
+      await expect(
+        service.connectBankAccount({
+          actingUserId: strangerId,
+          actingSessionId: strangerSessionId,
+          actingParty: { kind: "personal", id: partyId },
+          institutionDisplayName: null,
+          accountHolderName: "Jordan Payer",
+          routingNumber: VALID_ROUTING,
+          accountNumber: VALID_ACCOUNT,
+          accountNumberConfirm: VALID_ACCOUNT,
+          accountSubtype: "checking",
+        }),
+      ).rejects.toThrow(ForbiddenError);
+    });
   });
 
   describe(
@@ -166,6 +219,7 @@ describe("BankConnectionService.connectBankAccount", () => {
         await expect(
           service.connectBankAccount({
             actingUserId: userId,
+            actingSessionId: sessionId,
             actingParty: { kind: "personal", id: partyId },
             institutionDisplayName: null,
             accountHolderName: "Jordan Payer",
