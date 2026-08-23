@@ -403,8 +403,21 @@ defect. Production build succeeds. Migration-safety linter: 0 destructive statem
 migration files. `db:fresh-migration-test` could not run in this sandboxed environment (no local
 Postgres) — will run in GitHub Actions CI on push/PR.
 
-Sprint 20 (`SPRINT_20_ClosedBetaRediness`) not started; awaiting Product Owner review of this sprint's
-PR and explicit authorization, per this sprint's own stop condition.
+**Merged 2026-08-22** via PR #49, merge commit `664489ddc582bc65e1800636747ef43790706edf`. Post-merge
+verification: GitHub Actions CI green on `master` (`Lint, typecheck, test, build` and
+`Fresh-database migration test` both pass; `Supabase schema drift check` reports success but is a
+silent no-op skip — `SUPABASE_ACCESS_TOKEN` is not configured as a repo secret, confirmed from the job
+log, the same pre-existing gap Phase 7's merge found). The new migration
+(`20260822090000_sprint19_risk_events.sql`) was applied locally but missing from the linked production
+Supabase project (`Paid2You`, ref `lmpicrmmixpvkwwhcxbh`) — applied via `supabase migration up
+--linked` and re-verified: all 36 migrations now match exactly, zero drift. Vercel production
+deployment for the merge commit succeeded; verified live at `https://paid2you.com` (200) with
+`/api/admin/health`, `/api/admin/risk-events`, and `/api/ach/payments/submit` all correctly returning
+401 (auth-gated, not 500 — confirming the new `risk_event` table and the P0 payment-submission fix are
+both live and functioning). Local `master` fast-forwarded cleanly to the merge commit, no conflicts.
+
+Sprint 20 (`SPRINT_20_ClosedBetaRediness`) not started; awaiting Product Owner review and explicit
+authorization, per this sprint's own stop condition.
 
 ### Sprint 17 implementation notes
 
