@@ -13,6 +13,12 @@
 # testing
 /coverage
 
+# playwright (SPRINT_20_ClosedBetaReadiness) — local run artifacts, never source
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 # next.js
 /.next/
 /out/

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
+import { useStepUpGuardedAction } from "@/lib/ui/useStepUpGuardedAction";
+import { StepUpChallenge } from "./StepUpChallenge";
 import { relationshipStatusLabel, financialAccountStatusLabel } from "@/lib/ui/statusLabels";
 import { buildSetupSteps, type SetupStep } from "./connections/setupTracker";
 import { participantLabel, type ParticipantLike } from "./connections/participantLabels";
@@ -125,16 +127,27 @@ export function ConnectionDetail() {
     }
   }
 
+  // SPRINT_20_ClosedBetaReadiness (P0): Sprint 19 added a fresh-MFA-step-up requirement to
+  // replaceAccount (docs/SECURITY_MODEL.md threat #16, payout redirection) but never wired the UI
+  // side — this handler called apiFetch directly, so replacing a funding/payout account would hit a
+  // raw, unhandled StepUpRequiredError (403) with no way to complete the challenge.
+  // useStepUpGuardedAction is a no-op pass-through for the plain "assign" (first-time) path, which
+  // never requires step-up, so wrapping both under one hook is safe.
+  const assignAction = useStepUpGuardedAction(
+    async (input: { endpoint: string; relationshipId: string; financialAccountId: string; usage: "funding" | "payout" }) =>
+      apiFetch(input.endpoint, {
+        method: "POST",
+        body: JSON.stringify({ relationshipId: input.relationshipId, financialAccountId: input.financialAccountId, usage: input.usage }),
+      }),
+  );
+
   async function handleAssign(usage: "funding" | "payout", financialAccountId: string, alreadyAssigned: boolean) {
     if (!id || !financialAccountId) return;
     setActionPending(true);
     setActionError(null);
     try {
       const endpoint = alreadyAssigned ? "/api/relationships/accounts/replace" : "/api/relationships/accounts/assign";
-      await apiFetch(endpoint, {
-        method: "POST",
-        body: JSON.stringify({ relationshipId: id, financialAccountId, usage }),
-      });
+      await assignAction.run({ endpoint, relationshipId: id, financialAccountId, usage });
       await load();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Could not update this account assignment.");
@@ -263,6 +276,15 @@ export function ConnectionDetail() {
             Close connection
           </button>
         </div>
+      )}
+
+      {assignAction.isChallengeOpen && (
+        <StepUpChallenge
+          action="replace_financial_account"
+          actionDescription="replace this funding/payout account"
+          onVerified={assignAction.resolveChallenge}
+          onCancel={assignAction.cancelChallenge}
+        />
       )}
     </div>
   );

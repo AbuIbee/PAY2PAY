@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/ui/apiFetch";
+import { useStepUpGuardedAction } from "@/lib/ui/useStepUpGuardedAction";
+import { StepUpChallenge } from "./StepUpChallenge";
 import { accountNumbersMatch, isValidAccountNumber, isValidRoutingNumber } from "@/lib/finance/bankAccountValidation";
 
 interface ActiveProfile {
@@ -59,23 +61,38 @@ export function BankConnectionForm() {
   const accountLooksValid = accountNumber.length === 0 || isValidAccountNumber(accountNumber);
   const confirmMatches = accountNumberConfirm.length === 0 || accountNumbersMatch(accountNumber, accountNumberConfirm);
 
+  // SPRINT_20_ClosedBetaReadiness (P0): Sprint 19 added a fresh-MFA-step-up requirement to
+  // connectBankAccount (docs/SECURITY_MODEL.md threat #16, payout redirection) but never wired the
+  // UI side — this form called apiFetch directly, so a real user would hit a raw, unhandled
+  // StepUpRequiredError (403) with no way to complete the challenge, making it impossible to connect
+  // a bank account at all. useStepUpGuardedAction/StepUpChallenge is this codebase's own established
+  // pattern for exactly this (already used by AgreementDetail.tsx's sign/settlement actions).
+  const connectAction = useStepUpGuardedAction(
+    async (input: {
+      actingParty: { kind: "personal" | "business"; id: string };
+      institutionDisplayName: string | null;
+      accountHolderName: string;
+      routingNumber: string;
+      accountNumber: string;
+      accountNumberConfirm: string;
+      accountSubtype: "checking" | "savings";
+    }) => apiFetch("/api/relationships/accounts/bank/connect", { method: "POST", body: JSON.stringify(input) }),
+  );
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!party || stage === "submitting") return;
     setStage("submitting");
     setErrorMessage(null);
     try {
-      await apiFetch("/api/relationships/accounts/bank/connect", {
-        method: "POST",
-        body: JSON.stringify({
-          actingParty: party,
-          institutionDisplayName: institutionDisplayName || null,
-          accountHolderName,
-          routingNumber,
-          accountNumber,
-          accountNumberConfirm,
-          accountSubtype,
-        }),
+      await connectAction.run({
+        actingParty: party,
+        institutionDisplayName: institutionDisplayName || null,
+        accountHolderName,
+        routingNumber,
+        accountNumber,
+        accountNumberConfirm,
+        accountSubtype,
       });
       setStage("done");
       // Clear the raw values from component state immediately — nothing left to linger in memory
@@ -108,6 +125,7 @@ export function BankConnectionForm() {
     accountNumbersMatch(accountNumber, accountNumberConfirm);
 
   return (
+    <>
     <form onSubmit={(event) => void handleSubmit(event)} style={{ display: "grid", gap: "1rem", maxWidth: "30rem" }}>
       <p style={{ margin: 0, color: "var(--ink-soft)", fontSize: "0.85rem" }}>
         Your account and routing numbers are used once to connect your bank and are never stored by
@@ -202,5 +220,16 @@ export function BankConnectionForm() {
         {stage === "submitting" ? "Connecting…" : "Connect bank account"}
       </button>
     </form>
+
+    {/* SPRINT_20_ClosedBetaReadiness: rendered as a sibling, not a form descendant — StepUpChallenge's own <dialog> contains a <form>, and nested <form> elements are invalid HTML (React would warn/hydration-mismatch). */}
+    {connectAction.isChallengeOpen && (
+      <StepUpChallenge
+        action="connect_bank_account"
+        actionDescription="connect this bank account"
+        onVerified={connectAction.resolveChallenge}
+        onCancel={connectAction.cancelChallenge}
+      />
+    )}
+    </>
   );
 }

@@ -9,11 +9,12 @@ what already exists across `docs/OPERATIONS_BACKUP_RECOVERY.md` (PRSprint 29) an
 ## 1. Who deploys, who can roll back
 
 This project deploys via Vercel's GitHub integration — pushing to `master` triggers a production
-deploy automatically; there is no separate manual deploy step. **Who is authorized to push to
-`master`, and who holds Vercel/Supabase account access to perform a rollback, is a Product Owner
-decision this document cannot make** — see `docs/OPERATIONS_CI_CD.md` §2 for the related finding that
-`master` currently has no branch protection at all, and the three options recorded there for deciding
-who can merge/push.
+deploy automatically; there is no separate manual deploy step. **Update (Step 2 infrastructure
+hardening, 2026-08-22):** `master` branch protection is now RESOLVED — see `docs/OPERATIONS_CI_CD.md`
+§2 for the applied configuration (PR required for non-admins, required status checks scoped to actual
+PR-time jobs, force-push/deletion disabled, admin bypass preserved for the tracker-commit workflow).
+Who holds Vercel/Supabase account access to perform a rollback remains a Product Owner-held fact this
+document cannot state.
 
 Rollback mechanics (already verified working, PRSprint 29): `docs/OPERATIONS_BACKUP_RECOVERY.md` §2 —
 every prior production deploy is an immutable, independently-addressable Vercel deployment;
@@ -73,16 +74,23 @@ applies regardless of phase).
 ## 8. Known limitations, carried forward honestly rather than silently resolved
 
 - Provider contacts (§2) are template placeholders — Product Owner input required.
-- Who may push to `master` / perform a rollback (§1) is undecided — see `docs/OPERATIONS_CI_CD.md` §2.
-- Supabase PITR/backups (§3) remain disabled — EXTERNAL BLOCKER, unchanged by this PRSprint.
-- Only a per-payment amount cap is enforced (`getMaxPaymentMinorUnits`); no daily/rolling-window
-  account limit exists yet — would need a new aggregate-query repository method (see
-  `src/lib/payments/transactionLimits.ts`'s own doc comment).
-- Fraud/risk detection is a single, bounded first pass (a payment at/above a review threshold is
-  flagged via the existing audit log — `src/lib/payments/paymentService.ts`'s
-  `payment_flagged_for_review` audit action) — not a full anomaly-detection engine; master-spec item
-  156's broader "new account + high payment," "repeated failure," "multi-business correlation" signals
-  are not implemented.
+- `master` branch protection (§1) is RESOLVED (2026-08-22) — see `docs/OPERATIONS_CI_CD.md` §2. Who
+  specifically holds rollback-capable account access remains a Product Owner-held fact.
+- Supabase PITR/backups (§3): DEFERRED by explicit Product Owner decision (2026-08-22) — not required
+  during the current pre-production/closed-beta window, but must be enabled and verified before real
+  money moves. See `docs/OPERATIONS_BACKUP_RECOVERY.md` §1 — do not classify RESOLVED until PITR is
+  actually enabled and re-verified.
+- Transaction limits (Sprint 19, 2026-08-22): a per-payment amount cap, a rolling-24h daily amount
+  limit, and a rolling-24h daily attempt-count limit are all now enforced
+  (`src/lib/payments/reserveAttempt`). Actual numeric values remain PRODUCT OWNER CONFIGURATION
+  REQUIRED — the defaults are conservative placeholders, not approved business decisions. New-account
+  and high-risk-account restrictions (master-spec item 154's remaining sub-items) are still not built.
+- Fraud/risk detection (Sprint 19, 2026-08-22): a real signal ledger now exists (`risk_event` table,
+  `RiskEventService`, admin UI at `/admin/risk-events`, gated by the `review_fraud_alert` capability) —
+  the payment-review-threshold flag above is one input into it. Two concrete signal types are wired
+  (repeated payment failure, frequent bank-connection change); four more are modeled but not yet
+  connected to a live call site. Still not a full anomaly-detection engine — master-spec item 156's
+  broader "multi-business correlation" signals are not implemented.
 - No self-service support-case creation UI exists — only email (`support@pay2pay.com`,
   `SupportAppeals.tsx`) and the existing appeal-submission flow; `SupportCaseService` case creation is
   admin-initiated only.
