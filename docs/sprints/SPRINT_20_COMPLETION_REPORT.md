@@ -175,11 +175,18 @@ Summary: 15 categories VERIFIED, 3 DEFERRED (non-blocking, disclosed above), 2 P
 ## 9. Git / PR record
 
 - **Branch:** `sprint-20-closed-beta-readiness`
-- **Commit(s):** see the branch's own log (this report is written before the final commit is created;
-  the PR description carries the actual SHA).
-- **Pull request:** opened against `master`, per this sprint's own instruction — **not merged.**
-- **CI / Vercel preview:** see the PR itself for live status — verified before this report's stop
-  condition is declared complete.
+- **Commit:** `3ccb15f` ("feat(closed-beta): fix Sprint 19 step-up UI regression, add risk-events
+  admin UI, E2E suite [Sprint 20]") — 25 files changed, 1407 insertions, 34 deletions.
+- **Pull request:** [#50](https://github.com/AbuIbee/PAY2PAY/pull/50), opened against `master` —
+  **not merged**, per this sprint's own instruction.
+- **GitHub CI:** **green.** `Fresh-database migration test` (pass, 38s), `Lint, typecheck, test,
+  build` (pass, 3m14s). `Post-deploy smoke test` and `Supabase schema drift check` correctly show
+  `skipping` — both are post-merge/manual-dispatch-only jobs by design (`docs/OPERATIONS_CI_CD.md`
+  §2), not failures.
+- **Vercel preview:** **success.** "Deployment has completed"
+  (`https://vercel.com/pay2-pay/pay-2-pay/8kgojub33eNNysGxVm63iLUrn8bX`), confirmed via GitHub's
+  combined-status API, matching this project's established pattern for prior sprint PRs (preview URLs
+  are SSO-protected).
 
 ## 10. Recommended decision
 
