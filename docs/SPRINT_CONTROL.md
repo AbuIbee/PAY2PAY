@@ -416,15 +416,33 @@ deployment for the merge commit succeeded; verified live at `https://paid2you.co
 401 (auth-gated, not 500 — confirming the new `risk_event` table and the P0 payment-submission fix are
 both live and functioning). Local `master` fast-forwarded cleanly to the merge commit, no conflicts.
 
-Sprint 20 (`SPRINT_20_ClosedBetaRediness`) implementation complete on branch
-`sprint-20-closed-beta-readiness`; see `docs/sprints/SPRINT_20_COMPLETION_REPORT.md` and
+Sprint 20 (`SPRINT_20_ClosedBetaRediness`) — see `docs/sprints/SPRINT_20_COMPLETION_REPORT.md` and
 `docs/BETA_READINESS_REPORT.md` (classification: READY FOR CLOSED BETA). One P0 UI-wiring regression
 (missing step-up challenge UI for bank connection/replacement, a Sprint 19 gap) found and fixed. A
 permanent Playwright E2E suite, `docs/PRODUCTION_LAUNCH_CHECKLIST.md`, `docs/INCIDENT_RESPONSE.md`,
-and `docs/ROLLBACK_PLAN.md` were added. Full regression re-run clean: 184 test files / 1367 tests,
-typecheck clean, lint clean (0 errors, 8 pre-existing warnings), build succeeds, Supabase migrations
-re-verified with zero drift. **PR opened against `master`, not merged**, awaiting Product Owner final
-closed-beta review per this sprint's own stop condition.
+and `docs/ROLLBACK_PLAN.md` were added. Full regression: 184 test files / 1367 tests, typecheck clean,
+lint clean (0 errors, 8 pre-existing warnings), build succeeds, Supabase migrations verified with zero
+drift (36/36).
+
+**Merged 2026-08-23** via PR #50, merge commit `7d757c5a8886de3c401773f2a7c6ed8aa9f87021`, following
+Product Owner authorization and a final clean re-verification directly against the PR's current head
+(unchanged since implementation: mergeable/clean, CI green re-confirmed from the actual job log —
+1367/1367 tests, 0 lint errors, build/typecheck clean — Vercel preview success, Supabase 36/36 zero
+drift, Playwright 18 passed/1 skipped-by-design). Post-merge verification: GitHub Actions green on
+`master` (`Lint, typecheck, test, build`, `Fresh-database migration test`, and — unlike on a PR —
+`Supabase schema drift check` all `success`; `Post-deploy smoke test` correctly `skipped`, that job
+being `workflow_dispatch`-only by pre-existing design). Vercel production deployment for the merge
+commit succeeded; verified live at `https://paid2you.com` (200) with `/api/admin/health` and
+`/api/admin/risk-events` both correctly returning 401 (auth-gated, not 500) and `/admin/risk-events`
+rendering (200) — confirming the Sprint 20 admin UI is live. Production CSP confirmed to exclude
+`unsafe-eval`. `CRON_SECRET` (generated during this sprint's branch work) is now live in production as
+of this deployment. Local `master` fast-forwarded cleanly to the merge commit, no conflicts, no
+ahead/behind divergence from `origin/master`.
+
+**PAID2YOU IS AUTHORIZED FOR CONTROLLED CLOSED BETA ONLY.** Unrestricted production launch remains
+blocked pending completion of `docs/PRODUCTION_LAUNCH_CHECKLIST.md` — all 14 named external-approval
+gates there remain unresolved, unwaived, and unreclassified by this merge, as required. This closes
+the development sprint program (Sprints 1-20).
 
 ### Sprint 17 implementation notes
 

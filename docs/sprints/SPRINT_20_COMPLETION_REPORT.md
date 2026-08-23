@@ -114,9 +114,9 @@ these correctly," not "is the underlying logic tested."
 ## 5. Database / RLS verification (re-verified directly, not from memory)
 
 `npx supabase migration list --linked` re-run this session against the linked production project
-(`Paid2You`, ref `lmpicrmmixpvkwwhcxbh`): all 34 local migrations show `local == remote` — **zero
+(`Paid2You`, ref `lmpicrmmixpvkwwhcxbh`): all 36 local migrations show `local == remote` — **zero
 drift**, unchanged since Sprint 19's post-merge verification the previous day. No new migrations were
-added this sprint (no schema changes were made). RLS posture (deny-all-for-anon/authenticated on every
+added this sprint (no schema changes were made). Re-verified again post-merge (§9): 36/36, zero drift. RLS posture (deny-all-for-anon/authenticated on every
 table) was re-confirmed unchanged by Sprint 19's own audit (`docs/SECURITY_AUDIT_REPORT.md` item 2,
 item 31) one day prior — not re-derived from scratch here, since no schema or policy change occurred
 between that verification and this one.
@@ -130,7 +130,7 @@ between that verification and this one.
 | `npm test` | **184 test files / 1367 tests, all passing** (up from 1362 at Sprint 19 merge — 5 new tests from this sprint's component fixes) |
 | `npm run build` | Succeeds; new `/admin/risk-events` route present |
 | `npx playwright test` (`npm run e2e`) | 18 passed, 1 skipped (by design), 0 unexpected failures |
-| `npx supabase migration list --linked` | Zero drift, 34/34 migrations match |
+| `npx supabase migration list --linked` | Zero drift, 36/36 migrations match |
 
 The full, unscoped `npm run lint` reports a much larger count purely because `eslint.config.mjs`
 doesn't exclude `.claude/worktrees/**`, a pre-existing directory of stale git worktrees from prior
@@ -154,8 +154,10 @@ sprint's own source changes.
   (including a restore drill covering held records, per the original spec's own bullet) before this
   project's data has aged enough for retention/deletion to be a real operational concern, and in any
   case before a real production launch (see `docs/PRODUCTION_LAUNCH_CHECKLIST.md`).
-- **`CRON_SECRET`**: generated and set in Vercel production this sprint, but not yet live — the 5
-  scheduled jobs will pick it up on the next real merge to `master`. Documented, not hidden.
+- **`CRON_SECRET`**: generated and set in Vercel production during this sprint's branch work; **now
+  live** as of this PR's merge to `master` and the resulting production deployment (§9) — confirmed
+  present in the Vercel production environment (`npx vercel env ls production`, names only). The 5
+  scheduled jobs will use it starting with their next scheduled invocation.
 - **Two pages show a generic error instead of a sign-in prompt for anonymous visitors** (§3) — P2,
   disclosed, tracked in the E2E suite as an expected failure.
 - **No password-change or account-closure self-service capability** exists yet — confirmed absent,
@@ -188,9 +190,59 @@ Summary: 15 categories VERIFIED, 3 DEFERRED (non-blocking, disclosed above), 2 P
   combined-status API, matching this project's established pattern for prior sprint PRs (preview URLs
   are SSO-protected).
 
-## 10. Recommended decision
+## 10. Post-merge verification (2026-08-23)
 
-**READY FOR CLOSED BETA.** All provider-independent, closed-beta-scoped requirements are met or have
-an honestly disclosed, non-blocking deferral. No P0/P1 defect remains open. Production-launch-only
-gates (external legal/compliance/provider approvals, `docs/PRODUCTION_LAUNCH_CHECKLIST.md`) are
-correctly out of scope for this decision and remain entirely unresolved, as expected at this stage.
+Product Owner authorized final merge subject to a clean re-verification against the current PR head.
+That re-verification was performed directly (not from memory) immediately before merging:
+
+- PR #50 head unchanged (`4172c6c`, confirmed via `git rev-parse` local vs. `origin`), `mergeable:
+  MERGEABLE`, `mergeStateStatus: CLEAN`; `master` unchanged since the PR's base commit (no rebase
+  needed).
+- GitHub CI re-confirmed green on that exact head: `Lint, typecheck, test, build` and
+  `Fresh-database migration test` both `success`. Pulled the actual CI job log rather than trusting
+  the earlier report: **184 test files / 1367 tests passed**, lint reported **0 errors, 8 warnings**
+  (identical file/line set to the documented baseline), build step logged
+  `✓ Compiled successfully`, and the `Type check` step succeeded.
+- Vercel preview for that head: "Deployment has completed" (re-confirmed via GitHub's combined-status
+  API).
+- `npx supabase migration list --linked` re-run live: 36/36 migrations `local == remote`, zero drift
+  (see §6 correction — the sprint's earlier draft undercounted this at 34 from a manual read of raw
+  JSON output; the parsed, authoritative count is 36, matching Sprint 19's original record).
+- `npx playwright test` re-run locally one final time: 18 passed, 1 skipped by design, 0 failures.
+
+**Merged**: PR #50 → `master` via merge commit `7d757c5a8886de3c401773f2a7c6ed8aa9f87021`
+(2026-08-23T14:17:46Z). Local `master` fast-forwarded cleanly to this commit;
+`git status --branch` confirms no ahead/behind divergence from `origin/master`.
+
+**Post-merge GitHub Actions on `master`** (run `32644991949`, triggered by the push): **all green** —
+`Lint, typecheck, test, build` success, `Fresh-database migration test` success, `Supabase schema
+drift check` success (this job runs for real on a `master` push, unlike on a PR), `Post-deploy smoke
+test` correctly shows `skipped` (that job's own trigger condition in `.github/workflows/ci.yml` is
+`workflow_dispatch`-only — a pre-existing, intentional design, not a gap introduced or missed by this
+sprint).
+
+**Post-merge Vercel production deployment**: succeeded for merge commit `7d757c5a8886de3c401773f2a7c6ed8aa9f87021`
+(GitHub combined-status API, context `Vercel`, "Deployment has completed").
+
+**Manual post-deployment smoke verification** (mirroring the established pattern from Phase 7/Sprint 19
+merges, since the repository's own automated `Post-deploy smoke test` job is manual-dispatch-only):
+
+| Check | Result |
+|---|---|
+| `GET https://paid2you.com` | 200 |
+| `GET /api/admin/health` | 401 (auth-gated, not 500) |
+| `GET /api/admin/risk-events` | 401 (auth-gated, not 500 — confirms the Sprint 19 table and Sprint 20 admin surface are both live) |
+| `GET /api/ach/payments/submit` | 405 (correct — POST-only route, not a crash) |
+| `GET /admin/risk-events` (page) | 200 (renders, not a 500) |
+| Security headers on `/` | CSP/HSTS/X-Content-Type-Options/X-Frame-Options all present; CSP contains no `unsafe-eval` (confirms the production build, not a dev build, is live) |
+
+**Supabase post-merge**: re-confirmed 36/36 migrations match, zero drift, same linked project
+(`Paid2You`, ref `lmpicrmmixpvkwwhcxbh`).
+
+## 11. Recommended decision
+
+**READY FOR CLOSED BETA — MERGED.** All provider-independent, closed-beta-scoped requirements are met
+or have an honestly disclosed, non-blocking deferral. No P0/P1 defect remains open. Production-launch-only
+gates (external legal/compliance/provider approvals, `docs/PRODUCTION_LAUNCH_CHECKLIST.md`) remain
+correctly out of scope for this decision and entirely unresolved, unwaived, and unreclassified by this
+merge, as required.
