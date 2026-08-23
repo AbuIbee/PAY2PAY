@@ -416,8 +416,15 @@ deployment for the merge commit succeeded; verified live at `https://paid2you.co
 401 (auth-gated, not 500 — confirming the new `risk_event` table and the P0 payment-submission fix are
 both live and functioning). Local `master` fast-forwarded cleanly to the merge commit, no conflicts.
 
-Sprint 20 (`SPRINT_20_ClosedBetaRediness`) not started; awaiting Product Owner review and explicit
-authorization, per this sprint's own stop condition.
+Sprint 20 (`SPRINT_20_ClosedBetaRediness`) implementation complete on branch
+`sprint-20-closed-beta-readiness`; see `docs/sprints/SPRINT_20_COMPLETION_REPORT.md` and
+`docs/BETA_READINESS_REPORT.md` (classification: READY FOR CLOSED BETA). One P0 UI-wiring regression
+(missing step-up challenge UI for bank connection/replacement, a Sprint 19 gap) found and fixed. A
+permanent Playwright E2E suite, `docs/PRODUCTION_LAUNCH_CHECKLIST.md`, `docs/INCIDENT_RESPONSE.md`,
+and `docs/ROLLBACK_PLAN.md` were added. Full regression re-run clean: 184 test files / 1367 tests,
+typecheck clean, lint clean (0 errors, 8 pre-existing warnings), build succeeds, Supabase migrations
+re-verified with zero drift. **PR opened against `master`, not merged**, awaiting Product Owner final
+closed-beta review per this sprint's own stop condition.
 
 ### Sprint 17 implementation notes
 

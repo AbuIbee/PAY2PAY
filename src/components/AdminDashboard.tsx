@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 interface AuditEventSummary {
   id: number;
@@ -97,6 +98,36 @@ export function AdminDashboard() {
 
   return (
     <div style={{ display: "grid", gap: "1.5rem", maxWidth: "48rem" }}>
+      {/*
+        SPRINT_20_ClosedBetaReadiness: this page previously had zero links to any of its ten real
+        admin sub-pages (users, businesses, ledger, audit, appeals, support, restrictions,
+        retention-holds, notifications, risk/fraud) — every one is a real, working route, reachable
+        only by typing its exact URL. This is the fix: a real navigation surface, not a placeholder.
+      */}
+      <nav className="early-access-form" aria-label="Admin tools">
+        <h2 style={{ margin: 0, fontSize: "1.1rem" }}>Admin tools</h2>
+        <ul style={{ margin: "0.5rem 0 0", padding: 0, listStyle: "none", display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+          {[
+            { href: "/admin/users", label: "Users" },
+            { href: "/admin/businesses", label: "Businesses" },
+            { href: "/admin/ledger", label: "Ledger" },
+            { href: "/admin/audit", label: "Audit log" },
+            { href: "/admin/risk-events", label: "Risk & fraud signals" },
+            { href: "/admin/appeals", label: "Appeals" },
+            { href: "/admin/support", label: "Support" },
+            { href: "/admin/restrictions", label: "Restrictions" },
+            { href: "/admin/retention-holds", label: "Retention holds" },
+            { href: "/admin/notifications", label: "Notification delivery" },
+          ].map((item) => (
+            <li key={item.href}>
+              <Link href={item.href} className="button button--ghost">
+                {item.label}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
       <div className="early-access-form__row">
         <div className="early-access-form">
           <h2 style={{ margin: 0, fontSize: "1.1rem" }}>Users</h2>

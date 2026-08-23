@@ -16,7 +16,8 @@
     "db:fresh-migration-test": "node scripts/apply-migrations-fresh.mjs",
     "db:check-migration-safety": "node scripts/check-migration-safety.mjs",
     "smoke-test": "node scripts/smoke-test.mjs",
-    "test:tooling": "node --test scripts/*.test.mjs"
+    "test:tooling": "node --test scripts/*.test.mjs",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",
@@ -30,6 +31,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",

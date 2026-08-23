@@ -16,11 +16,18 @@ import type { NextConfig } from "next";
 // (no CSP/HSTS/X-Content-Type-Options/Referrer-Policy/frame-ancestors at all) stands regardless.
 const SUPABASE_STORAGE_ORIGIN = "https://*.supabase.co";
 
+// SPRINT_20_ClosedBetaReadiness: verified live via a real headless-browser run against the dev
+// server — React's own dev-mode debugging (stack-trace reconstruction for Fast Refresh/error
+// overlays) calls eval(), which this CSP was blocking with a console warning in development only
+// ("React will never use eval() in production mode" — the browser's own message). Scoping
+// 'unsafe-eval' to non-production keeps the production CSP exactly as strict as before.
+const scriptSrc = process.env.NODE_ENV === "production" ? "script-src 'self' 'unsafe-inline'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   `connect-src 'self' ${SUPABASE_STORAGE_ORIGIN}`,
   `img-src 'self' data: blob: ${SUPABASE_STORAGE_ORIGIN}`,
-  "script-src 'self' 'unsafe-inline'",
+  scriptSrc,
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
   "object-src 'none'",

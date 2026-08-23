@@ -61,6 +61,45 @@ yet regardless of configuration (live provider architecture is PRSprint 21+'s sc
 see this same status, live, at `/admin` (the "Environment & provider status" panel added by this
 PRSprint) — it reports configuration presence and mode labels only, never a secret value.
 
+## Update (Sprint 20, 2026-08-23) — this document had drifted significantly since PRSprint 04
+
+Confirmed by direct comparison against the current `src/config/env.ts` schema and the actual Vercel
+production environment (names only, no values read or printed). The table and "Provider mode" section
+above describe PRSprint 04's state and are now out of date in two ways — both corrected here rather
+than rewritten in place, to preserve the historical record:
+
+**Variables added by later sprints, missing from the table above:** `APP_URL` (PRSprint 14A — centralized
+link-building base URL; production must not resolve to localhost, enforced by a schema-level check),
+`RESEND_API_KEY` / `EMAIL_FROM_ADDRESS` / `EMAIL_FROM_NAME` / `RESEND_WEBHOOK_SECRET` /
+`EMAIL_DELIVERY_ENABLED` (PRSprint 14, production email), `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` /
+`TWILIO_MESSAGING_SERVICE_SID` / `TWILIO_FROM_NUMBER` / `SMS_DELIVERY_ENABLED` (PRSprint 15, production
+SMS — **none of these are set in production**; SMS remains 100% console-fallback, confirmed directly),
+`PAYMENT_PROVIDER` / `KYC_PROVIDER` / `CARD_ISSUING_PROVIDER` (Phase 6, provider-selection enums, only
+`"sandbox"` registered), `CARD_SANDBOX_WEBHOOK_SECRET` (PRSprint 24), `MAX_PAYMENT_MINOR_UNITS` /
+`PAYMENT_REVIEW_THRESHOLD_MINOR_UNITS` / `DAILY_PAYMENT_AMOUNT_LIMIT_MINOR_UNITS` /
+`DAILY_PAYMENT_ATTEMPT_COUNT_LIMIT` (PRSprint 33 / Sprint 19, transaction limits — all four remain
+unset in production, so the conservative placeholder defaults apply).
+
+**Correction — the "no `NEXT_PUBLIC_SUPABASE_URL`" claim is now stale:** the architecture note above
+was accurate as of PRSprint 04, and remains accurate for how the *application code* actually connects
+to the database (Drizzle + `DATABASE_URL`, never Supabase's PostgREST/JS client for data access).
+However, `vercel env ls production` (Sprint 20, 2026-08-23) shows `NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_ANON_KEY`,
+`SUPABASE_JWT_SECRET`, `SUPABASE_PUBLISHABLE_KEY`, and `SUPABASE_SECRET_KEY` are all present in
+production — none of these are declared in `src/config/env.ts`'s schema, and a repo-wide grep found no
+code that reads any of them. These appear to be artifacts of Vercel's Supabase integration
+auto-provisioning step, not variables this application actually consumes. They are not a known
+security issue (a Supabase anon/publishable key is designed to be public; nothing sensitive is
+exposed), but they are dead configuration — flagged here as a minor cleanup item, not fixed in this
+sprint (removing a Vercel env var is a account-level action outside a code PR's scope, and doing so
+carries a small risk of breaking something not yet understood without further investigation).
+
+**"Provider mode" section above is stale:** email delivery is no longer console-log-only in
+production — `RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/`EMAIL_DELIVERY_ENABLED` are all configured, so
+`getEmailSender()` resolves to a real `ResendEmailSender` (confirmed 2026-08-23). SMS remains
+console-log-only (no `TWILIO_*` variables configured). Payment/KYC/card providers remain sandbox-only,
+unchanged from PRSprint 04's description.
+
 ## Vercel configuration checklist (Sprint 1 acceptance)
 
 - `DATABASE_URL`, `AUDIT_HASH_SECRET`, `AUTH_PASSWORD_PEPPER` must be set as **server-only** Vercel
