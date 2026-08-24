@@ -29,6 +29,20 @@ const PRIMARY_LINKS: NavLinkItem[] = [
   { href: "/support", label: "Support" },
 ];
 
+/**
+ * Demo navigation & dedicated demo experiences (Product Owner request): discoverable from inside
+ * the authenticated app, not just the public marketing site. These link to the same public,
+ * fixture-data-only routes under (marketing)/demo — navigating here takes an authenticated user out
+ * of the app shell into the public demo pages, which is intentional (same safe demo experience for
+ * everyone, never a separate authenticated-only copy).
+ */
+const DEMO_LINKS: NavLinkItem[] = [
+  { href: "/demo/p2p", label: "P2P Demo" },
+  { href: "/demo/c2b", label: "C2B Demo" },
+  { href: "/demo/b2b", label: "B2B Demo" },
+  { href: "/demo/tour", label: "Product Tour" },
+];
+
 const ACCOUNT_LINKS: NavLinkItem[] = [
   { href: "/account", label: "Settings" },
   { href: "/account/security", label: "Security" },
@@ -207,6 +221,20 @@ export function AppNav() {
             {item.href === "/notifications" && unreadCount ? (
               <span className="app-nav__badge">{unreadCount > 9 ? "9+" : unreadCount}</span>
             ) : null}
+          </Link>
+        ))}
+      </div>
+
+      <div className="app-nav__section">
+        <span className="app-nav__section-label">Demo</span>
+        {DEMO_LINKS.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={`app-nav__link${pathname === item.href ? " app-nav__link--active" : ""}`}
+            aria-current={pathname === item.href ? "page" : undefined}
+          >
+            {item.label}
           </Link>
         ))}
       </div>

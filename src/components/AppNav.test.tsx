@@ -127,4 +127,78 @@ describe("AppNav", () => {
 
     expect(await screen.findByRole("link", { name: /^cards$/i })).toBeInTheDocument();
   });
+
+  /**
+   * Demo navigation & dedicated demo experiences (Product Owner request): AppNav renders a single
+   * DOM tree for both desktop and mobile (CSS toggles `.app-nav--mobile-open`, jsdom does not
+   * evaluate that media query — same precedent this file's own doc comment already establishes for
+   * the Log out coverage above), so "appears in authenticated desktop navigation" and "appears in
+   * mobile navigation" are covered by the same underlying markup — the second test below opens the
+   * mobile drawer explicitly to prove the Demo section isn't conditionally excluded from it.
+   */
+  it("shows a Demo section (heading + all 4 links) in the authenticated navigation, positioned after the primary links and before Account", async () => {
+    vi.stubGlobal("fetch", stubNavFetches());
+    render(<AppNav />);
+
+    await screen.findByRole("button", { name: /^menu$/i });
+    expect(screen.getByText("Demo")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^p2p demo$/i })).toHaveAttribute("href", "/demo/p2p");
+    expect(screen.getByRole("link", { name: /^c2b demo$/i })).toHaveAttribute("href", "/demo/c2b");
+    expect(screen.getByRole("link", { name: /^b2b demo$/i })).toHaveAttribute("href", "/demo/b2b");
+    expect(screen.getByRole("link", { name: /^product tour$/i })).toHaveAttribute("href", "/demo/tour");
+
+    // Order: Demo section label comes after Support (last primary link) and before Account.
+    const labels = screen.getAllByText(/^demo$|^support$|^account$/i).map((el) => el.textContent);
+    const supportIndex = labels.indexOf("Support");
+    const demoIndex = labels.indexOf("Demo");
+    const accountIndex = labels.indexOf("Account");
+    expect(supportIndex).toBeGreaterThanOrEqual(0);
+    expect(demoIndex).toBeGreaterThan(supportIndex);
+    expect(accountIndex).toBeGreaterThan(demoIndex);
+  });
+
+  it("the Demo section (heading + all 4 links) is also present inside the opened mobile navigation drawer", async () => {
+    vi.stubGlobal("fetch", stubNavFetches());
+    const user = userEvent.setup();
+    render(<AppNav />);
+
+    const menuButton = await screen.findByRole("button", { name: /^menu$/i });
+    await user.click(menuButton);
+    expect(menuButton).toHaveAttribute("aria-expanded", "true");
+
+    expect(screen.getByText("Demo")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^p2p demo$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^c2b demo$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^b2b demo$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^product tour$/i })).toBeInTheDocument();
+  });
+
+  it("Demo nav links are static routes only — never carry the signed-in user's email, active profile, or any other private data", async () => {
+    vi.stubGlobal("fetch", stubNavFetches({ kind: "business", displayName: "Acme LLC" }));
+    render(<AppNav />);
+
+    await screen.findAllByText(/acting as acme llc/i);
+    for (const [label, href] of [
+      ["P2P Demo", "/demo/p2p"],
+      ["C2B Demo", "/demo/c2b"],
+      ["B2B Demo", "/demo/b2b"],
+      ["Product Tour", "/demo/tour"],
+    ] as const) {
+      const link = screen.getByRole("link", { name: new RegExp(`^${label}$`, "i") });
+      expect(link).toHaveAttribute("href", href);
+      expect(link.getAttribute("href")).not.toMatch(/user@example\.com|acme|email=|profile=/i);
+    }
+  });
+
+  it("does not remove or replace any existing primary/account/organization navigation links when adding Demo", async () => {
+    vi.stubGlobal("fetch", stubNavFetches());
+    render(<AppNav />);
+
+    await screen.findByRole("button", { name: /^menu$/i });
+    for (const label of ["Dashboard", "Connections", "Agreements", "Payments", "Payment Methods", "Notifications", "Support"]) {
+      expect(screen.getByRole("link", { name: new RegExp(`^${label}$`, "i") })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("link", { name: /^settings$/i })).toHaveAttribute("href", "/account");
+    expect(screen.getByRole("link", { name: /^staff$/i })).toHaveAttribute("href", "/organization/staff");
+  });
 });
