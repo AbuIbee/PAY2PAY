@@ -112,4 +112,18 @@ export class DrizzleRelationshipFinancialAccountRepository implements Relationsh
       .where(eq(relationshipFinancialAccount.relationshipId, relationshipId));
     return rows.map((r) => ({ ...toAssignmentRecord(r.assignment), financialAccount: toAccountRecord(r.account) }));
   }
+
+  async listActiveAssignmentsForAccount(financialAccountId: string): Promise<RelationshipFinancialAccountAssignmentRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(relationshipFinancialAccount)
+      .where(
+        and(
+          eq(relationshipFinancialAccount.financialAccountId, financialAccountId),
+          eq(relationshipFinancialAccount.status, "active"),
+        ),
+      );
+    return rows.map(toAssignmentRecord);
+  }
 }

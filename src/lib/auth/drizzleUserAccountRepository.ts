@@ -4,6 +4,7 @@ import { getDb } from "@/db/client";
 import { userAccount } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
 import type { AccountClassification, PlatformRole, UserAccountRecord, UserAccountRepository } from "./authService";
+import { generatePublicReferenceCode } from "./token";
 
 type UserAccountRow = typeof userAccount.$inferSelect;
 
@@ -17,6 +18,7 @@ function toRecord(row: UserAccountRow): UserAccountRecord {
     accountClassification: row.accountClassification,
     dateOfBirth: row.dateOfBirth,
     emailVerifiedAt: row.emailVerifiedAt,
+    publicReference: row.publicReference,
   };
 }
 
@@ -48,12 +50,17 @@ export class DrizzleUserAccountRepository implements UserAccountRepository {
     dateOfBirth: string;
   }): Promise<UserAccountRecord> {
     const db = getDb();
+    // Section K: generated here, the single place a user row is ever created, so every new signup
+    // gets one immediately with no separate follow-up step. On the astronomically unlikely chance of
+    // a collision, the column's UNIQUE constraint rejects the insert rather than silently overwriting
+    // another user's reference — this bubbles up as an insert failure rather than being caught here.
     const [row] = await db
       .insert(userAccount)
       .values({
         email: input.email,
         authCredentialRef: input.authCredentialRef,
         dateOfBirth: input.dateOfBirth,
+        publicReference: generatePublicReferenceCode(),
       })
       .returning();
     if (!row) {
@@ -90,5 +97,17 @@ export class DrizzleUserAccountRepository implements UserAccountRepository {
   async updateAccountClassification(userId: string, accountClassification: AccountClassification): Promise<void> {
     const db = getDb();
     await db.update(userAccount).set({ accountClassification }).where(eq(userAccount.id, userId));
+  }
+
+  async setPublicReference(userId: string, publicReference: string): Promise<void> {
+    const db = getDb();
+    await db.update(userAccount).set({ publicReference }).where(eq(userAccount.id, userId));
+  }
+
+  async findByPublicReference(publicReference: string): Promise<UserAccountRecord | null> {
+    const db = getDb();
+    const rows = await db.select().from(userAccount).where(eq(userAccount.publicReference, publicReference)).limit(1);
+    const row = rows[0];
+    return row ? toRecord(row) : null;
   }
 }

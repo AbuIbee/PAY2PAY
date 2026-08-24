@@ -233,6 +233,71 @@ describe("RelationshipFinancialAccountService", () => {
     });
   });
 
+  describe("disableAccount", () => {
+    it(
+      "manual UAT remediation (#10 Bank Account Removal): refuses to disable an account that is " +
+        "still a relationship's active funding/payout source, naming the conflict instead of silently " +
+        "breaking that relationship's ability to process payments",
+      async () => {
+        const { relationship, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+        const account = await ctx.relationshipFinancialAccountService.addAccount({
+          actingUserId: debtorUserId,
+          actingParty: { kind: "personal", id: debtorProfileId },
+          accountType: "bank_account",
+          providerName: "sandbox",
+          providerAccountRef: "ref_in_use",
+          maskedLast4: "9999",
+          institutionDisplayName: "Test Bank",
+        });
+        await ctx.relationshipFinancialAccountService.applyVerificationResult(account.id, "verified");
+        await ctx.relationshipFinancialAccountService.assignAccount({
+          relationshipId: relationship.id,
+          actingUserId: debtorUserId,
+          financialAccountId: account.id,
+          usage: "funding",
+        });
+
+        await expect(
+          ctx.relationshipFinancialAccountService.disableAccount({
+            financialAccountId: account.id,
+            actingUserId: debtorUserId,
+            actingParty: { kind: "personal", id: debtorProfileId },
+            reason: "Trying to remove it anyway.",
+          }),
+        ).rejects.toThrow(ValidationError);
+
+        // The account itself is untouched — still verified, not disabled — proving the guard runs
+        // before any mutation, not merely after producing a misleading partial success.
+        const stillActive = await ctx.relationshipFinancialAccountService.listAccountsForParty(debtorUserId, {
+          kind: "personal",
+          id: debtorProfileId,
+        });
+        expect(stillActive.find((a) => a.id === account.id)?.status).toBe("verified");
+      },
+    );
+
+    it("allows disabling an account once it is no longer any relationship's active funding/payout source", async () => {
+      const { relationship, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+      const account = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_never_assigned",
+        maskedLast4: "8888",
+        institutionDisplayName: "Test Bank",
+      });
+      void relationship;
+      const disabled = await ctx.relationshipFinancialAccountService.disableAccount({
+        financialAccountId: account.id,
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        reason: "No longer needed.",
+      });
+      expect(disabled.status).toBe("disabled");
+    });
+  });
+
   describe("assignAccount", () => {
     it("rejects assigning an account the participant does not own", async () => {
       const { relationship, debtorUserId, debtorProfileId } = await createLinkedRelationship();

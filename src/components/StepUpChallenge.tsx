@@ -37,6 +37,32 @@ export function StepUpChallenge({ action, actionDescription, onVerified, onCance
     return () => dialog?.close();
   }, []);
 
+  // Section B (closed-beta remediation, Product Owner review): factored out of the mount-time effect
+  // below so "I've set it up — check again" (in the not_enrolled state further down) can re-run the
+  // same check without closing this dialog — closing it would reject the pending action via onCancel,
+  // losing whatever the user was in the middle of doing (e.g. signing an agreement) rather than
+  // letting them resume it. Not itself wired into any effect's dependency array (it's re-invoked
+  // explicitly by that button, never by an effect), so it doesn't need to be memoized.
+  async function checkAndInitiate() {
+    try {
+      const body = await apiFetch<{ enrolled: boolean; methods: MfaMethod[] }>("/api/auth/mfa/status");
+      const firstMethod = body.methods[0];
+      if (!body.enrolled || !firstMethod) {
+        setStatus("not_enrolled");
+        return;
+      }
+      setMethods(body.methods);
+      setMethod(firstMethod);
+      await apiFetch("/api/auth/mfa/step-up/initiate", {
+        method: "POST",
+        body: JSON.stringify({ method: firstMethod }),
+      });
+      setStatus("ready");
+    } catch {
+      setStatus("error");
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -111,7 +137,22 @@ export function StepUpChallenge({ action, actionDescription, onVerified, onCance
         {status === "not_enrolled" && (
           <div className="form-status form-status--error" role="alert">
             You need to set up two-factor authentication before completing this action.{" "}
-            <a href="/account/security">Set it up now</a>.
+            <a href="/account/security" target="_blank" rel="noopener noreferrer">
+              Set it up in a new tab
+            </a>
+            , then come back here.
+            <div style={{ marginTop: "0.75rem" }}>
+              <button
+                type="button"
+                className="button button--ghost"
+                onClick={() => {
+                  setStatus("checking");
+                  void checkAndInitiate();
+                }}
+              >
+                I&apos;ve set it up — check again
+              </button>
+            </div>
           </div>
         )}
 

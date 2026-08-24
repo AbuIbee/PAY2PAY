@@ -113,6 +113,7 @@ export function AdminDashboard() {
             { href: "/admin/ledger", label: "Ledger" },
             { href: "/admin/audit", label: "Audit log" },
             { href: "/admin/risk-events", label: "Risk & fraud signals" },
+            { href: "/admin/verification", label: "Verification queue" },
             { href: "/admin/appeals", label: "Appeals" },
             { href: "/admin/support", label: "Support" },
             { href: "/admin/restrictions", label: "Restrictions" },

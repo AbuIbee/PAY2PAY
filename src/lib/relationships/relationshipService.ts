@@ -3,6 +3,7 @@ import type { AuditService } from "@/lib/audit/auditService";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { isAdminRole } from "@/lib/admin/capabilities";
 import type { PlatformRole } from "@/lib/auth/authService";
+import { generateRelationshipReferenceCode } from "@/lib/auth/token";
 import type { PartyRole, AgreementService } from "@/lib/agreements/agreementService";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { StaffService } from "@/lib/staff/staffService";
@@ -33,6 +34,8 @@ export interface RelationshipRecord {
   id: string;
   status: RelationshipStatus;
   context: string;
+  /** Manual UAT remediation (#2/#3): short human-readable reference ("P2P-XXXX-XXXX"), never a security credential — see relationship.ts's schema doc comment. Null only for a pre-existing row not yet backfilled by ensurePublicReference. */
+  publicReference: string | null;
   initiatorUserId: string;
   currentAgreementId: string | null;
   activatedAt: Date | null;
@@ -67,6 +70,8 @@ export interface RelationshipRepository {
   markActivated(id: string): Promise<RelationshipRecord>;
   markRestricted(id: string): Promise<RelationshipRecord>;
   markClosed(id: string): Promise<RelationshipRecord>;
+  /** Manual UAT remediation (#2/#3) — backfills a pre-existing row that has none; see RelationshipService.ensurePublicReference. Every row inserted after this change gets one immediately in `insert` itself, mirroring DrizzleUserAccountRepository's identical Section K precedent. */
+  setPublicReference(id: string, publicReference: string): Promise<RelationshipRecord>;
 }
 
 /** Real implementation: DrizzleRelationshipParticipantRepository. */
@@ -187,10 +192,27 @@ export class RelationshipService {
   constructor(private readonly deps: RelationshipServiceDeps) {}
 
   async getRelationship(relationshipId: string, actingUserId: string): Promise<{ relationship: RelationshipRecord; participants: RelationshipParticipantRecord[] }> {
-    const relationship = await this.requireRelationship(relationshipId);
+    let relationship = await this.requireRelationship(relationshipId);
     await this.resolveActingParticipant(relationship.id, actingUserId);
+    if (!relationship.publicReference) {
+      relationship = await this.deps.relationships.setPublicReference(relationship.id, generateRelationshipReferenceCode());
+    }
     const participants = await this.deps.participants.listForRelationship(relationship.id);
     return { relationship, participants };
+  }
+
+  /**
+   * Manual UAT remediation (#2/#3): backfills a pre-existing relationship row that has none — every
+   * row inserted after this change already gets one immediately in `insert` itself (mirrors
+   * AuthService.ensurePublicReference / DrizzleUserAccountRepository's identical Section K precedent).
+   * Idempotent: returns the existing value untouched if one is already set.
+   */
+  async ensurePublicReference(relationshipId: string): Promise<string> {
+    const relationship = await this.requireRelationship(relationshipId);
+    if (relationship.publicReference) return relationship.publicReference;
+    const publicReference = generateRelationshipReferenceCode();
+    await this.deps.relationships.setPublicReference(relationshipId, publicReference);
+    return publicReference;
   }
 
   async listRelationshipsForParty(actingUserId: string, party: PartyRef): Promise<RelationshipRecord[]> {

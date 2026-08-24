@@ -146,18 +146,65 @@ describe("MfaService", () => {
 
   it("has no bypass path: disabling all methods removes the ability to pass requireStepUp again", async () => {
     const { secret } = await ctx.mfaService.beginTotpEnrollment(USER_ID, "user@example.com");
-    await ctx.mfaService.confirmTotpEnrollment(USER_ID, computeTotpCode(secret));
-    const [credential] = await ctx.credentials.findVerifiedByUserId(USER_ID);
-    await ctx.mfaService.disableMethod(USER_ID, (credential as { id: string }).id);
+    const code = computeTotpCode(secret);
+    await ctx.mfaService.confirmTotpEnrollment(USER_ID, code);
+    const grantedStepUp = await ctx.mfaService.completeStepUp({
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      method: "totp",
+      code,
+      action: "mfa_disable",
+    });
+    expect(grantedStepUp).toBe(true);
+
+    await ctx.mfaService.disableMethod(USER_ID, SESSION_ID, "totp");
 
     expect(await ctx.mfaService.hasVerifiedMethod(USER_ID)).toBe(false);
     const ok = await ctx.mfaService.completeStepUp({
       userId: USER_ID,
       sessionId: SESSION_ID,
       method: "totp",
-      code: computeTotpCode(secret),
+      code,
       action: ACTION,
     });
     expect(ok).toBe(false);
+  });
+
+  /** Section B (closed-beta remediation): disableMethod previously had no caller anywhere. */
+  describe("disableMethod", () => {
+    it("rejects disabling a method without a fresh step-up", async () => {
+      const { secret } = await ctx.mfaService.beginTotpEnrollment(USER_ID, "user@example.com");
+      await ctx.mfaService.confirmTotpEnrollment(USER_ID, computeTotpCode(secret));
+
+      await expect(ctx.mfaService.disableMethod(USER_ID, SESSION_ID, "totp")).rejects.toThrow(
+        "Step-up verification is required to disable two-factor authentication.",
+      );
+    });
+
+    it("rejects disabling a method that isn't enrolled", async () => {
+      const { secret } = await ctx.mfaService.beginTotpEnrollment(USER_ID, "user@example.com");
+      const code = computeTotpCode(secret);
+      await ctx.mfaService.confirmTotpEnrollment(USER_ID, code);
+      await ctx.mfaService.completeStepUp({ userId: USER_ID, sessionId: SESSION_ID, method: "totp", code, action: "mfa_disable" });
+
+      await expect(ctx.mfaService.disableMethod(USER_ID, SESSION_ID, "sms")).rejects.toThrow(
+        "Text message is not an enrolled method for this account.",
+      );
+    });
+
+    it("only disables the calling user's own credential for that method, never another user's", async () => {
+      const OTHER_USER_ID = "user-2";
+      const { secret } = await ctx.mfaService.beginTotpEnrollment(USER_ID, "user@example.com");
+      const code = computeTotpCode(secret);
+      await ctx.mfaService.confirmTotpEnrollment(USER_ID, code);
+      const other = await ctx.mfaService.beginTotpEnrollment(OTHER_USER_ID, "other@example.com");
+      await ctx.mfaService.confirmTotpEnrollment(OTHER_USER_ID, computeTotpCode(other.secret));
+      await ctx.mfaService.completeStepUp({ userId: USER_ID, sessionId: SESSION_ID, method: "totp", code, action: "mfa_disable" });
+
+      await ctx.mfaService.disableMethod(USER_ID, SESSION_ID, "totp");
+
+      expect(await ctx.mfaService.hasVerifiedMethod(USER_ID)).toBe(false);
+      expect(await ctx.mfaService.hasVerifiedMethod(OTHER_USER_ID)).toBe(true);
+    });
   });
 });

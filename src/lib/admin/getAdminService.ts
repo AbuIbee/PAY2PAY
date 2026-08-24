@@ -3,6 +3,7 @@ import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { DrizzleSessionRepository } from "@/lib/auth/drizzleSessionRepository";
 import { DrizzleUserAccountRepository } from "@/lib/auth/drizzleUserAccountRepository";
+import { getAuthService } from "@/lib/auth/getAuthService";
 import { getMfaService } from "@/lib/auth/getMfaService";
 import { DrizzleBusinessProfileRepository } from "@/lib/profiles/drizzleBusinessProfileRepository";
 import { AdminService } from "./adminService";
@@ -22,6 +23,7 @@ export function getAdminService(): AdminService {
       sessions: new DrizzleSessionRepository(),
       mfa: getMfaService(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
+      auth: getAuthService(),
       overview: new DrizzleAdminOverviewReader(),
       directory: new DrizzleAdminUserDirectoryReader(),
       impersonationSessions: new DrizzleAdminImpersonationSessionRepository(),

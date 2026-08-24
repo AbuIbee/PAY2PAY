@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const VALUE_PROPS = [
   {
     eyebrow: "Clear terms",
@@ -230,6 +232,9 @@ export default function HomePage() {
               Explore how it works
               <span aria-hidden="true">→</span>
             </a>
+            <Link className="button button--ghost button--large" href="/demo">
+              Try the demo
+            </Link>
             <a className="button button--ghost button--large" href="#use-cases">
               See who it&apos;s for
             </a>
@@ -240,7 +245,8 @@ export default function HomePage() {
             ))}
           </div>
           <p className="preview-note">
-            Create an account today to draft your first agreement.
+            Create an account today to draft your first agreement, or{" "}
+            <Link href="/demo">see a guided example</Link> first — no signup required.
           </p>
         </div>
         <ProductPreview />

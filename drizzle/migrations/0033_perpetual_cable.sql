@@ -1,0 +1,2 @@
+ALTER TABLE "notification_event" ADD COLUMN "related_invitation_id" uuid;--> statement-breakpoint
+ALTER TABLE "notification_event" ADD CONSTRAINT "notification_event_related_invitation_id_relationship_invitation_id_fk" FOREIGN KEY ("related_invitation_id") REFERENCES "public"."relationship_invitation"("id") ON DELETE no action ON UPDATE no action;

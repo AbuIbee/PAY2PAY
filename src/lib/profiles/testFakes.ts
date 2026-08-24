@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
+import { AdminRoleService } from "@/lib/admin/adminRoleService";
+import type { AdminRoleAssignmentRecord, AdminRoleAssignmentRepository } from "@/lib/admin/adminRoleService";
+import type { InternalAdminRole } from "@/lib/admin/adminCapabilities";
 import { InMemoryPersonalProfileRepository } from "@/lib/auth/testFakes";
 import { BusinessProfileService } from "./businessProfileService";
 import type { BusinessProfileRecord, BusinessProfileRepository, BusinessProfileStatus } from "./businessProfileService";
@@ -68,6 +71,48 @@ export class InMemoryIdentityVerificationRecordRepository implements IdentityVer
   async findByProviderRef(providerRef: string): Promise<IdentityVerificationRecordRecord | null> {
     return [...this.byId.values()].find((r) => r.providerRef === providerRef) ?? null;
   }
+
+  async listPending(): Promise<IdentityVerificationRecordRecord[]> {
+    return [...this.byId.values()].filter((r) => r.status === "pending");
+  }
+}
+
+/**
+ * Minimal in-memory AdminRoleService double, mirroring src/lib/risk/testFakes.ts's identical local
+ * copy (kept local per that file's own precedent, to avoid a cross-domain import cycle).
+ */
+class InMemoryAdminRoleAssignmentRepositoryForProfiles implements AdminRoleAssignmentRepository {
+  private byId = new Map<string, AdminRoleAssignmentRecord>();
+
+  async insert(input: { userId: string; role: InternalAdminRole; assignedByUserId: string }): Promise<AdminRoleAssignmentRecord> {
+    const record: AdminRoleAssignmentRecord = { id: randomUUID(), revokedAt: null, revokedByUserId: null, assignedAt: new Date(), ...input };
+    this.byId.set(record.id, record);
+    return record;
+  }
+
+  async findActiveForUser(userId: string): Promise<AdminRoleAssignmentRecord | null> {
+    return [...this.byId.values()].find((r) => r.userId === userId && !r.revokedAt) ?? null;
+  }
+
+  async findById(id: string): Promise<AdminRoleAssignmentRecord | null> {
+    return this.byId.get(id) ?? null;
+  }
+
+  async markRevoked(id: string, revokedByUserId: string, revokedAt: Date): Promise<AdminRoleAssignmentRecord> {
+    const record = this.byId.get(id);
+    if (!record) throw new Error("admin_role_assignment not found");
+    record.revokedAt = revokedAt;
+    record.revokedByUserId = revokedByUserId;
+    return record;
+  }
+}
+
+/** Exported for other domains' test harnesses that construct their own bespoke VerificationService instance (b2b, evidence, signatures) rather than using createTestVerificationService() below. */
+export function createTestAdminRoleServiceForProfiles(): AdminRoleService {
+  return new AdminRoleService({
+    assignments: new InMemoryAdminRoleAssignmentRepositoryForProfiles(),
+    audit: new AuditService(new InMemoryAuditEventRepositoryForProfiles()),
+  });
 }
 
 export class InMemoryEmailVerificationReader implements EmailVerificationReader {
@@ -168,6 +213,7 @@ export function createTestVerificationService() {
   const profileOwners = new InMemoryProfileOwnerReader();
   const auditRepo = new InMemoryAuditEventRepositoryForProfiles();
   const audit = new AuditService(auditRepo);
-  const verificationService = new VerificationService(records, emailVerification, profileOwners, audit);
-  return { verificationService, records, emailVerification, profileOwners, auditRepo };
+  const roles = createTestAdminRoleServiceForProfiles();
+  const verificationService = new VerificationService(records, emailVerification, profileOwners, audit, roles);
+  return { verificationService, records, emailVerification, profileOwners, auditRepo, roles };
 }

@@ -34,8 +34,8 @@ for (const { path, titleContains } of PAGES) {
 
 test("login page has properly labeled email/password fields and a working link to signup", async ({ page }) => {
   await page.goto("/login");
-  await expect(page.getByLabel(/email/i)).toBeVisible();
-  await expect(page.getByLabel(/password/i)).toBeVisible();
+  await expect(page.getByLabel(/^email$/i)).toBeVisible();
+  await expect(page.getByLabel(/^password$/i)).toBeVisible();
   await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
   await page.getByRole("link", { name: /create an account/i }).click();
   await expect(page).toHaveURL(/\/signup$/);

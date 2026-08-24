@@ -16,6 +16,7 @@ function toSummary(row: UserAccountRow): AdminUserSummary {
     accountClassification: row.accountClassification,
     createdAt: row.createdAt,
     lastLoginAt: row.lastLoginAt,
+    publicReference: row.publicReference,
   };
 }
 
@@ -27,7 +28,7 @@ function toSummary(row: UserAccountRow): AdminUserSummary {
  * user_account id across all of that user's profiles first.
  */
 export class DrizzleAdminUserDirectoryReader implements AdminUserDirectoryReader {
-  async search(query: { email?: string; userId?: string }): Promise<AdminUserSummary[]> {
+  async search(query: { email?: string; userId?: string; publicReference?: string }): Promise<AdminUserSummary[]> {
     const db = getDb();
     if (query.userId) {
       const rows = await db.select().from(userAccount).where(eq(userAccount.id, query.userId)).limit(20);
@@ -38,6 +39,17 @@ export class DrizzleAdminUserDirectoryReader implements AdminUserDirectoryReader
         .select()
         .from(userAccount)
         .where(eq(userAccount.email, query.email.trim().toLowerCase()))
+        .limit(20);
+      return rows.map(toSummary);
+    }
+    if (query.publicReference) {
+      // Section K: the reference is always generated uppercase (see generatePublicReferenceCode) —
+      // normalize the caller's input the same way rather than requiring an exact-case match, since an
+      // admin retyping a reference read aloud over the phone shouldn't have to worry about case.
+      const rows = await db
+        .select()
+        .from(userAccount)
+        .where(eq(userAccount.publicReference, query.publicReference.trim().toUpperCase()))
         .limit(20);
       return rows.map(toSummary);
     }

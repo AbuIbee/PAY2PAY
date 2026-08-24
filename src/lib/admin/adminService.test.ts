@@ -63,6 +63,27 @@ describe("AdminService", () => {
     });
   });
 
+  /** Section K (closed-beta remediation, Product Owner review): admin search by the user-facing "P2P-XXXXXXXX" reference. */
+  describe("Section K: search by account reference", () => {
+    it("finds a user by their public reference, case-insensitively", async () => {
+      const admin = await seedUser("platform_admin");
+      const target = await seedUser("member");
+      const adminCtx = { actingUserId: admin.id, actingSessionId: randomUUID(), actingRole: "platform_admin" as const, ipAddress: IP, deviceInfo: null };
+      const detail = await ctx.adminService.getUserDetail(adminCtx, target.id);
+      expect(detail.publicReference).toMatch(/^P2P-/);
+
+      const results = await ctx.adminService.searchUsers("platform_admin", { publicReference: detail.publicReference!.toLowerCase() });
+      expect(results).toHaveLength(1);
+      expect(results[0]!.id).toBe(target.id);
+    });
+
+    it("returns no results for an unknown reference", async () => {
+      await seedUser("platform_admin");
+      const results = await ctx.adminService.searchUsers("platform_admin", { publicReference: "P2P-ZZZZZZZZ" });
+      expect(results).toHaveLength(0);
+    });
+  });
+
   describe("PLATFORM_ADMIN can perform only its authorized admin functions", () => {
     it("can suspend, reactivate, and revoke sessions for an ordinary member", async () => {
       const admin = await seedUser("platform_admin");
@@ -220,6 +241,85 @@ describe("AdminService", () => {
       await ctx.adminService.suspendUser(adminCtx, target.id, "policy");
       await ctx.adminService.reactivateUser(adminCtx, target.id, "resolved");
       await ctx.adminService.revokeUserSessions(adminCtx, target.id, "precaution");
+    });
+  });
+
+  /**
+   * Section D (closed-beta remediation, Product Owner review): account lifecycle beyond
+   * suspend/reactivate — close/deactivate (status-only, no destructive deletion) and an
+   * admin-triggered password reset reusing AuthService's own token/email flow.
+   */
+  describe("Section D: close account / manual password reset", () => {
+    it("requires a fresh step-up before closing an account", async () => {
+      const admin = await seedUser("platform_admin");
+      const target = await seedUser("member");
+      const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
+      // Deliberately no grantStepUp call.
+
+      await expect(ctx.adminService.closeUser(adminCtx, target.id, "reason")).rejects.toThrow(ForbiddenError);
+    });
+
+    it("closes an account without deleting it, and revokes existing sessions", async () => {
+      const admin = await seedUser("platform_admin");
+      const target = await seedUser("member");
+      await ctx.sessions.insert({ userId: target.id, sessionTokenHash: "hash-close", expiresAt: new Date(Date.now() + 60_000), ipAddress: null, userAgent: null });
+      const sessionId = randomUUID();
+      const adminCtx = ctxFor(admin.id, sessionId, "platform_admin");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+
+      await ctx.adminService.closeUser(adminCtx, target.id, "account closure requested");
+
+      const summary = await ctx.directory.getSummary(target.id);
+      expect(summary?.status).toBe("closed");
+      expect(summary?.email).toBeTruthy();
+      const stillActive = await ctx.sessions.listActiveForUser(target.id, new Date());
+      expect(stillActive).toHaveLength(0);
+      const closeEvent = ctx.auditRepo.events.find((e) => e.action === "admin_user_closed");
+      expect(closeEvent?.reason).toBe("account closure requested");
+    });
+
+    it("rejects closing an already-closed account", async () => {
+      const admin = await seedUser("platform_admin");
+      const target = await seedUser("member");
+      const sessionId = randomUUID();
+      const adminCtx = ctxFor(admin.id, sessionId, "platform_admin");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+      await ctx.adminService.closeUser(adminCtx, target.id, "first closure");
+
+      await expect(ctx.adminService.closeUser(adminCtx, target.id, "second closure")).rejects.toThrow(ValidationError);
+    });
+
+    it("requires a fresh step-up before sending a password reset", async () => {
+      const admin = await seedUser("platform_admin");
+      const target = await seedUser("member");
+      const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
+
+      await expect(ctx.adminService.sendPasswordReset(adminCtx, target.id, "user locked out")).rejects.toThrow(ForbiddenError);
+    });
+
+    it("sends a password reset email to the target and records an admin-attributed audit entry", async () => {
+      const admin = await seedUser("platform_admin");
+      const target = await seedUser("member");
+      const sessionId = randomUUID();
+      const adminCtx = ctxFor(admin.id, sessionId, "platform_admin");
+      await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, admin.id, sessionId);
+
+      await ctx.adminService.sendPasswordReset(adminCtx, target.id, "user locked out");
+
+      expect(ctx.emailSender.sent.some((email) => email.to === target.email)).toBe(true);
+      const sentEvent = ctx.auditRepo.events.find((e) => e.action === "admin_password_reset_sent");
+      expect(sentEvent?.actorUserId).toBe(admin.id);
+      expect(sentEvent?.targetResourceId).toBe(target.id);
+      expect(sentEvent?.reason).toBe("user locked out");
+    });
+
+    it("cannot close or send a password reset for a Platform Owner", async () => {
+      const admin = await seedUser("platform_admin");
+      const owner = await seedUser("platform_owner");
+      const adminCtx = ctxFor(admin.id, randomUUID(), "platform_admin");
+
+      await expect(ctx.adminService.closeUser(adminCtx, owner.id, "reason")).rejects.toThrow(ForbiddenError);
+      await expect(ctx.adminService.sendPasswordReset(adminCtx, owner.id, "reason")).rejects.toThrow(ForbiddenError);
     });
   });
 

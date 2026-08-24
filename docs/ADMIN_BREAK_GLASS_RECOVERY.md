@@ -56,6 +56,30 @@ credentials are lost) or must be transferred:
    reports `platform_owner`. From this point forward, all further administrative action goes back
    through the normal, audited `AdminService` paths.
 
+## Routine admin provisioning is not break-glass
+
+Section V (closed-beta remediation, Product Owner review) clarification: everything above is for the
+"no owner exists / the sole owner is inaccessible" case only. Once at least one `platform_owner`
+account exists (true for this project since the direct-SQL grant recorded in
+`docs/ADMIN_ROLE_GRANT_INCIDENT_LOG.md`), routine beta-admin provisioning has two normal,
+already-audited application paths and must use them, not another break-glass SQL statement:
+
+1. **Promoting a member to `platform_admin`** (the coarse platform role) — `AdminService.changeUserRole`,
+   owner-only, step-up gated, audited as `admin_role_changed`. Reachable through the admin console UI
+   (`AdminUserDetail.tsx`'s "Promote to Platform Admin" control).
+2. **Granting an internal admin role** (`compliance`/`support`/`fraud_reviewer`/`admin` — the
+   capability-based roles `AdminRoleService.requireCapability` checks for features like the
+   verification queue and appeals review) — `AdminRoleService.assignRole` via
+   `POST /api/admin/roles/assign`, owner-only, audited as `admin_role_assigned`. **No admin console
+   page exists for this yet** — it is only reachable by a Platform Owner making the API call directly
+   (confirmed: `src/app/api/admin/roles` has assign/revoke routes but no list endpoint and no UI
+   component links to them). This is a real, flagged gap, not an oversight to route around with
+   direct database access — until a UI exists, a Platform Owner grants internal roles via this API
+   endpoint, which is still the application's normal, audited path, not a break-glass exception.
+
+Direct database access (this document's actual subject) remains reserved for the case neither of the
+above can reach: no `platform_owner` account exists at all, or the only one is inaccessible.
+
 ## What this procedure deliberately does not do
 
 - It does not create a standing "recovery mode" or feature flag in the application.

@@ -13,12 +13,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Sprint 18B: thin read/write route over VerificationService for the
- * caller's own *active* profile (never another profile — mirrors
- * /api/profiles/active's own cookie-verification pattern). No route
- * exposed this before; the manual-decision (reviewer) side stays
- * unexposed here (VerificationService.recordManualVerificationDecision's
- * own doc comment: that's an admin-surface concern, not this one).
+ * Sprint 18B: thin read/write route over VerificationService for the caller's own *active* profile
+ * (never another profile — mirrors /api/profiles/active's own cookie-verification pattern). The
+ * manual-decision (reviewer) side deliberately stays unexposed here — that's the admin-surface
+ * concern `/api/admin/verification/decide` now owns (closed-beta remediation, DEF-UAT-020).
  */
 export function createVerificationGetHandler(authService: AuthService, profileAccess: ProfileAccessService, verification: VerificationService) {
   return async function handleGet(request: NextRequest): Promise<Response> {

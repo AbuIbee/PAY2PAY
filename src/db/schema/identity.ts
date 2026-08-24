@@ -37,6 +37,15 @@ export const userAccount = pgTable("user_account", {
   // introducing a second date-of-birth column.
   dateOfBirth: text("date_of_birth"),
   status: text("status").notNull().default("active"), // active | suspended | closed
+  // Section K (closed-beta remediation, Product Owner review): a short, user-facing identifier
+  // (format "P2P-XXXXXXXX") for support conversations and admin search, so a user is never asked to
+  // read out their raw internal UUID. Nullable/additive rather than backfilled in this migration —
+  // every new signup gets one immediately (AuthService.signup); any pre-existing row without one gets
+  // it lazily, generated and persisted the first time it's actually read (see
+  // UserAccountRepository.ensurePublicReference), avoiding a blocking data migration against a live
+  // table. Non-sequential and non-enumerable by construction (random from a fixed alphabet, not a
+  // counter), and excludes visually ambiguous characters (0/O/1/I).
+  publicReference: text("public_reference").unique(),
   // Sprint 6A (docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md): trusted,
   // server/DB-sourced platform authorization — never derived from client state. Defaults "member"
   // so every existing and future ordinary signup is unaffected.

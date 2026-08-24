@@ -22,6 +22,7 @@ describe("PaymentService", () => {
   async function markFullyVerified(profileKind: ProfileKind, profileId: string): Promise<void> {
     await ctx.verificationCtx.verificationService.submitFullVerificationRequest(profileKind, profileId);
     await ctx.verificationCtx.verificationService.recordManualVerificationDecision({
+      actingRole: "platform_owner",
       profileKind,
       profileId,
       decision: "verified",

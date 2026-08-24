@@ -18,6 +18,7 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
     for (const ref of [PAYER, RECIPIENT]) {
       await ctx.paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
       await ctx.paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
         profileKind: ref.profileKind,
         profileId: ref.profileId,
         decision: "verified",
@@ -196,6 +197,7 @@ describe(
       for (const ref of [PAYER, RECIPIENT]) {
         await ctx.paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
         await ctx.paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+          actingRole: "platform_owner",
           profileKind: ref.profileKind,
           profileId: ref.profileId,
           decision: "verified",

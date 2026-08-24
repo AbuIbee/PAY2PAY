@@ -2,7 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiFetch } from "@/lib/ui/apiFetch";
+import { StepUpChallenge } from "./StepUpChallenge";
+import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
+import { useStepUpGuardedAction } from "@/lib/ui/useStepUpGuardedAction";
 
 type MfaMethod = "totp" | "sms";
 type LoadState = "loading" | "ready" | "error";
@@ -22,6 +24,14 @@ export function AccountSecurity() {
   const [state, setState] = useState<LoadState>("loading");
   const [status, setStatus] = useState<MfaStatus | null>(null);
   const [mode, setMode] = useState<"idle" | "totp" | "sms">("idle");
+  const [justEnrolled, setJustEnrolled] = useState<MfaMethod | null>(null);
+  const [disableError, setDisableError] = useState<string | null>(null);
+
+  // Section B (closed-beta remediation): disableMethod previously had no caller anywhere in the
+  // codebase — enrollment existed with no way back out.
+  const disableAction = useStepUpGuardedAction((method: MfaMethod) =>
+    apiFetch("/api/auth/mfa/disable", { method: "POST", body: JSON.stringify({ method }) }),
+  );
 
   async function refresh() {
     try {
@@ -38,6 +48,23 @@ export function AccountSecurity() {
       await refresh();
     })();
   }, []);
+
+  async function handleDisable(method: MfaMethod) {
+    setDisableError(null);
+    try {
+      // disableAction.run() never rejects while a step-up challenge is pending — it stays unsettled
+      // until the <StepUpChallenge> below resolves or cancels it — so this catch only ever sees a
+      // genuine failure (or the user cancelling the challenge), never the step-up-required case
+      // itself (that's read reactively via disableAction.isChallengeOpen in the JSX instead).
+      await disableAction.run(method);
+      await refresh();
+    } catch (error) {
+      const cancelled = error instanceof Error && error.message === "Verification was cancelled.";
+      if (!cancelled) {
+        setDisableError(error instanceof ApiError ? error.message : "Could not disable that method. Please try again.");
+      }
+    }
+  }
 
   if (state === "loading") {
     return (
@@ -76,19 +103,67 @@ export function AccountSecurity() {
           </p>
         )}
 
+        {justEnrolled && mode === "idle" && (
+          <p className="form-status form-status--success" role="status" style={{ marginTop: "1rem" }}>
+            {justEnrolled === "totp" ? "Authenticator app" : "Text message"} two-factor authentication is now
+            enabled. You&apos;ll be asked for a fresh code before sensitive actions.
+          </p>
+        )}
+
         {mode === "idle" && (
-          <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
-            <button type="button" className="button button--primary" onClick={() => setMode("totp")}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "1rem" }}>
+            <button type="button" className="button button--primary" onClick={() => { setJustEnrolled(null); setMode("totp"); }}>
               {status.methods.includes("totp") ? "Re-add authenticator app" : "Set up authenticator app"}
             </button>
-            <button type="button" className="button button--ghost" onClick={() => setMode("sms")}>
+            <button type="button" className="button button--ghost" onClick={() => { setJustEnrolled(null); setMode("sms"); }}>
               {status.methods.includes("sms") ? "Re-add text message" : "Set up text message"}
             </button>
+            {status.methods.includes("totp") && (
+              <button
+                type="button"
+                className="button button--ghost"
+                disabled={disableAction.isChallengeOpen}
+                onClick={() => void handleDisable("totp")}
+              >
+                Disable authenticator app
+              </button>
+            )}
+            {status.methods.includes("sms") && (
+              <button
+                type="button"
+                className="button button--ghost"
+                disabled={disableAction.isChallengeOpen}
+                onClick={() => void handleDisable("sms")}
+              >
+                Disable text message
+              </button>
+            )}
           </div>
         )}
 
-        {mode === "totp" && <TotpEnroll onDone={() => { setMode("idle"); void refresh(); }} onCancel={() => setMode("idle")} />}
-        {mode === "sms" && <SmsEnroll onDone={() => { setMode("idle"); void refresh(); }} onCancel={() => setMode("idle")} />}
+        {disableError && (
+          <p className="field-error" role="alert" style={{ marginTop: "0.75rem" }}>
+            {disableError}
+          </p>
+        )}
+
+        {mode === "totp" && (
+          <TotpEnroll onDone={() => { setMode("idle"); setJustEnrolled("totp"); void refresh(); }} onCancel={() => setMode("idle")} />
+        )}
+        {mode === "sms" && (
+          <SmsEnroll onDone={() => { setMode("idle"); setJustEnrolled("sms"); void refresh(); }} onCancel={() => setMode("idle")} />
+        )}
+
+        {disableAction.isChallengeOpen && (
+          <StepUpChallenge
+            action="mfa_disable"
+            actionDescription="disable this two-factor authentication method"
+            onVerified={() => {
+              disableAction.resolveChallenge();
+            }}
+            onCancel={() => disableAction.cancelChallenge()}
+          />
+        )}
       </div>
 
       <SignedInDevices />
@@ -286,14 +361,14 @@ function TotpEnroll({ onDone, onCancel }: { onDone: () => void; onCancel: () => 
   return (
     <form onSubmit={(event) => void handleConfirm(event)} style={{ marginTop: "1rem", display: "grid", gap: "1rem" }}>
       <div className="field">
-        <label>Setup key (enter manually in your authenticator app)</label>
+        <label>Step 1: enter this setup key in your authenticator app (Google Authenticator, Authy, 1Password, etc.)</label>
         <code style={{ display: "block", padding: "0.6rem", background: "var(--forest-50)", borderRadius: "0.5rem", wordBreak: "break-all" }}>
           {secret}
         </code>
         <small>Or paste this URI if your app supports it: {otpauthUri}</small>
       </div>
       <div className="field">
-        <label htmlFor="totp-confirm-code">6-digit code from your app</label>
+        <label htmlFor="totp-confirm-code">Step 2: enter the 6-digit code your app now shows</label>
         <input
           id="totp-confirm-code"
           inputMode="numeric"
@@ -347,7 +422,7 @@ function SmsEnroll({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
     return (
       <form onSubmit={(event) => void handleSendCode(event)} style={{ marginTop: "1rem", display: "grid", gap: "1rem" }}>
         <div className="field">
-          <label htmlFor="sms-phone">Phone number</label>
+          <label htmlFor="sms-phone">Step 1: enter the phone number to send codes to</label>
           <input id="sms-phone" type="tel" placeholder="+15551234567" required value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} />
         </div>
         {errorMessage && <p className="field-error" role="alert">{errorMessage}</p>}
@@ -362,7 +437,7 @@ function SmsEnroll({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
   return (
     <form onSubmit={(event) => void handleConfirm(event)} style={{ marginTop: "1rem", display: "grid", gap: "1rem" }}>
       <div className="field">
-        <label htmlFor="sms-confirm-code">6-digit code sent by text message</label>
+        <label htmlFor="sms-confirm-code">Step 2: enter the 6-digit code sent by text message</label>
         <input
           id="sms-confirm-code"
           inputMode="numeric"

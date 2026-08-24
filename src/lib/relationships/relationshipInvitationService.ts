@@ -48,6 +48,15 @@ export interface RelationshipInvitationRepository {
   findById(id: string): Promise<RelationshipInvitationRecord | null>;
   findByTokenHash(tokenHash: string): Promise<RelationshipInvitationRecord | null>;
   findByRelationshipId(relationshipId: string): Promise<RelationshipInvitationRecord[]>;
+  /**
+   * Closed-beta remediation (DEF-UAT-006): the "Pending invitations (received)" UI previously had no
+   * query to back it at all — resolvedInviteeUserId is only ever set (via setResolvedInviteeUser) for
+   * an invitee who is already a registered platform user, so this is scoped to exactly the case a
+   * logged-in user can act on; a not-yet-registered invitee has no account to list this for and is
+   * reached solely through the one-time enrollment email link instead (see this file's own class doc
+   * comment).
+   */
+  findPendingForInvitee(userId: string): Promise<RelationshipInvitationRecord[]>;
   setResolvedInviteeUser(id: string, userId: string): Promise<RelationshipInvitationRecord>;
   markViewed(id: string): Promise<RelationshipInvitationRecord>;
   /**
@@ -172,6 +181,7 @@ export class RelationshipInvitationService {
         recipientUserId: existingUserId,
         notificationType: "relationship_invitation",
         relatedAgreementId: null,
+        relatedInvitationId: invitation.id,
         payload: { relationshipId: relationship.id, invitationId: invitation.id },
         dedupeKey: `relationship_invitation:${invitation.id}:${existingUserId}`,
       });
@@ -378,6 +388,16 @@ export class RelationshipInvitationService {
 
   async listInvitationsForRelationship(relationshipId: string): Promise<RelationshipInvitationRecord[]> {
     return this.deps.invitations.findByRelationshipId(relationshipId);
+  }
+
+  /**
+   * Closed-beta remediation (DEF-UAT-006): self-scoped to the caller — actingUserId is both the query
+   * key and the authorization boundary (mirrors NotificationService.notify()'s identical
+   * recipientUserId-from-session-only pattern), so there is no separate participant/capability check
+   * to perform here.
+   */
+  async listPendingForInvitee(actingUserId: string): Promise<RelationshipInvitationRecord[]> {
+    return this.deps.invitations.findPendingForInvitee(actingUserId);
   }
 
   /**

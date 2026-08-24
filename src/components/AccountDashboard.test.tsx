@@ -1,0 +1,64 @@
+import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AccountDashboard } from "./AccountDashboard";
+
+const push = vi.fn();
+const refresh = vi.fn();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push, refresh }),
+}));
+
+function jsonResponse(body: unknown, ok = true) {
+  return { ok, status: ok ? 200 : 400, json: async () => body } as Response;
+}
+
+/**
+ * Section N (closed-beta remediation, Product Owner review): this page previously had its own
+ * complete, duplicate MFA enrollment flow (separate from AccountSecurity.tsx at /account/security)
+ * with copy claiming "sensitive actions... become available in later phases" — false, since sensitive
+ * actions were already step-up gated by the time of this remediation. Replaced with a status line and
+ * a link to the one real MFA management surface, avoiding a second, drift-prone implementation.
+ */
+describe("AccountDashboard", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows MFA status and links to the Security page instead of duplicating its enrollment flow", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ email: "user@example.com", mfaEnrolled: false, publicReference: "P2P-ABCD2345" })),
+    );
+
+    render(<AccountDashboard />);
+
+    expect(await screen.findByText("Not enrolled")).toBeInTheDocument();
+    expect(screen.queryByText(/become available in later phases/i)).not.toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /set up two-factor authentication/i });
+    expect(link).toHaveAttribute("href", "/account/security");
+  });
+
+  it("shows a manage link and no setup prompt once already enrolled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ email: "user@example.com", mfaEnrolled: true, publicReference: "P2P-ABCD2345" })),
+    );
+
+    render(<AccountDashboard />);
+
+    expect(await screen.findByText("Enrolled")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /manage two-factor authentication/i })).toHaveAttribute("href", "/account/security");
+  });
+
+  it("displays the account reference", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ email: "user@example.com", mfaEnrolled: false, publicReference: "P2P-ABCD2345" })),
+    );
+
+    render(<AccountDashboard />);
+
+    expect(await screen.findByText("P2P-ABCD2345")).toBeInTheDocument();
+  });
+});

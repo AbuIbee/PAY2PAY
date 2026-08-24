@@ -53,6 +53,7 @@ describe("POST /api/debit-card/payments/submit", () => {
     for (const ref of [PAYER_PROFILE, RECIPIENT_PROFILE]) {
       await card.paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
       await card.paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
         profileKind: ref.profileKind,
         profileId: ref.profileId,
         decision: "verified",

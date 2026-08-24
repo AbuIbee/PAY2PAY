@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
+import { PasswordField } from "./PasswordField";
 import { getSafeNextPath } from "@/lib/ui/safeRedirect";
 
 type Status = "idle" | "submitting" | "success" | "error";
@@ -52,16 +53,13 @@ export function LoginForm() {
         <label htmlFor={`${formId}-email`}>Email</label>
         <input id={`${formId}-email`} name="email" type="email" autoComplete="email" required maxLength={254} />
       </div>
-      <div className="field">
-        <label htmlFor={`${formId}-password`}>Password</label>
-        <input
-          id={`${formId}-password`}
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-        />
-      </div>
+      <PasswordField
+        id={`${formId}-password`}
+        name="password"
+        label="Password"
+        autoComplete="current-password"
+        required
+      />
 
       {status === "error" && errorMessage ? (
         <p className="form-status form-status--error" role="alert">

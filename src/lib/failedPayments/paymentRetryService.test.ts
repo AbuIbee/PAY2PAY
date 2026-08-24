@@ -28,6 +28,7 @@ describe("PaymentRetryService", () => {
     for (const ref of [PAYER, RECIPIENT]) {
       await ctx.ach.paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
       await ctx.ach.paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
         profileKind: ref.profileKind,
         profileId: ref.profileId,
         decision: "verified",
@@ -210,6 +211,7 @@ describe("PaymentRetryService", () => {
     for (const ref of [cardPayer, cardRecipient]) {
       await card.paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
       await card.paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
         profileKind: ref.profileKind,
         profileId: ref.profileId,
         decision: "verified",

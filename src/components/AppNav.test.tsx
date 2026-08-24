@@ -20,13 +20,17 @@ vi.mock("next/navigation", () => ({
  * component level: the topbar's "Log out" control exists in the DOM unconditionally (never gated
  * behind opening the menu first) and is wired to the real logout endpoint + redirect.
  */
-function stubNavFetches(activeProfile: { kind: "personal" | "business"; displayName: string } = { kind: "personal", displayName: "Personal" }) {
+function stubNavFetches(
+  activeProfile: { kind: "personal" | "business"; displayName: string } = { kind: "personal", displayName: "Personal" },
+  liveCardIssuanceEnabled = false,
+) {
   return vi.fn().mockImplementation(async (input: string) => {
     if (input === "/api/auth/me") return { ok: true, status: 200, json: async () => ({ email: "user@example.com" }) };
     if (input === "/api/admin/whoami") return { ok: true, status: 200, json: async () => ({ isAdmin: false }) };
     if (input === "/api/notifications") return { ok: true, status: 200, json: async () => ({ notifications: [] }) };
     if (input === "/api/auth/logout") return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
     if (input === "/api/profiles/active") return { ok: true, status: 200, json: async () => activeProfile };
+    if (input === "/api/feature-flags") return { ok: true, status: 200, json: async () => ({ liveCardIssuanceEnabled }) };
     throw new Error(`Unhandled fetch: ${input}`);
   });
 }
@@ -102,5 +106,25 @@ describe("AppNav", () => {
       expect(fetchMock).toHaveBeenCalledWith("/api/auth/logout", { method: "POST" });
     });
     expect(push).toHaveBeenCalledWith("/login");
+  });
+
+  /**
+   * Section H (closed-beta remediation): no live card-issuing provider is registered anywhere in
+   * this codebase, and /cards permanently renders an unconditional "Not yet available" state — the
+   * nav link must not offer it unless liveCardIssuanceEnabled is actually on.
+   */
+  it("hides the Cards nav link when liveCardIssuanceEnabled is off (the default)", async () => {
+    vi.stubGlobal("fetch", stubNavFetches(undefined, false));
+    render(<AppNav />);
+
+    await screen.findByRole("button", { name: /^menu$/i });
+    expect(screen.queryByRole("link", { name: /^cards$/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the Cards nav link once liveCardIssuanceEnabled is on", async () => {
+    vi.stubGlobal("fetch", stubNavFetches(undefined, true));
+    render(<AppNav />);
+
+    expect(await screen.findByRole("link", { name: /^cards$/i })).toBeInTheDocument();
   });
 });

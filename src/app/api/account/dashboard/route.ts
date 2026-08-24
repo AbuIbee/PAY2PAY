@@ -18,7 +18,10 @@ export function createDashboardHandler(authService: AuthService, mfaService: Mfa
   return async function handleDashboard(request: NextRequest): Promise<Response> {
     const { userId, email } = await requireSession(request, authService);
     const mfaEnrolled = await mfaService.hasVerifiedMethod(userId);
-    return NextResponse.json({ email, mfaEnrolled }, { status: 200 });
+    // Section K (closed-beta remediation): the account settings page's own display of the
+    // user-facing "P2P-XXXXXXXX" reference, generated lazily for a pre-existing row that has none.
+    const publicReference = await authService.ensurePublicReference(userId);
+    return NextResponse.json({ email, mfaEnrolled, publicReference }, { status: 200 });
   };
 }
 

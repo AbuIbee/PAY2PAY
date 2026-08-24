@@ -1,6 +1,6 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
-import type { AccountClassification, PlatformRole, SessionRepository, UserAccountRepository } from "@/lib/auth/authService";
+import type { AccountClassification, AuthService, PlatformRole, SessionRepository, UserAccountRepository } from "@/lib/auth/authService";
 import type { MfaService } from "@/lib/auth/mfaService";
 import type { BusinessProfileRepository, BusinessProfileStatus } from "@/lib/profiles/businessProfileService";
 import { ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
@@ -47,6 +47,8 @@ export interface AdminUserSummary {
   accountClassification: AccountClassification;
   createdAt: Date;
   lastLoginAt: Date | null;
+  /** Section K (closed-beta remediation): the "P2P-XXXXXXXX" identifier shown to the user themselves; null only for a pre-existing row that hasn't been lazily backfilled yet (AuthService.ensurePublicReference). */
+  publicReference: string | null;
 }
 
 /**
@@ -78,7 +80,7 @@ export interface AdminUserDetail extends AdminUserSummary {
 
 /** Real implementation: DrizzleAdminUserDirectoryReader. Read-only queries only — never mutates. */
 export interface AdminUserDirectoryReader {
-  search(query: { email?: string; userId?: string }): Promise<AdminUserSummary[]>;
+  search(query: { email?: string; userId?: string; publicReference?: string }): Promise<AdminUserSummary[]>;
   getSummary(userId: string): Promise<AdminUserSummary | null>;
   getDetail(userId: string): Promise<AdminUserDetail | null>;
 }
@@ -156,6 +158,9 @@ export interface AdminServiceDeps {
   sessions: SessionRepository;
   mfa: MfaService;
   audit: AuditService;
+  // Section D (closed-beta remediation): sendPasswordReset reuses AuthService's own
+  // enumeration-resistant token/email logic rather than duplicating it here.
+  auth: AuthService;
   overview: AdminOverviewReader;
   directory: AdminUserDirectoryReader;
   impersonationSessions: AdminImpersonationSessionRepository;
@@ -191,7 +196,10 @@ export class AdminService {
     return { ...overview, environmentStatus: this.deps.environmentStatus.getStatus() };
   }
 
-  async searchUsers(actingRole: PlatformRole, query: { email?: string; userId?: string }): Promise<AdminUserSummary[]> {
+  async searchUsers(
+    actingRole: PlatformRole,
+    query: { email?: string; userId?: string; publicReference?: string },
+  ): Promise<AdminUserSummary[]> {
     this.requireAdmin(actingRole);
     return this.deps.directory.search(query);
   }
@@ -226,6 +234,42 @@ export class AdminService {
     }
     await this.deps.users.updateStatus(targetUserId, "active");
     await this.recordAdminAudit(ctx, "admin_user_reactivated", "user_account", targetUserId, reason, { status: "active" });
+  }
+
+  /**
+   * Section D (closed-beta remediation, DEF-UAT / Product Owner review): a status-only lifecycle
+   * change (active/suspended -> "closed"), matching this table's own already-anticipated
+   * `status` comment ("active | suspended | closed" — src/db/schema/identity.ts). Deliberately does
+   * NOT delete or anonymize anything — payment history, agreements, audit records, security events,
+   * and ledger data are untouched by construction, since nothing cascades from `user_account.status`.
+   * PII deletion remains a separate, already-disclosed retention-architecture gap
+   * (docs/DATA_RETENTION_POLICY.md), not something this pass introduces.
+   */
+  async closeUser(ctx: ActingContext, targetUserId: string, reason: string): Promise<void> {
+    const target = await this.authorizeMutableTarget(ctx, targetUserId);
+    await this.requireFreshStepUp(ctx, "admin_user_close", "Step-up verification is required to close this account.");
+    if (target.status === "closed") {
+      throw new ValidationError("This account is already closed.");
+    }
+    await this.deps.users.updateStatus(targetUserId, "closed");
+    await this.deps.sessions.revokeAllForUser(targetUserId);
+    await this.recordAdminAudit(ctx, "admin_user_closed", "user_account", targetUserId, reason, { status: "closed" });
+  }
+
+  /**
+   * Section D: lets an admin trigger the same password-reset email a user would send themselves
+   * (Section D — "Manual Password Reset (NEW, admin-triggered)"). Reuses AuthService's own
+   * enumeration-resistant token/email logic rather than a bespoke copy — note that
+   * `requestPasswordReset` writes its own generic `password_reset_requested` audit entry attributed
+   * to the account owner (that method's contract for the self-service "forgot password" flow, which
+   * this reuses as-is); `admin_password_reset_sent` below is the authoritative record that an admin,
+   * not the user, initiated it.
+   */
+  async sendPasswordReset(ctx: ActingContext, targetUserId: string, reason: string): Promise<void> {
+    const target = await this.authorizeMutableTarget(ctx, targetUserId);
+    await this.requireFreshStepUp(ctx, "admin_password_reset_send", "Step-up verification is required to send a password reset.");
+    await this.deps.auth.requestPasswordReset(target.email, { ipAddress: ctx.ipAddress, userAgent: null });
+    await this.recordAdminAudit(ctx, "admin_password_reset_sent", "user_account", targetUserId, reason, null);
   }
 
   /**

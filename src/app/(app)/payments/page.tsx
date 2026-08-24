@@ -7,7 +7,12 @@ export default function PaymentsPage() {
   return (
     <div className="app-page">
       <div className="app-page__header">
-        <h1>Payments</h1>
+        <div>
+          <h1>Payments</h1>
+          <p className="app-page__lede">
+            Every payment tied to your agreements — scheduled, completed, and failed.
+          </p>
+        </div>
       </div>
       <PaymentsList />
     </div>

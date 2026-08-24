@@ -2,6 +2,9 @@
 
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { StepUpChallenge } from "../StepUpChallenge";
+import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
+import { useStepUpGuardedAction } from "@/lib/ui/useStepUpGuardedAction";
 
 interface BusinessDetail {
   id: string;
@@ -37,6 +40,15 @@ export function AdminBusinessDetail() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [reason, setReason] = useState("");
 
+  // Closed-beta remediation (DEF-UAT-009/DEF-UAT-010): identical fix to AdminUserDetail.tsx — these
+  // two actions are step-up gated server-side but this component had no StepUpChallenge UI at all.
+  const suspendAction = useStepUpGuardedAction((targetBusinessId: string, reason: string) =>
+    apiFetch("/api/admin/businesses/suspend", { method: "POST", body: JSON.stringify({ targetBusinessId, reason }) }),
+  );
+  const reactivateAction = useStepUpGuardedAction((targetBusinessId: string, reason: string) =>
+    apiFetch("/api/admin/businesses/reactivate", { method: "POST", body: JSON.stringify({ targetBusinessId, reason }) }),
+  );
+
   const load = useCallback(async () => {
     if (!targetBusinessId) {
       setLoadStatus("error");
@@ -64,18 +76,51 @@ export function AdminBusinessDetail() {
     };
   }, [load]);
 
-  async function runAction(request: () => Promise<Response>) {
+  const activeChallenge: "suspend" | "reactivate" | null = suspendAction.isChallengeOpen
+    ? "suspend"
+    : reactivateAction.isChallengeOpen
+      ? "reactivate"
+      : null;
+
+  function isCancelledChallenge(error: unknown) {
+    return error instanceof Error && error.message === "Verification was cancelled.";
+  }
+
+  async function runGuardedAction(run: () => Promise<unknown>) {
     setActionStatus("working");
     setActionError(null);
-    const response = await request();
-    if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as { message?: string } | null;
-      setActionError(body?.message ?? "That action could not be completed.");
+    try {
+      await run();
+      setActionStatus("idle");
+      await load();
+    } catch (error) {
+      if (isCancelledChallenge(error)) {
+        setActionStatus("idle");
+        return;
+      }
       setActionStatus("error");
-      return;
+      setActionError(error instanceof ApiError ? error.message : "That action could not be completed.");
     }
-    setActionStatus("idle");
-    await load();
+  }
+
+  function suspend() {
+    if (!data) return;
+    return runGuardedAction(() => suspendAction.run(data.id, reason));
+  }
+
+  function reactivate() {
+    if (!data) return;
+    return runGuardedAction(() => reactivateAction.run(data.id, reason));
+  }
+
+  function resolveActiveChallenge() {
+    if (activeChallenge === "suspend") suspendAction.resolveChallenge();
+    else if (activeChallenge === "reactivate") reactivateAction.resolveChallenge();
+  }
+
+  function cancelActiveChallenge() {
+    if (activeChallenge === "suspend") suspendAction.cancelChallenge();
+    else if (activeChallenge === "reactivate") reactivateAction.cancelChallenge();
   }
 
   if (loadStatus === "loading") return <p role="status">Loading business…</p>;
@@ -163,15 +208,7 @@ export function AdminBusinessDetail() {
               type="button"
               className="button button--ghost"
               disabled={actionStatus === "working" || !reason.trim()}
-              onClick={() =>
-                void runAction(() =>
-                  fetch("/api/admin/businesses/suspend", {
-                    method: "POST",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ targetBusinessId: data.id, reason }),
-                  }),
-                )
-              }
+              onClick={() => void suspend()}
             >
               Suspend
             </button>
@@ -180,20 +217,21 @@ export function AdminBusinessDetail() {
               type="button"
               className="button button--primary"
               disabled={actionStatus === "working" || !reason.trim()}
-              onClick={() =>
-                void runAction(() =>
-                  fetch("/api/admin/businesses/reactivate", {
-                    method: "POST",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ targetBusinessId: data.id, reason }),
-                  }),
-                )
-              }
+              onClick={() => void reactivate()}
             >
               Reactivate
             </button>
           )}
         </div>
+
+        {activeChallenge && (
+          <StepUpChallenge
+            action={activeChallenge === "suspend" ? "admin_suspend_business" : "admin_reactivate_business"}
+            actionDescription="complete this administrative action"
+            onVerified={resolveActiveChallenge}
+            onCancel={cancelActiveChallenge}
+          />
+        )}
       </div>
     </div>
   );

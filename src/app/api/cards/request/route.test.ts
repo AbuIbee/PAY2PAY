@@ -46,6 +46,7 @@ describe("POST /api/cards/*", () => {
     ctx.verificationCtx.profileOwners.set("personal", ownerProfileId, owner.user.id);
     await ctx.verificationCtx.verificationService.submitFullVerificationRequest("personal", ownerProfileId);
     await ctx.verificationCtx.verificationService.recordManualVerificationDecision({
+      actingRole: "platform_owner",
       profileKind: "personal",
       profileId: ownerProfileId,
       decision: "verified",

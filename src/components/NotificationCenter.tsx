@@ -23,6 +23,7 @@ interface GroupedNotification {
   critical: boolean;
   relatedAgreementId: string | null;
   relatedPaymentAttemptId: string | null;
+  relatedInvitationId: string | null;
   payload: Record<string, unknown>;
   createdAt: string;
   readAt: string | null;
@@ -123,11 +124,13 @@ export function NotificationCenter() {
       <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "0.75rem" }}>
         {pageItems.map((record) => {
           const unread = record.inAppId !== null && record.readAt === null;
-          const deepLink = record.relatedAgreementId
-            ? { href: `/agreements/detail?id=${record.relatedAgreementId}`, label: "View agreement" }
-            : record.relatedPaymentAttemptId
-              ? { href: `/payments/detail?id=${record.relatedPaymentAttemptId}`, label: "View payment" }
-              : null;
+          const deepLink = record.relatedInvitationId
+            ? { href: `/connections/accept?invitationId=${record.relatedInvitationId}`, label: "Review invitation" }
+            : record.relatedAgreementId
+              ? { href: `/agreements/detail?id=${record.relatedAgreementId}`, label: "View agreement" }
+              : record.relatedPaymentAttemptId
+                ? { href: `/payments/detail?id=${record.relatedPaymentAttemptId}`, label: "View payment" }
+                : null;
           const channels = externalChannels(record);
 
           return (

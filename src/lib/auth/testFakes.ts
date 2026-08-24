@@ -3,6 +3,7 @@ import { AuditService, type AuditEventRecord, type AuditEventRepository } from "
 import { ConflictError } from "@/lib/errors";
 import type { EmailSender } from "@/lib/notify/emailSender";
 import { AuthService } from "./authService";
+import { generatePublicReferenceCode } from "./token";
 import type {
   EmailVerificationTokenRecord,
   EmailVerificationTokenRepository,
@@ -55,6 +56,7 @@ export class InMemoryUserAccountRepository implements UserAccountRepository {
       accountClassification: "production",
       dateOfBirth: input.dateOfBirth,
       emailVerifiedAt: null,
+      publicReference: generatePublicReferenceCode(),
     };
     this.byId.set(user.id, user);
     return user;
@@ -86,6 +88,18 @@ export class InMemoryUserAccountRepository implements UserAccountRepository {
   async updateAccountClassification(userId: string, accountClassification: AccountClassification): Promise<void> {
     const user = this.byId.get(userId);
     if (user) user.accountClassification = accountClassification;
+  }
+
+  async setPublicReference(userId: string, publicReference: string): Promise<void> {
+    const user = this.byId.get(userId);
+    if (user) user.publicReference = publicReference;
+  }
+
+  async findByPublicReference(publicReference: string): Promise<UserAccountRecord | null> {
+    for (const user of this.byId.values()) {
+      if (user.publicReference === publicReference) return user;
+    }
+    return null;
   }
 
   /** Test-only helper, not part of the UserAccountRepository interface. */

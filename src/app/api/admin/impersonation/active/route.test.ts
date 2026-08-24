@@ -69,6 +69,7 @@ describe("GET /api/admin/impersonation/active", () => {
       accountClassification: "production",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       emailVerifiedAt: null,
+      publicReference: null,
     });
     const target = await adminCtx.users.insert({ email: "target@example.com", authCredentialRef: "x", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH });
     await grantStepUp({ mfaCredentials: adminCtx.mfaCredentials, stepUps: adminCtx.stepUps }, authResult.user.id, sessionId);

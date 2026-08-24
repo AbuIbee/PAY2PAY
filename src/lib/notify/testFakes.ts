@@ -29,6 +29,7 @@ export class InMemoryNotificationEventRepository implements NotificationEventRep
     dedupeKey: string | null;
     relatedPaymentAttemptId: string | null;
     relatedAgreementId: string | null;
+    relatedInvitationId: string | null;
     payload: Record<string, unknown>;
   }): Promise<NotificationEventRecord> {
     const record: NotificationEventRecord = {

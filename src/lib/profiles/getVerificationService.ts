@@ -1,6 +1,7 @@
 import "server-only";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
+import { getAdminRoleService } from "@/lib/admin/getAdminRoleService";
 import { DrizzleEmailVerificationReader } from "./drizzleEmailVerificationReader";
 import { DrizzleIdentityVerificationRecordRepository } from "./drizzleIdentityVerificationRecordRepository";
 import { DrizzleProfileOwnerReader } from "./drizzleProfileOwnerReader";
@@ -15,6 +16,7 @@ export function getVerificationService(): VerificationService {
       new DrizzleEmailVerificationReader(),
       new DrizzleProfileOwnerReader(),
       new AuditService(new DrizzleAuditEventRepository()),
+      getAdminRoleService(),
     );
   }
   return cached;

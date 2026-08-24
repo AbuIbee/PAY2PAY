@@ -10,6 +10,7 @@ import {
 } from "./enums";
 import { paymentAttempt } from "./payment";
 import { userAccount } from "./identity";
+import { relationshipInvitation } from "./relationship";
 
 /**
  * Sprint 13 (docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md): tracks the single automatic
@@ -118,6 +119,11 @@ export const notificationEvent = pgTable(
     dedupeKey: text("dedupe_key"),
     relatedPaymentAttemptId: uuid("related_payment_attempt_id").references(() => paymentAttempt.id),
     relatedAgreementId: uuid("related_agreement_id").references(() => agreement.id),
+    // Closed-beta remediation (DEF-UAT-006): relationship_invitation notifications previously carried
+    // no actionable link anywhere (email/SMS/in-app) — the invitee had no way to discover or act on a
+    // real invitation. Mirrors relatedAgreementId's identical pattern so NotificationService.buildCtaUrl
+    // and NotificationCenter's deep-link resolver can treat it the same way.
+    relatedInvitationId: uuid("related_invitation_id").references(() => relationshipInvitation.id),
     payload: jsonb("payload").notNull(),
     failureReason: text("failure_reason"),
     attemptCount: integer("attempt_count").notNull().default(0),

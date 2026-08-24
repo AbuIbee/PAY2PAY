@@ -22,6 +22,7 @@ describe("PaymentWebhookService", () => {
     for (const ref of [PAYER, RECIPIENT]) {
       await paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
       await paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
         profileKind: ref.profileKind,
         profileId: ref.profileId,
         decision: "verified",

@@ -7,12 +7,18 @@ import { OnboardingBanner } from "./OnboardingBanner";
 import { ProfileSwitcher, type SelectableProfile } from "./ProfileSwitcher";
 import { formatMoney } from "@/lib/ui/money";
 
+interface ActionRequiredItem {
+  agreementId: string | null;
+  reason: "awaiting_your_acknowledgment" | "awaiting_your_decision" | "awaiting_your_signature" | "pending_connection_invitation";
+  invitationId?: string;
+}
+
 interface PersonalDashboardData {
   moneyIOweMinorUnits: number;
   moneyOwedToMeMinorUnits: number;
   agreements: unknown[];
   upcomingPayments: unknown[];
-  requests: unknown[];
+  requests: ActionRequiredItem[];
 }
 
 interface BusinessDashboardData {
@@ -35,21 +41,51 @@ function activeKeyFor(profile: SelectableProfile | null): string {
  * elsewhere in this sprint, never placeholders. The unread-notification
  * count is fetched separately so this card can say "3 unread" rather than
  * just "Notifications".
+ *
+ * Section M (closed-beta remediation, Product Owner review): "Pending invitations" and "Agreements
+ * needing signature" previously showed static copy with no real count, even though
+ * /api/dashboard/personal already computes exactly this via `requests` (this session's A1 fix added
+ * the `pending_connection_invitation` reason to that same array) — this card just wasn't reading it.
+ * `requests` is null for a business-acting-as user (no equivalent field on BusinessDashboardData yet),
+ * in which case these two cards fall back to their original generic copy rather than claiming a count
+ * they can't back up. "Payments" copy no longer claims a failed/retry-specific filter that
+ * PaymentsList.tsx doesn't actually implement (it's a flat, unfiltered list) — audit finding.
  */
-function ActionCards({ unreadNotifications }: { unreadNotifications: number | null }) {
+function ActionCards({
+  unreadNotifications,
+  requests,
+}: {
+  unreadNotifications: number | null;
+  requests: ActionRequiredItem[] | null;
+}) {
+  const pendingInvitations = requests?.filter((r) => r.reason === "pending_connection_invitation").length ?? null;
+  const needingSignature = requests?.filter((r) => r.reason === "awaiting_your_signature").length ?? null;
+
   return (
     <div className="card-grid">
       <Link href="/connections/invitations" className="action-card">
         <div>
           <p className="action-card__title">Pending invitations</p>
-          <p className="action-card__detail">Review connections waiting on your acceptance</p>
+          <p className="action-card__detail">
+            {pendingInvitations === null
+              ? "Review connections waiting on your acceptance"
+              : pendingInvitations > 0
+                ? `${pendingInvitations} waiting on your response`
+                : "No pending invitations"}
+          </p>
         </div>
         <span className="action-card__arrow" aria-hidden="true">→</span>
       </Link>
       <Link href="/agreements" className="action-card">
         <div>
           <p className="action-card__title">Agreements needing signature</p>
-          <p className="action-card__detail">Review and sign agreements awaiting you</p>
+          <p className="action-card__detail">
+            {needingSignature === null
+              ? "Review and sign agreements awaiting you"
+              : needingSignature > 0
+                ? `${needingSignature} awaiting your signature`
+                : "Nothing awaiting your signature"}
+          </p>
         </div>
         <span className="action-card__arrow" aria-hidden="true">→</span>
       </Link>
@@ -63,7 +99,7 @@ function ActionCards({ unreadNotifications }: { unreadNotifications: number | nu
       <Link href="/payments" className="action-card">
         <div>
           <p className="action-card__title">Payments</p>
-          <p className="action-card__detail">Check for failed payments or retries due</p>
+          <p className="action-card__detail">View your payment history and status</p>
         </div>
         <span className="action-card__arrow" aria-hidden="true">→</span>
       </Link>
@@ -239,7 +275,7 @@ export function Dashboard() {
 
       <div>
         <h2 style={{ margin: "0 0 1rem", fontSize: "1.1rem" }}>What requires action</h2>
-        <ActionCards unreadNotifications={unreadNotifications} />
+        <ActionCards unreadNotifications={unreadNotifications} requests={active?.kind === "personal" ? personalData?.requests ?? null : null} />
       </div>
     </div>
   );

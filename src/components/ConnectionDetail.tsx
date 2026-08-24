@@ -12,6 +12,7 @@ import { participantLabel, type ParticipantLike } from "./connections/participan
 interface RelationshipRecord {
   id: string;
   status: string;
+  publicReference: string;
   currentAgreementId: string | null;
   createdAt: string;
 }
@@ -203,6 +204,9 @@ export function ConnectionDetail() {
           <h2>Status</h2>
           <span className={`chip chip--${tone}`}>{label}</span>
         </div>
+        <p style={{ margin: "0 0 0.5rem", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
+          Reference: <code>{relationship.publicReference}</code>
+        </p>
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "0.5rem" }}>
           {participants.map((participant) => (
             <li key={participant.id}>{participantLabel(participant, myUserId)}</li>
