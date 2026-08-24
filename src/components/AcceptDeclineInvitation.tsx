@@ -13,25 +13,37 @@ interface SelectableProfile {
 
 interface ResolveResult {
   found: boolean;
+  invitationId?: string;
   inviteeEmail?: string;
   inviteeRole?: "creditor" | "debtor";
 }
 
-type Status = "checking_session" | "signed_out" | "loading_context" | "ready" | "responded" | "error";
+type Status = "resolving_token" | "checking_session" | "signed_out" | "loading_context" | "ready" | "responded" | "error" | "invalid_or_expired";
 
 /**
  * Sprint 18B cooperative handshake: existing-user and new-user-via-signup
  * flows both land here. "Signup must never auto-accept a financial
  * relationship" — this screen never accepts automatically; Accept/Decline
  * are always explicit user actions.
+ *
+ * Manual UAT remediation (root cause of the Product Owner's literal "Connection invitation — No
+ * invitation was specified" report): RelationshipInvitationService.createInvitation's *new-user*
+ * email path (the recipient has no PAY2PAY account yet) links to `?token=...` only — it never
+ * includes `invitationId`, since only the token proves who the not-yet-registered recipient is. This
+ * component previously derived `invitationId` directly and solely from the URL param and returned
+ * "No invitation was specified" immediately whenever it was absent — unconditionally, before ever
+ * looking at `token`. That real email link could therefore never work. `invitationId` is now
+ * resolved from `token` via the existing (already correctly built, already unauthenticated-safe)
+ * `/api/relationships/invite/resolve` endpoint first, before any other gate runs.
  */
 export function AcceptDeclineInvitation() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const invitationId = searchParams.get("invitationId");
+  const urlInvitationId = searchParams.get("invitationId");
   const token = searchParams.get("token") ?? undefined;
 
-  const [status, setStatus] = useState<Status>("checking_session");
+  const [invitationId, setInvitationId] = useState<string | null>(urlInvitationId);
+  const [status, setStatus] = useState<Status>(urlInvitationId ? "checking_session" : token ? "resolving_token" : "error");
   const [context, setContext] = useState<ResolveResult | null>(null);
   const [profiles, setProfiles] = useState<SelectableProfile[]>([]);
   const [selectedKey, setSelectedKey] = useState("");
@@ -40,12 +52,35 @@ export function AcceptDeclineInvitation() {
   const [outcome, setOutcome] = useState<"accepted" | "declined" | null>(null);
 
   useEffect(() => {
+    if (urlInvitationId || !token) return; // invitationId already known, or genuinely nothing to resolve
+    let cancelled = false;
+    apiFetch<ResolveResult>(`/api/relationships/invite/resolve?token=${encodeURIComponent(token)}`)
+      .then((result) => {
+        if (cancelled) return;
+        if (result.found && result.invitationId) {
+          setContext(result);
+          setInvitationId(result.invitationId);
+          setStatus("checking_session");
+        } else {
+          setStatus("invalid_or_expired");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setStatus("invalid_or_expired");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [urlInvitationId, token]);
+
+  useEffect(() => {
+    if (!invitationId) return; // still resolving (or nothing to resolve) — handled above
     let cancelled = false;
     apiFetch<{ id: string }>("/api/auth/me")
       .then(async () => {
         if (cancelled) return;
         setStatus("loading_context");
-        if (token) {
+        if (token && !context) {
           try {
             const result = await apiFetch<ResolveResult>(`/api/relationships/invite/resolve?token=${encodeURIComponent(token)}`);
             if (!cancelled) setContext(result);
@@ -72,7 +107,7 @@ export function AcceptDeclineInvitation() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [invitationId, token, context]);
 
   const selectedProfile = profiles.find(
     (p) => (p.kind === "personal" ? "personal" : `business:${p.businessProfileId}`) === selectedKey,
@@ -115,16 +150,24 @@ export function AcceptDeclineInvitation() {
     }
   }
 
+  if (status === "resolving_token" || status === "checking_session" || status === "loading_context") {
+    return <p role="status">Loading…</p>;
+  }
+
+  if (status === "invalid_or_expired") {
+    return (
+      <p className="form-status form-status--error" role="alert">
+        This invitation link is invalid or has expired.
+      </p>
+    );
+  }
+
   if (!invitationId) {
     return (
       <p className="form-status form-status--error" role="alert">
         No invitation was specified.
       </p>
     );
-  }
-
-  if (status === "checking_session" || status === "loading_context") {
-    return <p role="status">Loading…</p>;
   }
 
   if (status === "signed_out") {

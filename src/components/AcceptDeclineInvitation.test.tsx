@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcceptDeclineInvitation } from "./AcceptDeclineInvitation";
 
+const mockParams = vi.hoisted(() => ({ current: new URLSearchParams({ invitationId: "inv-1", token: "raw-token" }) }));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
-  useSearchParams: () => new URLSearchParams({ invitationId: "inv-1", token: "raw-token" }),
+  useSearchParams: () => mockParams.current,
 }));
 
 function jsonResponse(body: unknown, ok = true) {
@@ -36,6 +38,7 @@ function buildFetchMock() {
 describe("AcceptDeclineInvitation", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    mockParams.current = new URLSearchParams({ invitationId: "inv-1", token: "raw-token" });
   });
 
   it("never auto-accepts — requires an explicit Accept click, and forwards the raw token from the deep link", async () => {
@@ -88,5 +91,47 @@ describe("AcceptDeclineInvitation", () => {
     const createAccount = screen.getByRole("link", { name: /create account/i });
     expect(signIn.getAttribute("href")).toBe(`/login?next=${expectedNext}`);
     expect(createAccount.getAttribute("href")).toBe(`/signup?next=${expectedNext}`);
+  });
+
+  it(
+    "manual UAT remediation (root cause of the 'No invitation was specified' report): a " +
+      "token-only URL — RelationshipInvitationService's own new-user email link, which never " +
+      "includes invitationId — resolves invitationId from the token instead of erroring immediately",
+    async () => {
+      mockParams.current = new URLSearchParams({ token: "raw-token" }); // no invitationId, matching the real new-user email link
+      const user = userEvent.setup();
+      const fetchMock = buildFetchMock();
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<AcceptDeclineInvitation />);
+
+      // Never shows the old unconditional error for a token-only URL.
+      expect(screen.queryByText(/no invitation was specified/i)).not.toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByRole("button", { name: /^accept$/i })).toBeInTheDocument());
+      await user.click(screen.getByRole("button", { name: /^accept$/i }));
+      await waitFor(() => expect(screen.getByText(/invitation accepted/i)).toBeInTheDocument());
+
+      const acceptCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/relationships/accept"));
+      if (!acceptCall) throw new Error("expected an accept call");
+      const [, init] = acceptCall;
+      const body = JSON.parse((init as RequestInit).body as string) as { rawToken?: string; invitationId: string };
+      expect(body.invitationId).toBe("inv-1"); // resolved from the token via /api/relationships/invite/resolve
+      expect(body.rawToken).toBe("raw-token");
+    },
+  );
+
+  it("a token that fails to resolve (invalid/expired) shows a specific message, not the generic 'no invitation specified' error", async () => {
+    mockParams.current = new URLSearchParams({ token: "bad-token" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/relationships/invite/resolve")) return jsonResponse({ found: false });
+      return jsonResponse({}, false);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AcceptDeclineInvitation />);
+    await waitFor(() => expect(screen.getByText(/invalid or has expired/i)).toBeInTheDocument());
+    expect(screen.queryByText(/^no invitation was specified\.?$/i)).not.toBeInTheDocument();
   });
 });
