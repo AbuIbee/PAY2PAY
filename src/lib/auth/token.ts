@@ -45,3 +45,18 @@ export function generatePublicReferenceCode(): string {
   }
   return `P2P-${code}`;
 }
+
+/**
+ * Manual UAT remediation (#2/#3): the same non-enumerable, non-sequential alphabet/entropy as
+ * generatePublicReferenceCode above, grouped into two 4-character blocks ("P2P-XXXX-XXXX") for
+ * easier reading aloud/typing back on a relationship reference — purely a display/lookup identifier,
+ * never a security credential (see relationship.ts's `publicReference` column doc comment: the
+ * relationship_invitation token-hash flow remains the sole authority over accept/decline).
+ */
+export function generateRelationshipReferenceCode(): string {
+  let code = "";
+  for (let i = 0; i < PUBLIC_REFERENCE_LENGTH; i += 1) {
+    code += PUBLIC_REFERENCE_ALPHABET[randomInt(0, PUBLIC_REFERENCE_ALPHABET.length)];
+  }
+  return `P2P-${code.slice(0, 4)}-${code.slice(4)}`;
+}

@@ -3,6 +3,7 @@ import { eq, or } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { relationship, relationshipParticipant } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
+import { generateRelationshipReferenceCode } from "@/lib/auth/token";
 import type { RelationshipRecord, RelationshipRepository, RelationshipStatus } from "./relationshipService";
 
 type Row = typeof relationship.$inferSelect;
@@ -12,6 +13,7 @@ function toRecord(row: Row): RelationshipRecord {
     id: row.id,
     status: row.status as RelationshipStatus,
     context: row.context,
+    publicReference: row.publicReference,
     initiatorUserId: row.initiatorUserId,
     currentAgreementId: row.currentAgreementId,
     activatedAt: row.activatedAt,
@@ -25,8 +27,21 @@ function toRecord(row: Row): RelationshipRecord {
 export class DrizzleRelationshipRepository implements RelationshipRepository {
   async insert(input: { initiatorUserId: string }): Promise<RelationshipRecord> {
     const db = getDb();
-    const [row] = await db.insert(relationship).values({ initiatorUserId: input.initiatorUserId }).returning();
+    // Manual UAT remediation (#2/#3): generated here, the single place a relationship row is ever
+    // created, mirroring DrizzleUserAccountRepository.insert's identical Section K precedent — every
+    // new relationship gets a human-readable reference immediately, no separate backfill step.
+    const [row] = await db
+      .insert(relationship)
+      .values({ initiatorUserId: input.initiatorUserId, publicReference: generateRelationshipReferenceCode() })
+      .returning();
     if (!row) throw new ConfigurationError("relationship insert returned no row");
+    return toRecord(row);
+  }
+
+  async setPublicReference(id: string, publicReference: string): Promise<RelationshipRecord> {
+    const db = getDb();
+    const [row] = await db.update(relationship).set({ publicReference, updatedAt: new Date() }).where(eq(relationship.id, id)).returning();
+    if (!row) throw new ConfigurationError("relationship setPublicReference found no row");
     return toRecord(row);
   }
 

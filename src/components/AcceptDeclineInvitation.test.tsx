@@ -70,4 +70,23 @@ describe("AcceptDeclineInvitation", () => {
     await user.click(screen.getByRole("button", { name: /decline/i }));
     await waitFor(() => expect(screen.getByText(/invitation declined/i)).toBeInTheDocument());
   });
+
+  it("preserves the invitation across a signed-out visit: Sign in/Create account carry the full invitation URL as ?next=, not a bare href that would drop it", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      // Only /api/auth/me is reached before the signed-out branch renders.
+      if (url.includes("/api/auth/me")) return jsonResponse({}, false);
+      return jsonResponse({}, false);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AcceptDeclineInvitation />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: /sign in to respond/i })).toBeInTheDocument());
+
+    const expectedNext = encodeURIComponent("/connections/accept?invitationId=inv-1&token=raw-token");
+    const signIn = screen.getByRole("link", { name: /sign in/i });
+    const createAccount = screen.getByRole("link", { name: /create account/i });
+    expect(signIn.getAttribute("href")).toBe(`/login?next=${expectedNext}`);
+    expect(createAccount.getAttribute("href")).toBe(`/signup?next=${expectedNext}`);
+  });
 });

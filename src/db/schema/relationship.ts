@@ -27,6 +27,16 @@ export const relationship = pgTable("relationship", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   status: relationshipStatusEnum("status").notNull().default("invited"),
   context: text("context").notNull().default("repayment_agreement"),
+  // Manual UAT remediation (#2/#3): a short, human-readable, non-enumerable reference
+  // ("P2P-XXXX-XXXX") shown to both parties and searchable by admin/support — mirrors
+  // user_account.public_reference's identical Section K precedent exactly (see
+  // src/lib/auth/token.ts's generatePublicReferenceCode doc comment for the alphabet/entropy
+  // rationale). Deliberately NOT a security credential: it identifies the relationship for humans,
+  // it never substitutes for the relationship_invitation.token_hash-gated accept/decline flow, which
+  // remains the sole authority over who may act on an invitation. Nullable/additive, lazily backfilled
+  // on first read for any pre-existing row (RelationshipService.ensurePublicReference) exactly like
+  // the user_account precedent — every relationship created after this migration gets one immediately.
+  publicReference: text("public_reference"),
   initiatorUserId: uuid("initiator_user_id")
     .notNull()
     .references(() => userAccount.id),
@@ -41,7 +51,9 @@ export const relationship = pgTable("relationship", {
   closedAt: timestamp("closed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}).enableRLS();
+}, (table) => [
+  uniqueIndex("relationship_public_reference_unique").on(table.publicReference),
+]).enableRLS();
 
 /**
  * Sprint 18A: a relationship's principal counterparty — exactly one of `individual_profile_id` /

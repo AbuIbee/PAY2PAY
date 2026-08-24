@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { apiFetch } from "@/lib/ui/apiFetch";
+import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
 import { formatDate } from "@/lib/ui/date";
 import { financialAccountStatusLabel } from "@/lib/ui/statusLabels";
 
@@ -34,7 +34,7 @@ function bankSubtypeLabel(subtype: "checking" | "savings" | null): string {
 
 type LoadState = "loading" | "ready" | "unauthorized" | "error";
 
-function AccountCard({ account }: { account: FinancialAccountRecord }) {
+function AccountCard({ account, activeProfile, onRemoved }: { account: FinancialAccountRecord; activeProfile: ActiveProfile; onRemoved: () => void }) {
   const chip = financialAccountStatusLabel(account.status);
   const title =
     account.accountType === "bank_account"
@@ -53,6 +53,30 @@ function AccountCard({ account }: { account: FinancialAccountRecord }) {
         ]
           .filter(Boolean)
           .join(" · ");
+
+  const [removeStatus, setRemoveStatus] = useState<"idle" | "working" | "error">("idle");
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  async function handleRemove() {
+    if (!window.confirm(`Remove ${title}? You won't be able to select it for new payments once it's removed.`)) return;
+    setRemoveStatus("working");
+    setRemoveError(null);
+    try {
+      await apiFetch("/api/relationships/accounts/remove", {
+        method: "POST",
+        body: JSON.stringify({
+          financialAccountId: account.id,
+          actingParty: { kind: activeProfile.kind, id: activeProfile.kind === "business" ? activeProfile.businessProfileId : activeProfile.personalProfileId },
+          reason: "Removed by account holder via Payment Methods.",
+        }),
+      });
+      onRemoved();
+    } catch (error) {
+      setRemoveStatus("error");
+      setRemoveError(error instanceof ApiError ? error.message : "Could not remove this account. Please try again.");
+    }
+  }
+
   return (
     <div className="card">
       <div className="card__header">
@@ -65,6 +89,16 @@ function AccountCard({ account }: { account: FinancialAccountRecord }) {
       <p style={{ margin: 0, color: "var(--ink-soft)", fontSize: "0.78rem" }}>
         Added {formatDate(account.createdAt)}
       </p>
+      {removeError && (
+        <p className="field-error" role="alert" style={{ marginTop: "0.5rem" }}>
+          {removeError}
+        </p>
+      )}
+      <div style={{ marginTop: "0.75rem" }}>
+        <button type="button" className="button button--ghost" disabled={removeStatus === "working"} onClick={() => void handleRemove()}>
+          {removeStatus === "working" ? "Removing…" : "Remove"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -72,10 +106,12 @@ function AccountCard({ account }: { account: FinancialAccountRecord }) {
 export function PaymentMethodsList() {
   const [state, setState] = useState<LoadState>("loading");
   const [accounts, setAccounts] = useState<FinancialAccountRecord[]>([]);
+  const [activeProfile, setActiveProfile] = useState<ActiveProfile | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
+    async function load() {
       try {
         const active = await apiFetch<ActiveProfile>("/api/profiles/active");
         const partyKind = active.kind;
@@ -88,6 +124,7 @@ export function PaymentMethodsList() {
           `/api/relationships/accounts/party?partyKind=${partyKind}&partyId=${partyId}`,
         );
         if (cancelled) return;
+        setActiveProfile(active);
         setAccounts(body.accounts);
         setState("ready");
       } catch (error) {
@@ -95,11 +132,12 @@ export function PaymentMethodsList() {
         if ((error as { httpStatus?: number }).httpStatus === 401) setState("unauthorized");
         else setState("error");
       }
-    })();
+    }
+    void load();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
 
   if (state === "loading") {
     return (
@@ -118,7 +156,7 @@ export function PaymentMethodsList() {
     );
   }
 
-  if (state === "error") {
+  if (state === "error" || !activeProfile) {
     return (
       <p className="form-status form-status--error" role="alert">
         Something went wrong loading your payment methods. Please try again.
@@ -126,10 +164,14 @@ export function PaymentMethodsList() {
     );
   }
 
-  const bankAccounts = accounts.filter((a) => a.accountType === "bank_account");
-  const cards = accounts.filter((a) => a.accountType === "debit_card");
+  // A removed (disabled) account is no longer a usable payment method — it drops out of this list
+  // (requirement: "account disappears from usable payment methods") while its row still exists,
+  // preserved for audit history, at `status: "disabled"`.
+  const usableAccounts = accounts.filter((a) => a.status !== "disabled");
+  const bankAccounts = usableAccounts.filter((a) => a.accountType === "bank_account");
+  const cards = usableAccounts.filter((a) => a.accountType === "debit_card");
 
-  if (accounts.length === 0) {
+  if (usableAccounts.length === 0) {
     return (
       <div className="empty-state">
         <h3>No bank account connected</h3>
@@ -155,7 +197,7 @@ export function PaymentMethodsList() {
         ) : (
           <div className="card-grid">
             {bankAccounts.map((account) => (
-              <AccountCard key={account.id} account={account} />
+              <AccountCard key={account.id} account={account} activeProfile={activeProfile} onRemoved={() => setReloadKey((k) => k + 1)} />
             ))}
           </div>
         )}
@@ -167,7 +209,7 @@ export function PaymentMethodsList() {
         ) : (
           <div className="card-grid">
             {cards.map((account) => (
-              <AccountCard key={account.id} account={account} />
+              <AccountCard key={account.id} account={account} activeProfile={activeProfile} onRemoved={() => setReloadKey((k) => k + 1)} />
             ))}
           </div>
         )}

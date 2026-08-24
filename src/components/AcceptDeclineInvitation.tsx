@@ -128,13 +128,21 @@ export function AcceptDeclineInvitation() {
   }
 
   if (status === "signed_out") {
+    // Section W manual-UAT remediation: preserve the invitation across the auth detour by round-
+    // tripping the full current URL (invitationId + token) through login/signup's own `?next=`
+    // support (src/lib/ui/safeRedirect.ts) — previously a bare `/login`/`/signup` href with no
+    // `next` at all, so a recipient without an existing session lost the invitation the moment they
+    // signed in or signed up, landing back on a generic dashboard with no path back to it short of
+    // re-finding the original email.
+    const returnPath = `/connections/accept?${searchParams.toString()}`;
+    const nextParam = `?next=${encodeURIComponent(returnPath)}`;
     return (
       <div className="empty-state">
         <h3>Sign in to respond</h3>
-        <p>Sign in or create an account, then open this invitation link again to accept or decline it.</p>
+        <p>Sign in or create an account to continue — you&apos;ll be brought straight back to this invitation.</p>
         <div style={{ display: "flex", gap: "0.75rem" }}>
-          <a href="/login" className="button button--primary">Sign in</a>
-          <a href="/signup" className="button button--ghost">Create account</a>
+          <a href={`/login${nextParam}`} className="button button--primary">Sign in</a>
+          <a href={`/signup${nextParam}`} className="button button--ghost">Create account</a>
         </div>
       </div>
     );

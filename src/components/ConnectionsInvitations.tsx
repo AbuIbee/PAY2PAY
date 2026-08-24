@@ -23,6 +23,7 @@ interface InvitationRecord {
 interface ReceivedInvitationRecord {
   id: string;
   relationshipId: string;
+  relationshipPublicReference: string;
   inviteeRole: "creditor" | "debtor";
   status: string;
   createdAt: string;
@@ -196,6 +197,7 @@ export function ConnectionsInvitations() {
             <table className="table">
               <thead>
                 <tr>
+                  <th>Invitation</th>
                   <th>Your role</th>
                   <th>Received</th>
                   <th>Status</th>
@@ -207,6 +209,9 @@ export function ConnectionsInvitations() {
                   const { label, tone } = relationshipInvitationStatusLabel(invitation.status as never);
                   return (
                     <tr key={invitation.id}>
+                      <td data-label="Invitation">
+                        <code>{invitation.relationshipPublicReference}</code>
+                      </td>
                       <td data-label="Your role">{invitation.inviteeRole === "creditor" ? "Creditor" : "Debtor"}</td>
                       <td data-label="Received">{new Date(invitation.createdAt).toLocaleDateString()}</td>
                       <td data-label="Status">

@@ -123,6 +123,8 @@ export interface RelationshipFinancialAccountRepository {
   findActiveAssignment(relationshipId: string, usage: FinancialAccountUsage): Promise<RelationshipFinancialAccountAssignmentWithAccount | null>;
   markSuperseded(id: string, supersededBy: string): Promise<RelationshipFinancialAccountAssignmentRecord>;
   listForRelationship(relationshipId: string): Promise<RelationshipFinancialAccountAssignmentWithAccount[]>;
+  /** Manual UAT remediation (#10): every relationship currently using this account as an *active* funding/payout slot, regardless of relationship — the removal guard's source of truth for "would this break an in-flight transaction." */
+  listActiveAssignmentsForAccount(financialAccountId: string): Promise<RelationshipFinancialAccountAssignmentRecord[]>;
 }
 
 /** Narrow interface onto RelationshipService's own read-time-sync method — avoids depending on that class's entire surface (this codebase's established interface-segregation precedent, e.g. MandateReader). RelationshipService itself satisfies this structurally. */
@@ -274,11 +276,26 @@ export class RelationshipFinancialAccountService {
     return updated;
   }
 
+  /**
+   * Manual UAT remediation (#10 "Bank Account Removal"): previously callable with no in-use check at
+   * all — an account could be silently disabled while it was still a relationship's active
+   * funding/payout source, breaking that relationship's ability to process payments with no warning
+   * to the user. Now blocks with a clear, specific `ValidationError` naming which relationship(s) are
+   * still using it, rather than disabling first and letting the breakage surface later as a mysterious
+   * payment failure.
+   */
   async disableAccount(input: { financialAccountId: string; actingUserId: string; actingParty: PartyRef; reason: string }): Promise<FinancialAccountRecord> {
     await this.authorizeParty(input.actingUserId, input.actingParty);
     const account = await this.requireAccount(input.financialAccountId);
     this.requireAccountOwnedBy(account, input.actingParty);
     if (account.status === "disabled") return account;
+    const activeAssignments = await this.deps.assignments.listActiveAssignmentsForAccount(account.id);
+    if (activeAssignments.length > 0) {
+      const usages = [...new Set(activeAssignments.map((a) => a.usage))].join(" and ");
+      throw new ValidationError(
+        `This account is currently in use as the ${usages} source for ${activeAssignments.length === 1 ? "an active connection" : `${activeAssignments.length} active connections`}. Replace it there first (Connection detail → Replace) before removing it here.`,
+      );
+    }
     const updated = await this.deps.financialAccounts.markDisabled(account.id, new Date());
     await this.recordAccountAudit(updated, "FINANCIAL_ACCOUNT_DISABLED", input.actingUserId, input.reason);
     return updated;

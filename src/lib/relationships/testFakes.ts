@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { generateRelationshipReferenceCode } from "@/lib/auth/token";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { AgreementService } from "@/lib/agreements/agreementService";
 import {
@@ -64,6 +65,7 @@ export class InMemoryRelationshipRepository implements RelationshipRepository {
       id: randomUUID(),
       status: "invited",
       context: "repayment_agreement",
+      publicReference: generateRelationshipReferenceCode(),
       initiatorUserId: input.initiatorUserId,
       currentAgreementId: null,
       activatedAt: null,
@@ -78,6 +80,13 @@ export class InMemoryRelationshipRepository implements RelationshipRepository {
 
   async findById(id: string): Promise<RelationshipRecord | null> {
     return this.byId.get(id) ?? null;
+  }
+
+  async setPublicReference(id: string, publicReference: string): Promise<RelationshipRecord> {
+    const record = this.mustFind(id);
+    record.publicReference = publicReference;
+    record.updatedAt = new Date();
+    return record;
   }
 
   async listForParticipant(individualProfileId: string | null, organizationId: string | null): Promise<RelationshipRecord[]> {
@@ -413,6 +422,10 @@ export class InMemoryRelationshipFinancialAccountRepository implements Relations
 
   async listForRelationship(relationshipId: string): Promise<RelationshipFinancialAccountAssignmentWithAccount[]> {
     return [...this.byId.values()].filter((a) => a.relationshipId === relationshipId).map((a) => this.withAccount(a));
+  }
+
+  async listActiveAssignmentsForAccount(financialAccountId: string): Promise<RelationshipFinancialAccountAssignmentRecord[]> {
+    return [...this.byId.values()].filter((a) => a.financialAccountId === financialAccountId && a.status === "active");
   }
 
   private withAccount(record: RelationshipFinancialAccountAssignmentRecord): RelationshipFinancialAccountAssignmentWithAccount {
