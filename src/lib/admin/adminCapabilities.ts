@@ -40,6 +40,7 @@ export const ADMIN_CAPABILITIES = [
   "restrict_new_agreements",
   "restrict_payout",
   "review_verification_status",
+  "decide_identity_verification",
   "review_fraud_alert",
   "review_payment_failures",
   "review_dispute",
@@ -75,6 +76,18 @@ export const DEFAULT_INTERNAL_ROLE_CAPABILITIES: Record<Exclude<InternalAdminRol
   // constraint), and compliance is this codebase's natural independent-review role, distinct from
   // fraud_reviewer (who places most of the restrictions being appealed) and support (case
   // administration, not adjudication).
-  compliance: ["review_verification_status", "review_dispute", "review_audit_logs", "place_retention_hold", "release_retention_hold", "manage_appeal"],
+  compliance: [
+    "review_verification_status",
+    // Closed-beta remediation (DEF-UAT-020): the actual approve/reject authority over a pending
+    // identity-verification request — distinct from review_verification_status's narrow, pre-existing
+    // read-only single-profile lookup, and assigned here for the same reason review_dispute/manage_appeal
+    // are: compliance is this codebase's established independent-adjudicator role.
+    "decide_identity_verification",
+    "review_dispute",
+    "review_audit_logs",
+    "place_retention_hold",
+    "release_retention_hold",
+    "manage_appeal",
+  ],
   fraud_reviewer: ["review_fraud_alert", "review_dispute", "restrict_payment_activity", "restrict_new_agreements", "restrict_payout"],
 };

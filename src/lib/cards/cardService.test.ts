@@ -19,6 +19,7 @@ describe("CardService (PRSprint 24 — docs/prsprints/PRSPRINT_24_DEBIT_CARD_ISS
   async function verifyCardholder() {
     await ctx.verificationCtx.verificationService.submitFullVerificationRequest(CARDHOLDER.kind, CARDHOLDER.id);
     await ctx.verificationCtx.verificationService.recordManualVerificationDecision({
+      actingRole: "platform_owner",
       profileKind: CARDHOLDER.kind,
       profileId: CARDHOLDER.id,
       decision: "verified",

@@ -9,6 +9,7 @@ interface UserSummary {
   status: string;
   platformRole: string;
   accountClassification: string;
+  publicReference: string | null;
 }
 
 type SearchStatus = "idle" | "searching" | "unauthorized" | "forbidden" | "error";
@@ -16,6 +17,7 @@ type SearchStatus = "idle" | "searching" | "unauthorized" | "forbidden" | "error
 export function AdminUsers() {
   const [email, setEmail] = useState("");
   const [userId, setUserId] = useState("");
+  const [publicReference, setPublicReference] = useState("");
   const [status, setStatus] = useState<SearchStatus>("idle");
   const [results, setResults] = useState<UserSummary[]>([]);
 
@@ -25,6 +27,7 @@ export function AdminUsers() {
     const params = new URLSearchParams();
     if (email.trim()) params.set("email", email.trim());
     if (userId.trim()) params.set("userId", userId.trim());
+    if (publicReference.trim()) params.set("publicReference", publicReference.trim());
     const response = await fetch(`/api/admin/users?${params.toString()}`);
     if (response.status === 401) return setStatus("unauthorized");
     if (response.status === 403) return setStatus("forbidden");
@@ -45,6 +48,15 @@ export function AdminUsers() {
           <div className="field">
             <label htmlFor="admin-search-id">User ID</label>
             <input id="admin-search-id" value={userId} onChange={(event) => setUserId(event.target.value)} />
+          </div>
+          <div className="field">
+            <label htmlFor="admin-search-reference">Account reference</label>
+            <input
+              id="admin-search-reference"
+              placeholder="P2P-XXXXXXXX"
+              value={publicReference}
+              onChange={(event) => setPublicReference(event.target.value)}
+            />
           </div>
         </div>
         <button type="submit" className="button button--primary" disabled={status === "searching"}>
@@ -74,6 +86,7 @@ export function AdminUsers() {
               <Link href={`/admin/users/detail?id=${user.id}`}>{user.email}</Link>
               <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--ink-soft)" }}>
                 {user.platformRole} · {user.status} · {user.accountClassification}
+                {user.publicReference ? ` · ${user.publicReference}` : ""}
               </p>
             </li>
           ))}

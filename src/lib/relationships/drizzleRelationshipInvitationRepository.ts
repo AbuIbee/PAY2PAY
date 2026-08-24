@@ -65,6 +65,20 @@ export class DrizzleRelationshipInvitationRepository implements RelationshipInvi
     return rows.map(toRecord);
   }
 
+  async findPendingForInvitee(userId: string): Promise<RelationshipInvitationRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(relationshipInvitation)
+      .where(
+        and(
+          eq(relationshipInvitation.resolvedInviteeUserId, userId),
+          or(eq(relationshipInvitation.status, "sent"), eq(relationshipInvitation.status, "viewed")),
+        ),
+      );
+    return rows.map(toRecord);
+  }
+
   async setResolvedInviteeUser(id: string, userId: string): Promise<RelationshipInvitationRecord> {
     const db = getDb();
     const [row] = await db

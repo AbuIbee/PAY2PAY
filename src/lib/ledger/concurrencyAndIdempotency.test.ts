@@ -34,6 +34,7 @@ describe("PRSprint 20: concurrency and idempotency — genuine adversarial races
     for (const ref of [PAYER, RECIPIENT]) {
       await ctx.paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
       await ctx.paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
         profileKind: ref.profileKind,
         profileId: ref.profileId,
         decision: "verified",

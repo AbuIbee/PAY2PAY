@@ -1,6 +1,6 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
-import { ValidationError } from "@/lib/errors";
+import { StepUpRequiredError, ValidationError } from "@/lib/errors";
 import type { SmsSender } from "@/lib/notify/smsSender";
 import { generateNumericCode, hashNumericCode } from "./token";
 import { buildTotpUri, generateTotpSecret, verifyTotp } from "./totp";
@@ -155,8 +155,28 @@ export class MfaService {
     await this.recordAudit(userId, "mfa_sms_enrolled");
   }
 
-  async disableMethod(userId: string, credentialId: string): Promise<void> {
-    await this.credentials.disable(credentialId);
+  /**
+   * Section B (closed-beta remediation, Product Owner review): previously had no caller anywhere in
+   * the codebase — enrollment existed with no way back out. Self-service only: looks up the caller's
+   * own verified credential for `method` rather than accepting a credential id from the client, so
+   * there is no way to disable another user's MFA even if a route forgot to check ownership. Requires
+   * a fresh step-up itself — removing your own security control is exactly the kind of sensitive
+   * action `requireStepUp` exists to gate, matching every other sensitive-action pattern in this
+   * codebase (e.g. staffService's role-change/removal methods gating via `this.mfa.requireStepUp`).
+   */
+  async disableMethod(userId: string, sessionId: string, method: MfaMethod): Promise<void> {
+    const stepUpOk = await this.requireStepUp({ userId, sessionId, action: "mfa_disable" });
+    if (!stepUpOk) {
+      throw new StepUpRequiredError("Step-up verification is required to disable two-factor authentication.");
+    }
+    const verified = await this.credentials.findVerifiedByUserId(userId);
+    const credential = verified.find((c) => c.method === method);
+    if (!credential) {
+      throw new ValidationError(
+        `${method === "totp" ? "Authenticator app" : "Text message"} is not an enrolled method for this account.`,
+      );
+    }
+    await this.credentials.disable(credential.id);
     await this.recordAudit(userId, "mfa_method_disabled");
   }
 

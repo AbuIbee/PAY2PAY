@@ -8,7 +8,12 @@ export default function AgreementsPage() {
   return (
     <div className="app-page">
       <div className="app-page__header">
-        <h1>Agreements</h1>
+        <div>
+          <h1>Agreements</h1>
+          <p className="app-page__lede">
+            Repayment agreements you&apos;ve created, signed, or are waiting on — organized by status.
+          </p>
+        </div>
         <div style={{ display: "flex", gap: "0.5rem" }}>
           <Link href="/agreements/invite" className="button button--ghost">
             Invite someone

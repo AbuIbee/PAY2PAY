@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
+import { PasswordField } from "./PasswordField";
 
 type Status = "idle" | "submitting" | "success" | "error";
 
@@ -55,19 +56,16 @@ export function ResetPasswordForm() {
 
   return (
     <form className="early-access-form" onSubmit={handleSubmit} noValidate style={{ maxWidth: "28rem" }}>
-      <div className="field">
-        <label htmlFor={`${formId}-password`}>New password</label>
-        <input
-          id={`${formId}-password`}
-          name="password"
-          type="password"
-          autoComplete="new-password"
-          required
-          minLength={8}
-          maxLength={256}
-        />
-        <small>At least 8 characters.</small>
-      </div>
+      <PasswordField
+        id={`${formId}-password`}
+        name="password"
+        label="New password"
+        autoComplete="new-password"
+        required
+        minLength={8}
+        maxLength={256}
+        helperText="At least 8 characters."
+      />
 
       {status === "error" && errorMessage ? (
         <p className="form-status form-status--error" role="alert">

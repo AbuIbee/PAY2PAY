@@ -5,7 +5,7 @@ import { createTestMfaService } from "@/lib/auth/mfaTestFakes";
 import { grantStepUp } from "@/lib/staff/testFakes";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { InMemoryDocumentStorage, InMemoryProfileDisplayReader } from "@/lib/documents/testFakes";
-import { InMemoryIdentityVerificationRecordRepository } from "@/lib/profiles/testFakes";
+import { InMemoryIdentityVerificationRecordRepository, createTestAdminRoleServiceForProfiles } from "@/lib/profiles/testFakes";
 import { VerificationService } from "@/lib/profiles/verificationService";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
 import { SignatureService } from "./signatureService";
@@ -79,6 +79,7 @@ export function createTestSignatureService(notifications?: import("@/lib/notify/
     { isEmailVerified: async () => true },
     agreementCtx.profileOwners,
     new AuditService(verificationAuditRepo),
+    createTestAdminRoleServiceForProfiles(),
   );
   const personalProfiles = new InMemoryPersonalProfileRepository();
   const agreementPdfs = new InMemoryAgreementPdfRepository();

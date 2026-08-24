@@ -29,6 +29,7 @@ describe("Phase 6A: payment_attempt.bank_connection_id provenance", () => {
     for (const ref of [PAYER, RECIPIENT]) {
       await ach.paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
       await ach.paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
         profileKind: ref.profileKind,
         profileId: ref.profileId,
         decision: "verified",

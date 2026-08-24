@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
+import { PasswordField } from "./PasswordField";
 import { getSafeNextPath } from "@/lib/ui/safeRedirect";
 
 type Status = "idle" | "submitting" | "success" | "error";
@@ -52,19 +53,16 @@ export function SignupForm() {
         <label htmlFor={`${formId}-email`}>Email</label>
         <input id={`${formId}-email`} name="email" type="email" autoComplete="email" required maxLength={254} />
       </div>
-      <div className="field">
-        <label htmlFor={`${formId}-password`}>Password</label>
-        <input
-          id={`${formId}-password`}
-          name="password"
-          type="password"
-          autoComplete="new-password"
-          required
-          minLength={8}
-          maxLength={256}
-        />
-        <small>At least 8 characters.</small>
-      </div>
+      <PasswordField
+        id={`${formId}-password`}
+        name="password"
+        label="Password"
+        autoComplete="new-password"
+        required
+        minLength={8}
+        maxLength={256}
+        helperText="At least 8 characters."
+      />
       <div className="field">
         <label htmlFor={`${formId}-dob`}>Date of birth</label>
         <input id={`${formId}-dob`} name="dateOfBirth" type="date" required />

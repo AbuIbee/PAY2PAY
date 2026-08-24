@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
-import { InMemoryIdentityVerificationRecordRepository } from "@/lib/profiles/testFakes";
+import { InMemoryIdentityVerificationRecordRepository, createTestAdminRoleServiceForProfiles } from "@/lib/profiles/testFakes";
 import { VerificationService } from "@/lib/profiles/verificationService";
 import { B2BWorkflowService } from "./b2bWorkflowService";
 import type { AgreementReferenceRecord, AgreementReferenceRepository } from "./b2bWorkflowService";
@@ -52,6 +52,7 @@ export function createTestB2BWorkflowService() {
     { isEmailVerified: async () => true },
     agreementCtx.profileOwners,
     new AuditService(new InMemoryAuditEventRepositoryForB2B()),
+    createTestAdminRoleServiceForProfiles(),
   );
   const references = new InMemoryAgreementReferenceRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForB2B();

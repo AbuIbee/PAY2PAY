@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
-import { InMemorySessionRepository, InMemoryUserAccountRepository } from "@/lib/auth/testFakes";
+import { AuthService } from "@/lib/auth/authService";
+import {
+  InMemoryEmailSender,
+  InMemoryEmailVerificationTokenRepository,
+  InMemoryPasswordResetTokenRepository,
+  InMemoryPersonalProfileRepository,
+  InMemorySessionRepository,
+  InMemoryUserAccountRepository,
+  TEST_APP_URL,
+  TEST_PEPPER,
+} from "@/lib/auth/testFakes";
 import { createTestMfaService } from "@/lib/auth/mfaTestFakes";
 import { InMemoryBusinessProfileRepository } from "@/lib/profiles/testFakes";
 import { InMemoryBusinessStaffMemberRepository } from "@/lib/staff/testFakes";
@@ -55,16 +65,21 @@ export class InMemoryAdminUserDirectoryReader implements AdminUserDirectoryReade
       accountClassification: u.accountClassification,
       createdAt: new Date(0), // not tracked by the auth fake; irrelevant to admin authorization tests
       lastLoginAt: null,
+      publicReference: u.publicReference,
     };
   }
 
-  async search(query: { email?: string; userId?: string }): Promise<AdminUserSummary[]> {
+  async search(query: { email?: string; userId?: string; publicReference?: string }): Promise<AdminUserSummary[]> {
     if (query.userId) {
       const user = await this.users.findById(query.userId);
       return user ? [this.toSummary(user)] : [];
     }
     if (query.email) {
       const user = await this.users.findByEmail(query.email);
+      return user ? [this.toSummary(user)] : [];
+    }
+    if (query.publicReference) {
+      const user = await this.users.findByPublicReference(query.publicReference.trim().toUpperCase());
       return user ? [this.toSummary(user)] : [];
     }
     return [];
@@ -234,11 +249,27 @@ export function createTestAdminService() {
   const staffMembers = new InMemoryBusinessStaffMemberRepository();
   const businessDirectory = new InMemoryAdminBusinessDirectoryReader(businesses, users, staffMembers);
 
+  // Section D (closed-beta remediation): sendPasswordReset reuses AuthService's own
+  // requestPasswordReset — shares this fake's `users`/`sessions` so the two services act on the same
+  // underlying accounts, mirroring createTestAuthService's own construction in src/lib/auth/testFakes.ts.
+  const emailSender = new InMemoryEmailSender();
+  const authService = new AuthService(
+    users,
+    sessions,
+    new InMemoryPersonalProfileRepository(),
+    new InMemoryEmailVerificationTokenRepository(),
+    new InMemoryPasswordResetTokenRepository(),
+    audit,
+    emailSender,
+    { pepper: TEST_PEPPER, sessionTtlMs: 60 * 60 * 1000, appUrl: TEST_APP_URL },
+  );
+
   const adminService = new AdminService({
     users,
     sessions,
     mfa: mfaService,
     audit,
+    auth: authService,
     overview,
     directory,
     impersonationSessions,
@@ -262,5 +293,6 @@ export function createTestAdminService() {
     businesses,
     staffMembers,
     businessDirectory,
+    emailSender,
   };
 }

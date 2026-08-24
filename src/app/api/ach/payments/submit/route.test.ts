@@ -52,6 +52,7 @@ describe("POST /api/ach/payments/submit", () => {
     for (const ref of [PAYER_PROFILE, RECIPIENT_PROFILE]) {
       await ach.paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
       await ach.paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
         profileKind: ref.profileKind,
         profileId: ref.profileId,
         decision: "verified",

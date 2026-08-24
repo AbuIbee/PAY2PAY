@@ -208,6 +208,12 @@ export class InMemoryRelationshipInvitationRepository implements RelationshipInv
     return [...this.byId.values()].filter((i) => i.relationshipId === relationshipId);
   }
 
+  async findPendingForInvitee(userId: string): Promise<RelationshipInvitationRecord[]> {
+    return [...this.byId.values()].filter(
+      (i) => i.resolvedInviteeUserId === userId && (i.status === "sent" || i.status === "viewed"),
+    );
+  }
+
   async setResolvedInviteeUser(id: string, userId: string): Promise<RelationshipInvitationRecord> {
     const record = this.mustFind(id);
     record.resolvedInviteeUserId = userId;

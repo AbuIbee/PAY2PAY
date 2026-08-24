@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { apiFetch } from "@/lib/ui/apiFetch";
+import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
 import { relationshipInvitationStatusLabel } from "@/lib/ui/statusLabels";
 import { useActiveParty } from "./connections/useActiveParty";
 
@@ -20,23 +20,30 @@ interface InvitationRecord {
   expiresAt: string;
 }
 
+interface ReceivedInvitationRecord {
+  id: string;
+  relationshipId: string;
+  inviteeRole: "creditor" | "debtor";
+  status: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 type LoadStatus = "loading" | "ready" | "error" | "unauthorized";
 
 /**
- * "Sent invitations" tab lists invitations the caller created (relationships
- * still in status "invited" — the only reliable signal an invitation is
- * still outstanding, since acceptance immediately advances the relationship
- * past that status). "Pending invitations" (received) has no list endpoint
- * to call — RelationshipInvitationService never creates a participant row
- * for the invitee until they accept, so there is no query surface to find
- * "invitations addressed to me" before that point (see
- * docs/SPRINT_18B_UI_INTEGRATION_MATRIX.md's Connections section); the
- * architecture is notification-driven instead — see the explanatory text
- * below rather than a fake empty list.
+ * "Sent invitations" lists invitations the caller created (relationships still in status "invited" —
+ * the only reliable signal an invitation is still outstanding, since acceptance immediately advances
+ * the relationship past that status). "Pending invitations" (received) is backed by
+ * GET /api/relationships/invitations/pending (closed-beta remediation, DEF-UAT-006) — previously this
+ * section had no list endpoint at all and only pointed the user at an email/notification that itself
+ * carried no actionable link (see docs/uat/PRODUCTION_UAT_DEFECT_REGISTER.md).
  */
 export function ConnectionsInvitations() {
   const { party, status: partyStatus } = useActiveParty();
   const [invitations, setInvitations] = useState<InvitationRecord[]>([]);
+  const [received, setReceived] = useState<ReceivedInvitationRecord[]>([]);
+  const [receivedStatus, setReceivedStatus] = useState<LoadStatus>("loading");
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -65,11 +72,27 @@ export function ConnectionsInvitations() {
     }
   }, [party, partyStatus]);
 
+  const loadReceived = useCallback(async () => {
+    try {
+      const body = await apiFetch<{ invitations: ReceivedInvitationRecord[] }>("/api/relationships/invitations/pending");
+      setReceived(body.invitations);
+      setReceivedStatus("ready");
+    } catch (error) {
+      setReceivedStatus(error instanceof ApiError && error.httpStatus === 401 ? "unauthorized" : "error");
+    }
+  }, []);
+
   useEffect(() => {
     void (async () => {
       await load();
     })();
   }, [load]);
+
+  useEffect(() => {
+    void (async () => {
+      await loadReceived();
+    })();
+  }, [loadReceived]);
 
   async function handleCancel(invitationId: string) {
     setActionError(null);
@@ -150,10 +173,57 @@ export function ConnectionsInvitations() {
 
       <section>
         <h2>Pending invitations</h2>
-        <p className="app-page__lede">
-          If someone has invited you to a connection, you&apos;ll receive a notification with a link to accept or
-          decline it — check your Notifications or the email address linked to your account.
-        </p>
+        <p className="app-page__lede">Connections someone else has invited you to, waiting on your response.</p>
+        {receivedStatus === "loading" && <div className="skeleton skeleton--card" aria-hidden="true" />}
+        {receivedStatus === "unauthorized" && (
+          <p className="form-status form-status--error" role="alert">
+            You need to <a href="/login">sign in</a> to view invitations.
+          </p>
+        )}
+        {receivedStatus === "error" && (
+          <p className="form-status form-status--error" role="alert">
+            Something went wrong loading your pending invitations. Please try again.
+          </p>
+        )}
+        {receivedStatus === "ready" && received.length === 0 && (
+          <div className="empty-state">
+            <h3>No pending invitations</h3>
+            <p>You&apos;ll see an invitation here as soon as someone sends you one.</p>
+          </div>
+        )}
+        {receivedStatus === "ready" && received.length > 0 && (
+          <div className="table-wrap table-wrap--responsive-cards">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Your role</th>
+                  <th>Received</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {received.map((invitation) => {
+                  const { label, tone } = relationshipInvitationStatusLabel(invitation.status as never);
+                  return (
+                    <tr key={invitation.id}>
+                      <td data-label="Your role">{invitation.inviteeRole === "creditor" ? "Creditor" : "Debtor"}</td>
+                      <td data-label="Received">{new Date(invitation.createdAt).toLocaleDateString()}</td>
+                      <td data-label="Status">
+                        <span className={`chip chip--${tone}`}>{label}</span>
+                      </td>
+                      <td data-label="">
+                        <Link href={`/connections/accept?invitationId=${invitation.id}`} className="button button--primary">
+                          Review
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </div>
   );

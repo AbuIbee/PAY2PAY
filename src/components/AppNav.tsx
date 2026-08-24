@@ -15,6 +15,9 @@ interface NavLinkItem {
  * are added only as their pages ship elsewhere in this sprint — never a
  * link to a route that doesn't exist yet ("no dead buttons/links").
  */
+// Section H (closed-beta remediation): "Cards" is filtered out below unless liveCardIssuanceEnabled
+// is on — no live card-issuing provider is registered anywhere in this codebase yet, and the page it
+// links to (CardsManager) is permanently an unconditional "Not yet available" state until one is.
 const PRIMARY_LINKS: NavLinkItem[] = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/connections", label: "Connections" },
@@ -56,6 +59,8 @@ const ADMIN_LINKS: NavLinkItem[] = [
   { href: "/admin/appeals", label: "Appeals" },
   { href: "/admin/ledger", label: "Ledger" },
   { href: "/admin/audit", label: "Audit log" },
+  { href: "/admin/risk-events", label: "Risk & fraud signals" },
+  { href: "/admin/verification", label: "Verification queue" },
 ];
 
 interface ActiveProfileSummary {
@@ -74,6 +79,7 @@ export function AppNav() {
   // to embed a ProfileSwitcher inline; a user on any other page (e.g. /organization/staff, /payments)
   // had no persistent cue of which business (if any) they were currently acting as.
   const [activeProfile, setActiveProfile] = useState<ActiveProfileSummary | null>(null);
+  const [cardsEnabled, setCardsEnabled] = useState(false);
   // PRSprint 10A (docs/prsprints/PRSPRINT_10A_AUTHENTICATION_SIGNOUT_UI_REMEDIATION.md): the
   // mobile drawer state — see app-shell.css's own doc comment on `.app-nav--mobile-open` for the
   // root cause this closes (the entire nav, the only place Sign Out lived, was unconditionally
@@ -123,10 +129,19 @@ export function AppNav() {
       .catch(() => {
         if (!cancelled) setUnreadCount(null);
       });
+    fetch("/api/feature-flags")
+      .then(async (response) => {
+        if (cancelled || !response.ok) return;
+        const body = (await response.json()) as { liveCardIssuanceEnabled: boolean };
+        if (!cancelled) setCardsEnabled(body.liveCardIssuanceEnabled);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [pathname]);
+
+  const primaryLinks = cardsEnabled ? PRIMARY_LINKS : PRIMARY_LINKS.filter((item) => item.href !== "/cards");
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -181,7 +196,7 @@ export function AppNav() {
         </div>
 
       <div className="app-nav__section">
-        {PRIMARY_LINKS.map((item) => (
+        {primaryLinks.map((item) => (
           <Link
             key={item.href}
             href={item.href}

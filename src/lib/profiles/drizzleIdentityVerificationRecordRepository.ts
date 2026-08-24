@@ -91,4 +91,14 @@ export class DrizzleIdentityVerificationRecordRepository implements IdentityVeri
     const row = rows[0];
     return row ? toRecord(row) : null;
   }
+
+  async listPending(): Promise<IdentityVerificationRecordRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(identityVerificationRecord)
+      .where(eq(identityVerificationRecord.status, "pending"))
+      .orderBy(desc(identityVerificationRecord.createdAt));
+    return rows.map(toRecord);
+  }
 }

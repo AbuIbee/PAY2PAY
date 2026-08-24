@@ -7,6 +7,7 @@ import type { AgreementTerms } from "@/lib/agreements/agreementService";
 import { createTestBalanceService, createTestLedgerService } from "@/lib/ledger/testFakes";
 import { InMemoryBusinessProfileRepository } from "@/lib/profiles/testFakes";
 import { ProfileAccessService } from "@/lib/profiles/profileAccessService";
+import { createTestRelationshipServices } from "@/lib/relationships/testFakes";
 import { createPersonalDashboardHandler } from "./route";
 
 function getWithCookie(token?: string) {
@@ -41,6 +42,7 @@ describe("GET /api/dashboard/personal", () => {
   let agreementCtx: ReturnType<typeof createTestAgreementService>;
   let ledgerCtx: ReturnType<typeof createTestLedgerService>;
   let balanceCtx: ReturnType<typeof createTestBalanceService>;
+  let relationshipCtx: ReturnType<typeof createTestRelationshipServices>;
   let token: string;
   let userId: string;
   let personalProfileId: string;
@@ -53,6 +55,7 @@ describe("GET /api/dashboard/personal", () => {
     agreementCtx = createTestAgreementService();
     ledgerCtx = createTestLedgerService();
     balanceCtx = createTestBalanceService(ledgerCtx);
+    relationshipCtx = createTestRelationshipServices();
 
     const result = await authCtx.authService.signup({
       email: "dash-personal@example.com",
@@ -71,7 +74,13 @@ describe("GET /api/dashboard/personal", () => {
   function handlerFor() {
     return withErrorHandling(
       "dashboard_personal",
-      createPersonalDashboardHandler(authCtx.authService, profileAccessService, agreementCtx.agreementService, balanceCtx.balanceService),
+      createPersonalDashboardHandler(
+        authCtx.authService,
+        profileAccessService,
+        agreementCtx.agreementService,
+        balanceCtx.balanceService,
+        relationshipCtx.relationshipInvitationService,
+      ),
     );
   }
 

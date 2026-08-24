@@ -50,8 +50,30 @@ a Product Owner + legal decision on the actual policy before implementation, not
 
 ## 3. Account deletion (item 115)
 
-**No self-service "delete my account" feature exists in this product today.** There is nothing to make
-inaccurate yet. When one is built, it must:
+**Still no self-service "delete my account" feature, and still no hard delete anywhere in this
+product.** Closed-beta remediation (Section D, Product Owner review) added `AdminService.closeUser` —
+an admin-initiated, step-up-gated, audited status transition (`active`/`suspended` → `closed`), not a
+deletion feature. The account lifecycle this product now implements is:
+
+```
+ACTIVE  <->  SUSPENDED  ->  CLOSED
+```
+
+- **ACTIVE → SUSPENDED → ACTIVE**: reversible, already existed (`AdminService.suspendUser`/
+  `reactivateUser`), used for policy violations under investigation.
+- **→ CLOSED**: `AdminService.closeUser` — sets `user_account.status = "closed"` (the column's own
+  comment in `src/db/schema/identity.ts` already anticipated this third value) and revokes every
+  existing session, exactly like suspend. It does not delete or anonymize any row anywhere. Nothing in
+  this codebase cascades from `user_account.status`, so payment history, agreements, signatures, audit
+  records, security events, and ledger data are structurally untouched by a status change — the same
+  "never hard-delete" property Section 1 above describes for every other domain table. `reactivateUser`
+  can move a `closed` account back to `active` if an admin chooses to; this pass does not add a
+  separate irreversible "closed" terminal state, matching the "Default preference: ACTIVE → SUSPENDED →
+  DEACTIVATED/CLOSED rather than destructive hard deletion" instruction this remediation was scoped to.
+
+This is intentionally **PII-deletion-free**: closing an account changes only its `status`, nothing else.
+A future self-service "delete my account" / PII-erasure feature remains a distinct, not-yet-built
+capability, separate from this lifecycle transition, and when built it must still:
 
 - Never perform a hard delete of financial/legal records (agreements, payments, signatures, audit
   events) — those categories above are exactly the ones item 115 warns a deletion request "cannot
@@ -61,8 +83,8 @@ inaccurate yet. When one is built, it must:
 - Distinguish, in its own UI copy, between what the user's request actually does (e.g., deactivate
   login, remove from active staff rosters, stop new communications) and what it does not do (erase
   historical financial/legal records) — matching master-spec item 113's "suspension vs. deletion are
-  different" distinction, which `AdminService.suspendUser`/`reactivateUser` already models correctly
-  for admin-initiated suspension.
+  different" distinction, which `AdminService.suspendUser`/`reactivateUser`/`closeUser` already model
+  correctly for admin-initiated status changes.
 
 ## 4. Data minimization (item 116) — confirmed, not newly built
 

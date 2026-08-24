@@ -7,7 +7,12 @@ export default function AccountSecurityPage() {
   return (
     <div className="app-page">
       <div className="app-page__header">
-        <h1>Security</h1>
+        <div>
+          <h1>Security</h1>
+          <p className="app-page__lede">
+            Manage two-factor authentication and see every device currently signed in to your account.
+          </p>
+        </div>
       </div>
       <AccountSecurity />
     </div>

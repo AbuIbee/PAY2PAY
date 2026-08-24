@@ -33,6 +33,7 @@ describe("DebitCardPaymentService", () => {
     for (const ref of [PAYER, RECIPIENT]) {
       await card.paymentCtx.verificationCtx.verificationService.submitFullVerificationRequest(ref.profileKind, ref.profileId);
       await card.paymentCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
         profileKind: ref.profileKind,
         profileId: ref.profileId,
         decision: "verified",

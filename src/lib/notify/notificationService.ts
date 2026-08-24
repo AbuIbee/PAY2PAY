@@ -23,6 +23,7 @@ export interface NotificationEventRecord {
   dedupeKey: string | null;
   relatedPaymentAttemptId: string | null;
   relatedAgreementId: string | null;
+  relatedInvitationId: string | null;
   payload: Record<string, unknown>;
   failureReason: string | null;
   attemptCount: number;
@@ -48,6 +49,7 @@ export interface NotificationEventRepository {
     dedupeKey: string | null;
     relatedPaymentAttemptId: string | null;
     relatedAgreementId: string | null;
+    relatedInvitationId: string | null;
     payload: Record<string, unknown>;
   }): Promise<NotificationEventRecord>;
   findById(id: string): Promise<NotificationEventRecord | null>;
@@ -123,6 +125,7 @@ export interface GroupedNotification {
   critical: boolean;
   relatedAgreementId: string | null;
   relatedPaymentAttemptId: string | null;
+  relatedInvitationId: string | null;
   payload: Record<string, unknown>;
   createdAt: Date;
   /** From the group's own in_app row, if one exists (a user may have disabled in_app for this type, same as any other channel). */
@@ -190,6 +193,7 @@ export class NotificationService {
     notificationType: NotificationEventType;
     relatedPaymentAttemptId?: string | null;
     relatedAgreementId?: string | null;
+    relatedInvitationId?: string | null;
     payload: Record<string, unknown>;
     dedupeKey?: string;
   }): Promise<NotificationEventRecord[]> {
@@ -215,6 +219,7 @@ export class NotificationService {
         dedupeKey: channelDedupeKey,
         relatedPaymentAttemptId: input.relatedPaymentAttemptId ?? null,
         relatedAgreementId: input.relatedAgreementId ?? null,
+        relatedInvitationId: input.relatedInvitationId ?? null,
         payload: input.payload,
       });
       records.push(await this.deliver(record, rendered));
@@ -321,6 +326,7 @@ export class NotificationService {
           critical: row.critical,
           relatedAgreementId: row.relatedAgreementId,
           relatedPaymentAttemptId: row.relatedPaymentAttemptId,
+          relatedInvitationId: row.relatedInvitationId,
           payload: row.payload,
           createdAt: row.createdAt,
           readAt: null,
@@ -428,8 +434,13 @@ export class NotificationService {
   }
 
   private buildCtaUrl(record: NotificationEventRecord): { ctaUrl: string; ctaText: string } | null {
-    if (!record.relatedAgreementId) return null;
-    return { ctaUrl: `${this.deps.appUrl}/agreements/detail?id=${record.relatedAgreementId}`, ctaText: "Review agreement" };
+    if (record.relatedInvitationId) {
+      return { ctaUrl: `${this.deps.appUrl}/connections/accept?invitationId=${record.relatedInvitationId}`, ctaText: "Review invitation" };
+    }
+    if (record.relatedAgreementId) {
+      return { ctaUrl: `${this.deps.appUrl}/agreements/detail?id=${record.relatedAgreementId}`, ctaText: "Review agreement" };
+    }
+    return null;
   }
 
   private async resolveChannels(userId: string, type: NotificationEventType, critical: boolean): Promise<NotificationChannel[]> {

@@ -15,7 +15,8 @@ export function createAdminUsersSearchHandler(authService: AuthService, adminSer
     const url = new URL(request.url);
     const email = url.searchParams.get("email") ?? undefined;
     const userId = url.searchParams.get("userId") ?? undefined;
-    const users = await adminService.searchUsers(platformRole, { email, userId });
+    const publicReference = url.searchParams.get("publicReference") ?? undefined;
+    const users = await adminService.searchUsers(platformRole, { email, userId, publicReference });
     return NextResponse.json({ users }, { status: 200 });
   };
 }

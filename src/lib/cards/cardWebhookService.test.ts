@@ -17,6 +17,7 @@ describe("CardWebhookService (PRSprint 24)", () => {
     ctx.verificationCtx.profileOwners.set(CARDHOLDER.kind, CARDHOLDER.id, CARDHOLDER_USER_ID);
     await ctx.verificationCtx.verificationService.submitFullVerificationRequest(CARDHOLDER.kind, CARDHOLDER.id);
     await ctx.verificationCtx.verificationService.recordManualVerificationDecision({
+      actingRole: "platform_owner",
       profileKind: CARDHOLDER.kind,
       profileId: CARDHOLDER.id,
       decision: "verified",

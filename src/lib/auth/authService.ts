@@ -4,7 +4,7 @@ import { AccountDisabledError, AuthenticationError, ConflictError, ValidationErr
 import type { EmailSender } from "@/lib/notify/emailSender";
 import { UNUSABLE_PASSWORD_HASH, hashPassword, verifyPassword } from "./password";
 import { generateSessionToken, hashSessionToken } from "./session";
-import { generateOpaqueToken, hashOpaqueToken } from "./token";
+import { generateOpaqueToken, generatePublicReferenceCode, hashOpaqueToken } from "./token";
 
 /** Sprint 6A (docs/sprints/SPRINT_06A_Platform_Administration_Audit_Control.md) platform authorization. */
 export type PlatformRole = "member" | "platform_admin" | "platform_owner";
@@ -20,6 +20,8 @@ export interface UserAccountRecord {
   accountClassification: AccountClassification;
   dateOfBirth: string | null;
   emailVerifiedAt: Date | null;
+  /** Section K (closed-beta remediation): null only for a pre-existing row that hasn't been read via ensurePublicReference yet — every row inserted after this change gets one immediately. */
+  publicReference: string | null;
 }
 
 /**
@@ -46,6 +48,10 @@ export interface UserAccountRepository {
   updatePlatformRole(userId: string, platformRole: PlatformRole): Promise<void>;
   /** Sprint 6A: admin test-account classification. */
   updateAccountClassification(userId: string, accountClassification: AccountClassification): Promise<void>;
+  /** Section K (closed-beta remediation): backfills a pre-existing row that has none — see AuthService.ensurePublicReference. */
+  setPublicReference(userId: string, publicReference: string): Promise<void>;
+  /** Section K: for admin search — case-sensitive exact match on the "P2P-XXXXXXXX" reference. */
+  findByPublicReference(publicReference: string): Promise<UserAccountRecord | null>;
 }
 
 export interface PersonalProfileRecord {
@@ -246,6 +252,22 @@ export class AuthService {
     await this.sendVerificationEmail(user);
 
     return this.createSession(user, input);
+  }
+
+  /**
+   * Section K (closed-beta remediation, Product Owner review): every row inserted after this change
+   * gets a `publicReference` immediately (see UserAccountRepository.insert's real implementation),
+   * but a pre-existing row has none yet — this generates and persists one on first read rather than
+   * requiring a blocking data migration against every existing row up front. Idempotent: returns the
+   * existing value untouched if one is already set.
+   */
+  async ensurePublicReference(userId: string): Promise<string> {
+    const user = await this.users.findById(userId);
+    if (!user) throw new ValidationError("User not found.");
+    if (user.publicReference) return user.publicReference;
+    const publicReference = generatePublicReferenceCode();
+    await this.users.setPublicReference(userId, publicReference);
+    return publicReference;
   }
 
   /** Authenticated resend — deliberately not a public email-lookup endpoint (avoids an enumeration surface). */

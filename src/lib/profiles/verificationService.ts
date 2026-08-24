@@ -1,5 +1,7 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
+import type { AdminRoleService } from "@/lib/admin/adminRoleService";
+import type { PlatformRole } from "@/lib/auth/authService";
 import { ConflictError, ValidationError } from "@/lib/errors";
 
 export type ProfileKind = "personal" | "business";
@@ -57,6 +59,12 @@ export interface IdentityVerificationRecordRepository {
   attachProviderRef(id: string, providerRef: string): Promise<void>;
   /** Sprint 9: resolves an inbound provider webhook back to the record it belongs to. */
   findByProviderRef(providerRef: string): Promise<IdentityVerificationRecordRecord | null>;
+  /**
+   * Closed-beta remediation (DEF-UAT-020): the admin verification queue's list source — every record
+   * still sitting at `status: "pending"`, across all profiles. Mirrors DrizzleAppealRepository.listOpen's
+   * identical shape (a plain, unfiltered "everything still awaiting a decision" scan).
+   */
+  listPending(): Promise<IdentityVerificationRecordRecord[]>;
 }
 
 /**
@@ -80,6 +88,8 @@ export class VerificationService {
     private readonly emailVerification: EmailVerificationReader,
     private readonly profileOwners: ProfileOwnerReader,
     private readonly audit: AuditService,
+    /** Closed-beta remediation (DEF-UAT-020): gates listPendingVerificationRequests/recordManualVerificationDecision. */
+    private readonly roles: AdminRoleService,
   ) {}
 
   /**
@@ -120,24 +130,36 @@ export class VerificationService {
   }
 
   /**
+   * Closed-beta remediation (DEF-UAT-020): the admin verification queue's list source. Capability-
+   * gated the same way RiskEventService.listRecentForAdmin/AppealService.listOpenAppeals are — a
+   * `platform_owner` bypasses via AdminRoleService's own isOwnerRole short-circuit, otherwise the
+   * caller must hold `decide_identity_verification` (assigned to the `compliance` internal role).
+   */
+  async listPendingVerificationRequests(actingUserId: string, actingRole: PlatformRole): Promise<IdentityVerificationRecordRecord[]> {
+    await this.roles.requireCapability(actingUserId, actingRole, "decide_identity_verification");
+    return this.records.listPending();
+  }
+
+  /**
    * The audited manual/mock decision path this sprint's text requires —
    * "Until Sprint 9 wires a real or sandbox KYC/KYB provider, FULL_PENDING/
    * FULL_VERIFIED may be reached only through an explicit, audited
    * manual/mock verification path — never silently defaulted to verified."
    *
-   * No HTTP route calls this yet (see docs/PROGRESS.md's Sprint 3 section):
-   * exposing it publicly requires an admin-role/authorization system, which
-   * is Sprint 18's scope, not this one's. Building the endpoint without
-   * that authorization would create a real "anyone can self-verify" hole —
-   * worse than not exposing it yet.
+   * Closed-beta remediation (DEF-UAT-020): now capability-gated and exposed via a real admin route —
+   * this was previously built with no caller at all ("exposing it publicly requires an admin-role/
+   * authorization system, which is Sprint 18's scope, not this one's" — Sprint 18's AdminRoleService
+   * now exists, closing that gap).
    */
   async recordManualVerificationDecision(input: {
+    actingRole: PlatformRole;
     profileKind: ProfileKind;
     profileId: string;
     decision: "verified" | "rejected";
     reviewerUserId: string;
     reason: string | null;
   }): Promise<void> {
+    await this.roles.requireCapability(input.reviewerUserId, input.actingRole, "decide_identity_verification");
     const ownerUserId = await this.profileOwners.getOwnerUserId(input.profileKind, input.profileId);
     if (ownerUserId && ownerUserId === input.reviewerUserId) {
       throw new ValidationError("A profile's own owner cannot review their own verification request.");

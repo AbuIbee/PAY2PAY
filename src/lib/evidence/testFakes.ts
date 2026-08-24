@@ -3,7 +3,7 @@ import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { InMemoryPersonalProfileRepository } from "@/lib/auth/testFakes";
 import { InMemoryDocumentStorage } from "@/lib/documents/testFakes";
-import { InMemoryIdentityVerificationRecordRepository } from "@/lib/profiles/testFakes";
+import { InMemoryIdentityVerificationRecordRepository, createTestAdminRoleServiceForProfiles } from "@/lib/profiles/testFakes";
 import { VerificationService } from "@/lib/profiles/verificationService";
 import { BasicFileValidator } from "./fileValidator";
 import { EvidenceService } from "./evidenceService";
@@ -125,6 +125,7 @@ export function createTestEvidenceWitnessContext() {
     { isEmailVerified: async () => true },
     agreementCtx.profileOwners,
     new AuditService(new InMemoryAuditEventRepositoryForEvidence()),
+    createTestAdminRoleServiceForProfiles(),
   );
 
   const evidenceService = new EvidenceService({

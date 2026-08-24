@@ -18,6 +18,7 @@ function toRecord(row: Row): NotificationEventRecord {
     dedupeKey: row.dedupeKey,
     relatedPaymentAttemptId: row.relatedPaymentAttemptId,
     relatedAgreementId: row.relatedAgreementId,
+    relatedInvitationId: row.relatedInvitationId,
     payload: row.payload as Record<string, unknown>,
     failureReason: row.failureReason,
     attemptCount: row.attemptCount,
@@ -39,6 +40,7 @@ export class DrizzleNotificationEventRepository implements NotificationEventRepo
     dedupeKey: string | null;
     relatedPaymentAttemptId: string | null;
     relatedAgreementId: string | null;
+    relatedInvitationId: string | null;
     payload: Record<string, unknown>;
   }): Promise<NotificationEventRecord> {
     const db = getDb();

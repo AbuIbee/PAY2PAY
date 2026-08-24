@@ -41,9 +41,10 @@ describe("GET /api/account/dashboard", () => {
   it("returns account data for an authenticated user", async () => {
     const response = await handlerFor()(getWithCookie(token));
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { email: string; mfaEnrolled: boolean };
+    const body = (await response.json()) as { email: string; mfaEnrolled: boolean; publicReference: string };
     expect(body.email).toBe(email);
     expect(body.mfaEnrolled).toBe(false);
+    expect(body.publicReference).toMatch(/^P2P-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$/);
   });
 
   // Sprint 2 required test: "Unauthorized user cannot access protected dashboard data."
