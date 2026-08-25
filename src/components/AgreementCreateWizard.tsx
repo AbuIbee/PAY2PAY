@@ -150,7 +150,16 @@ export function AgreementCreateWizard() {
       );
       const other = body.participants.find((p) => p !== mine);
       if (!mine || !other) {
+        // Next: Terms regression (production follow-up): isEligibleForNewAgreement only checks the
+        // relationship's own status/currentAgreementId — it has no way to know, at listing time,
+        // whether a second participant genuinely exists. A relationship that reached this list but
+        // turns out to be participant-incomplete (data drift, not a normal lifecycle state) must not
+        // stay selectable as a dead end with no way forward: drop it from the picker and reset the
+        // selection, same as an already-excluded invited/terminal connection, so "no eligible
+        // connections" (not a stuck, disabled Next: Terms) is what's left for the user to act on.
         setPartyError("This connection doesn't have two confirmed participants yet.");
+        setRelationships((prev) => prev.filter((r) => r.id !== relationshipId));
+        setSelectedRelationshipId("");
         return;
       }
       setMyRole(mine.role);
