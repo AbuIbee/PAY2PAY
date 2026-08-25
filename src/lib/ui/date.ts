@@ -22,6 +22,23 @@ export function formatDateTime(value: Date | string | number): string {
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(toDate(value));
 }
 
+/**
+ * Agreement Lifecycle V2 UAT (Defect 5 — first-payment-date calendar must not allow a past date):
+ * today's date as YYYY-MM-DD in the *browser's* local time zone, for a date `<input>`'s `min`
+ * attribute — deliberately client-side (`new Date()` with no args reads the visiting user's own
+ * system clock/timezone), never a server-computed UTC date, which would be off by a day for anyone
+ * west of UTC around midnight. Server-side validation (AgreementService.createDraft/
+ * AgreementInvitationService.createInvitation) uses the existing, separately-established
+ * schedule.ts `isPastDate` UTC-day-granularity check — same margin already accepted everywhere else
+ * this codebase validates a date server-side.
+ */
+export function todayLocalIsoDate(now: Date = new Date()): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 /** Coarse "time ago" for lists (notifications, audit trails) where exact precision is less useful than recency. */
 export function formatRelative(value: Date | string | number, now: Date = new Date()): string {
   const date = toDate(value);

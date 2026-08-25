@@ -12,7 +12,7 @@ function baseTerms(overrides: Record<string, unknown> = {}) {
     firstPaymentMinorUnits: 20_000,
     installmentAmountMinorUnits: 20_000,
     frequency: "monthly" as const,
-    firstPaymentDate: "2026-02-01",
+    firstPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
     feeAllocation: "debtor_pays" as const,
     earlyPayoffTerms: "No penalty for early payoff.",
     hardshipRules: "Borrower may request hardship relief; no interest or penalty added.",
@@ -102,8 +102,10 @@ describe("Sprint 18A relationship scenarios", () => {
     await ctx.agreementService.submitDraft(created.agreement.id, creditorUserId);
     await ctx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
     await ctx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
-    await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
+    // Agreement Lifecycle V2: the creditor created this agreement's draft (createDraft's
+    // creatorUserId above), so the debtor is the counterparty and must sign first.
     await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId);
+    await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
     await ctx.relationshipService.syncFromAgreement(relationship.id, creditorUserId);
 
     const check = await ctx.relationshipService.checkActivationPrerequisites(relationship.id);
@@ -456,8 +458,10 @@ describe("Sprint 18A relationship scenarios", () => {
     await ctx.agreementService.submitDraft(created.agreement.id, creditorUserId);
     await ctx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
     await ctx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
-    await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
+    // Agreement Lifecycle V2: the creditor created this agreement's draft, so the debtor is the
+    // counterparty and must sign first.
     await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId);
+    await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
 
     const check = await ctx.relationshipService.checkActivationPrerequisites(relationship.id);
     expect(check.eligible).toBe(false);

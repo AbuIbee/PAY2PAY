@@ -7,6 +7,8 @@ import { useEffect, useState } from "react";
 interface NavLinkItem {
   href: string;
   label: string;
+  /** Organization Features: Coming Soon treatment — renders as a non-interactive, clearly-labeled row instead of a working link. */
+  comingSoon?: boolean;
 }
 
 /**
@@ -49,10 +51,15 @@ const ACCOUNT_LINKS: NavLinkItem[] = [
   { href: "/account/verification", label: "Verification" },
 ];
 
+// Organization Features: Coming Soon treatment — each of these depends on StaffService.
+// requireActiveStaff, which a real business owner cannot currently pass (no business_staff_member
+// row is ever seeded for them — see the dashboard-consistency-fix completion report for the root
+// cause). Rendered below as non-interactive "Coming Soon" rows rather than working links into a page
+// that would just 403 — never remove the underlying routes/services, only their nav entry points.
 const ORGANIZATION_LINKS: NavLinkItem[] = [
-  { href: "/organization/staff", label: "Staff" },
-  { href: "/organization/staff/roles", label: "Custom roles" },
-  { href: "/organization/approvals", label: "Approvals" },
+  { href: "/organization/staff", label: "Staff", comingSoon: true },
+  { href: "/organization/staff/roles", label: "Custom roles", comingSoon: true },
+  { href: "/organization/approvals", label: "Approvals", comingSoon: true },
 ];
 
 /**
@@ -255,16 +262,23 @@ export function AppNav() {
 
       <div className="app-nav__section">
         <span className="app-nav__section-label">Organization</span>
-        {ORGANIZATION_LINKS.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={`app-nav__link${pathname === item.href ? " app-nav__link--active" : ""}`}
-            aria-current={pathname === item.href ? "page" : undefined}
-          >
-            {item.label}
-          </Link>
-        ))}
+        {ORGANIZATION_LINKS.map((item) =>
+          item.comingSoon ? (
+            <div key={item.href} className="app-nav__link app-nav__link--disabled" aria-disabled="true">
+              <span>{item.label}</span>
+              <span className="chip chip--neutral">Coming Soon</span>
+            </div>
+          ) : (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`app-nav__link${pathname === item.href ? " app-nav__link--active" : ""}`}
+              aria-current={pathname === item.href ? "page" : undefined}
+            >
+              {item.label}
+            </Link>
+          ),
+        )}
       </div>
 
       {isAdmin && (

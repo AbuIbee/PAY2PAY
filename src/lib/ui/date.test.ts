@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, formatDateTime, formatRelative } from "./date";
+import { formatDate, formatDateTime, formatRelative, todayLocalIsoDate } from "./date";
 
 describe("formatDate", () => {
   it("formats an ISO string as a medium date", () => {
@@ -31,5 +31,25 @@ describe("formatRelative", () => {
     const now = new Date("2026-08-13T12:00:00.000Z");
     const inTwoDays = new Date("2026-08-15T12:00:00.000Z");
     expect(formatRelative(inTwoDays, now)).toMatch(/in 2 days/);
+  });
+});
+
+describe("todayLocalIsoDate", () => {
+  it("Agreement Lifecycle V2 UAT (Defect 5): formats a given Date as YYYY-MM-DD using its own local getters (never UTC), so a date <input>'s min matches the browser's own calendar day", () => {
+    // 11pm on Jan 5th, local time — a naive toISOString()-based implementation would report Jan 6th
+    // for any timezone east of UTC, or the wrong day generally depending on offset; this must not.
+    const local = new Date(2026, 0, 5, 23, 0, 0);
+    expect(todayLocalIsoDate(local)).toBe("2026-01-05");
+  });
+
+  it("zero-pads single-digit months and days", () => {
+    const local = new Date(2026, 2, 4);
+    expect(todayLocalIsoDate(local)).toBe("2026-03-04");
+  });
+
+  it("defaults to the current moment when called with no argument", () => {
+    const before = new Date();
+    const result = todayLocalIsoDate();
+    expect(result).toBe(todayLocalIsoDate(before));
   });
 });

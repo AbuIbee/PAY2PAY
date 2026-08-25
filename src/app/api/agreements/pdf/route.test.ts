@@ -48,8 +48,9 @@ describe("GET /api/agreements/pdf", () => {
     await markFullyVerified(sigCtx, "personal", creditorProfileId);
     await markFullyVerified(sigCtx, "personal", debtorProfileId);
 
+    // Agreement Lifecycle V2: debtor originates so the creditor is the counterparty and may sign first.
     const created = await sigCtx.agreementCtx.agreementService.createDraft({
-      creatorUserId: creditorUserId,
+      creatorUserId: debtorUserId,
       creditor: { kind: "personal", id: creditorProfileId },
       debtor: { kind: "personal", id: debtorProfileId },
       category: "personal_loan",
@@ -59,7 +60,7 @@ describe("GET /api/agreements/pdf", () => {
       firstPaymentMinorUnits: 5_000,
       installmentAmountMinorUnits: 5_000,
       frequency: "monthly",
-      firstPaymentDate: "2026-02-01",
+      firstPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
       feeAllocation: "split_evenly",
       earlyPayoffTerms: "none",
       hardshipRules: "none",

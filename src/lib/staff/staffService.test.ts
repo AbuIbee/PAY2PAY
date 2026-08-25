@@ -27,6 +27,27 @@ describe("StaffService", () => {
     ).resolves.toMatchObject({ role: "owner" });
   });
 
+  describe("countActiveStaff — dashboard consistency fix", () => {
+    it("returns the correct count even for a caller with no business_staff_member row of their own (a real business owner, in practice) — unlike listStaff, this never requires active-staff authorization", async () => {
+      const freshBusinessId = randomUUID();
+      // Deliberately no seeded staff row for anyone on this business — mirrors a real business
+      // created via BusinessProfileService.createBusinessProfile, which never seeds an owner row.
+      expect(await ctx.staffService.countActiveStaff(freshBusinessId)).toBe(0);
+    });
+
+    it("counts every active staff member accurately once some exist", async () => {
+      const memberUserId = randomUUID();
+      ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: memberUserId, role: "manager" });
+      // BUSINESS_A already has the owner seeded in beforeEach, plus this new manager = 2.
+      expect(await ctx.staffService.countActiveStaff(BUSINESS_A)).toBe(2);
+    });
+
+    it("by contrast, listStaff DOES still require active-staff authorization (unchanged) — proves countActiveStaff is a deliberate, narrow exception, not a broader authorization regression", async () => {
+      const nonStaffUserId = randomUUID();
+      await expect(ctx.staffService.listStaff(BUSINESS_A, nonStaffUserId)).rejects.toThrow(ForbiddenError);
+    });
+  });
+
   it("manager permissions: has day-to-day capabilities but not manage_staff or forgive_principal", async () => {
     const managerUserId = randomUUID();
     ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: managerUserId, role: "manager" });

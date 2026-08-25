@@ -47,7 +47,7 @@ describe("ConnectionsList", () => {
     await waitFor(() => expect(screen.getByText("Active")).toBeInTheDocument());
   });
 
-  it("shows an empty state with an invite call-to-action when there are no connections", async () => {
+  it("Agreement Lifecycle V2 UAT (Defect 4): shows an empty state pointing to the Agreement workflow (not /connections/invite) when there are no connections", async () => {
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/api/profiles/active")) {
@@ -62,6 +62,8 @@ describe("ConnectionsList", () => {
 
     render(<ConnectionsList />);
     await waitFor(() => expect(screen.getByText(/no connections yet/i)).toBeInTheDocument());
-    expect(screen.getByRole("link", { name: /invite a counterparty/i })).toBeInTheDocument();
+    const cta = screen.getByRole("link", { name: /propose a payment plan/i });
+    expect(cta).toBeInTheDocument();
+    expect(cta).toHaveAttribute("href", "/agreements/invite");
   });
 });

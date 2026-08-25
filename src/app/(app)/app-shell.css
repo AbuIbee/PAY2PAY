@@ -46,6 +46,9 @@
 }
 .app-nav__link:hover { background: rgba(255,255,255,0.06); color: var(--white); }
 .app-nav__link--active { background: rgba(255,255,255,0.1); color: var(--white); }
+/* Organization Features: Coming Soon treatment — deliberately no hover/active state (never implies it's clickable); the "Coming Soon" chip is the primary signal, not color/opacity alone. */
+.app-nav__link--disabled { cursor: default; opacity: 0.75; }
+.app-nav__link--disabled:hover { background: none; color: #c6d8d4; }
 .app-nav__badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.3rem; height: 1.3rem; padding: 0 0.35rem; border-radius: 999px; background: var(--gold); color: var(--forest-950); font-size: 0.65rem; font-weight: 800; }
 .app-nav__footer { margin-top: auto; display: grid; gap: var(--space-2); }
 .app-nav__user { padding: var(--space-3); border-radius: 0.75rem; background: rgba(255,255,255,0.06); }

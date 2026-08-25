@@ -2,8 +2,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { withErrorHandling } from "@/lib/api-handler";
 import type { AgreementService } from "@/lib/agreements/agreementService";
+import type { AgreementProgressService } from "@/lib/agreements/agreementProgressService";
 import { createAgreementSchema } from "@/lib/agreements/validation";
 import { getAgreementService } from "@/lib/agreements/getAgreementService";
+import { getAgreementProgressService } from "@/lib/agreements/getAgreementProgressService";
 import type { AuthService } from "@/lib/auth/authService";
 import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
@@ -45,7 +47,11 @@ const listQuerySchema = z.object({
   profileId: z.string().uuid(),
 });
 
-export function createAgreementListHandler(authService: AuthService, agreementService: AgreementService) {
+export function createAgreementListHandler(
+  authService: AuthService,
+  agreementService: AgreementService,
+  progressService: AgreementProgressService,
+) {
   return async function handleList(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
     const url = new URL(request.url);
@@ -64,14 +70,28 @@ export function createAgreementListHandler(authService: AuthService, agreementSe
       { limit: pageParams.limit + 1, offset: pageParams.offset },
     );
     const page = toPage(agreements, pageParams);
+    // Agreement workflow remediation (Problem 3 — "the user should not have to open every agreement
+    // to determine whether something requires attention"): reuses the exact same
+    // AgreementProgressService every agreement detail page uses — never a second, competing
+    // computation of "what's next" for the list view. UX-only: a single agreement's progress read
+    // failing degrades that one card to no attention label rather than failing the whole list.
+    const attention = await Promise.all(
+      page.items.map((a) =>
+        progressService
+          .getProgress(a.id, userId)
+          .then((p) => p.primaryAction.label)
+          .catch(() => null),
+      ),
+    );
     return NextResponse.json(
       {
-        agreements: page.items.map((a) => ({
+        agreements: page.items.map((a, index) => ({
           id: a.id,
           status: a.status,
           currency: a.currency,
           relationshipShape: agreementService.relationshipShape(a),
           createdAt: a.createdAt,
+          attentionLabel: attention[index] ?? null,
         })),
         limit: page.limit,
         offset: page.offset,
@@ -87,7 +107,7 @@ async function handleCreate(request: NextRequest): Promise<Response> {
 }
 
 async function handleList(request: NextRequest): Promise<Response> {
-  return createAgreementListHandler(getAuthService(), getAgreementService())(request);
+  return createAgreementListHandler(getAuthService(), getAgreementService(), getAgreementProgressService())(request);
 }
 
 export const POST = withErrorHandling("agreement_create", handleCreate);

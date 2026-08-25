@@ -270,6 +270,13 @@ export class AuthService {
     return publicReference;
   }
 
+  /** Simple Resend Verification Email (Agreement Lifecycle V2 UAT): lets the dashboard show/hide the resend action without widening validateSession's own minimal Pick<UserAccountRecord, ...> return type used by every protected route. */
+  async isEmailVerified(userId: string): Promise<boolean> {
+    const user = await this.users.findById(userId);
+    if (!user) throw new ValidationError("User not found.");
+    return !!user.emailVerifiedAt;
+  }
+
   /** Authenticated resend — deliberately not a public email-lookup endpoint (avoids an enumeration surface). */
   async resendVerificationEmail(userId: string): Promise<void> {
     const user = await this.users.findById(userId);

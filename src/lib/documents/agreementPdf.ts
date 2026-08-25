@@ -45,6 +45,14 @@ export interface AgreementPdfInput {
   // so the static "no amendment has been made" claim isn't printed on a version that resulted from
   // one (PRSprint 11 integration — see this file's own "Amendment terms" section below).
   amendmentReference: { versionNumber: number; parentVersionNumber: number } | null;
+  /**
+   * Agreement Lifecycle V2 (Part 6 — Print/PDF): true only once both parties have signed this exact
+   * version — "a negotiation version must never be misrepresented as an executed agreement." When
+   * false, a prominent DRAFT banner is drawn and the document is generated fresh on every request
+   * (never stored) rather than the one-time, immutable executed PDF SignatureService.generatePdf
+   * produces — "never generate the executed PDF from newer mutable agreement data."
+   */
+  isFullyExecuted: boolean;
 }
 
 function formatDollars(minorUnits: number, currency: string): string {
@@ -94,6 +102,12 @@ export async function generateAgreementPdf(input: AgreementPdfInput): Promise<Ui
   }
 
   heading("PAY2PAY Repayment Agreement");
+  if (!input.isFullyExecuted) {
+    page.drawText("DRAFT — NOT YET FULLY EXECUTED", { x: MARGIN, y, size: 12, font: boldFont, color: rgb(0.7, 0.1, 0.1) });
+    y -= LINE_HEIGHT;
+    line("This version has not been signed by both parties and is not yet a binding agreement.");
+    y -= LINE_HEIGHT / 2;
+  }
   line(`Agreement number: ${input.agreementId}`);
   line(`Agreement version: ${input.versionNumber}`);
   line(`Document/execution ID: ${input.executionId}`);
@@ -170,11 +184,18 @@ export async function generateAgreementPdf(input: AgreementPdfInput): Promise<Ui
   y -= LINE_HEIGHT / 2;
 
   heading("Signatures");
-  for (const signature of input.signatures) {
-    line(
-      `${signature.role}: ${signature.signerDisplayName} — signed ${signature.signedAt.toISOString()} ` +
-        `(${signature.authMethod})`,
-    );
+  if (input.signatures.length === 0) {
+    line("Not yet signed by either party.");
+  } else {
+    for (const signature of input.signatures) {
+      line(
+        `${signature.role}: ${signature.signerDisplayName} — signed ${signature.signedAt.toISOString()} ` +
+          `(${signature.authMethod})`,
+      );
+    }
+    if (!input.isFullyExecuted) {
+      line("Awaiting the remaining party's signature.");
+    }
   }
   y -= LINE_HEIGHT / 2;
 

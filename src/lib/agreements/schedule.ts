@@ -44,6 +44,21 @@ function formatIsoDate(year: number, month: number, day: number): string {
 }
 
 /**
+ * Whether `isoDate` is strictly before "today" — compared as whole UTC calendar days (never local
+ * wall-clock getters, matching this module's own date-math convention), so this reads the same
+ * regardless of the server process's or caller's local time zone. `nowMs` defaults to `Date.now()`
+ * but is exposed so callers (and tests) can pin "today" explicitly.
+ */
+export function isPastDate(isoDate: string, nowMs: number = Date.now()): boolean {
+  const due = parseIsoDate(isoDate);
+  const dueDateMs = Date.UTC(due.year, due.month - 1, due.day);
+  const todayIso = new Date(nowMs).toISOString().slice(0, 10);
+  const today = parseIsoDate(todayIso);
+  const todayMs = Date.UTC(today.year, today.month - 1, today.day);
+  return dueDateMs < todayMs;
+}
+
+/**
  * Deterministic date math with no floating-point/timezone ambiguity — all arithmetic happens on
  * plain (year, month, day) integers via Date.UTC, never on a wall-clock `Date` read back with
  * local-timezone getters. Monthly addition clamps to the target month's actual last day (e.g. Jan

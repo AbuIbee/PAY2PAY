@@ -127,8 +127,8 @@ export function ConnectionsInvitations() {
           <div className="empty-state">
             <h3>No open invitations</h3>
             <p>Invitations you send that haven&apos;t been accepted or declined will appear here.</p>
-            <Link href="/connections/invite" className="button button--primary">
-              Invite a counterparty
+            <Link href="/agreements/invite" className="button button--primary">
+              Propose a payment plan
             </Link>
           </div>
         )}

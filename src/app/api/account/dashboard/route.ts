@@ -21,7 +21,10 @@ export function createDashboardHandler(authService: AuthService, mfaService: Mfa
     // Section K (closed-beta remediation): the account settings page's own display of the
     // user-facing "P2P-XXXXXXXX" reference, generated lazily for a pre-existing row that has none.
     const publicReference = await authService.ensurePublicReference(userId);
-    return NextResponse.json({ email, mfaEnrolled, publicReference }, { status: 200 });
+    // Simple Resend Verification Email (Agreement Lifecycle V2 UAT): lets the dashboard show the
+    // "Resend verification email" action only while it's actually relevant.
+    const emailVerified = await authService.isEmailVerified(userId);
+    return NextResponse.json({ email, mfaEnrolled, publicReference, emailVerified }, { status: 200 });
   };
 }
 

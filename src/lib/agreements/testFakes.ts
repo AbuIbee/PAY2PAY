@@ -67,6 +67,7 @@ export class InMemoryAgreementRepository implements AgreementRepository {
       status: "draft",
       country: "US",
       currentVersionId: null,
+      relationshipId: null,
       createdAt: new Date(),
       closedAt: null,
       ...input,
@@ -87,6 +88,11 @@ export class InMemoryAgreementRepository implements AgreementRepository {
   async setCurrentVersionId(id: string, versionId: string): Promise<void> {
     const record = this.byId.get(id);
     if (record) record.currentVersionId = versionId;
+  }
+
+  /** Agreement Lifecycle V2 UAT (Defect 3 — Delete Draft): mirrors DrizzleAgreementRepository.deleteDraft's own contract (irreversible, called only after AgreementService.deleteDraft's own checks). */
+  async deleteDraft(id: string): Promise<void> {
+    this.byId.delete(id);
   }
 
   async listForProfile(profileKind: ProfileKind, profileId: string, pageParams?: PageParams): Promise<AgreementRecord[]> {
@@ -162,6 +168,14 @@ export class InMemoryAgreementVersionRepository implements AgreementVersionRepos
     if (record) {
       record.documentHash = input.documentHash;
       record.signedAt = input.signedAt;
+    }
+  }
+
+  async clearSignatures(id: string): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) {
+      record.creditorSignedAt = null;
+      record.debtorSignedAt = null;
     }
   }
 }

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ValidationError } from "@/lib/errors";
 import { withErrorHandling } from "./api-handler";
 
@@ -46,5 +46,42 @@ describe("withErrorHandling", () => {
     const first = (await (await handler()).json()) as { correlationId: string };
     const second = (await (await handler()).json()) as { correlationId: string };
     expect(first.correlationId).not.toBe(second.correlationId);
+  });
+
+  it("Agreement Lifecycle V2 UAT (Send secure invitation 'Unexpected error occurred'): logs error.cause server-side — a wrapped driver/ORM error's own .message (e.g. drizzle's 'Failed query: ...') hides the real underlying failure otherwise", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const handler = withErrorHandling("test_route", async () => {
+        const outer = new Error("Failed query: insert into ...");
+        outer.cause = Object.assign(new Error('invalid input syntax for type uuid: ""'), { code: "22P02" });
+        throw outer;
+      });
+      await handler();
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const logged = JSON.parse(consoleErrorSpy.mock.calls[0]?.[0] as string) as {
+        causeName?: string;
+        causeMessage?: string;
+        causeCode?: string;
+      };
+      expect(logged.causeMessage).toBe('invalid input syntax for type uuid: ""');
+      expect(logged.causeCode).toBe("22P02");
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("never logs a cause field when the error has none (no undefined noise in the log line)", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const handler = withErrorHandling("test_route", async () => {
+        throw new Error("plain failure, no cause");
+      });
+      await handler();
+      const logged = JSON.parse(consoleErrorSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+      expect("causeMessage" in logged).toBe(false);
+      expect("cause" in logged).toBe(false);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });

@@ -51,6 +51,16 @@ const serverEnvSchema = z.object({
   // app refuses to serve any request that touches getServerEnv() at all) —
   // matching AUDIT_HASH_SECRET/AUTH_PASSWORD_PEPPER's existing "throw a clear
   // error rather than silently degrade" precedent in this same file.
+  //
+  // Agreement Lifecycle V2 UAT (invitation-email-points-to-localhost defect):
+  // an *unconfigured* per-branch Vercel Preview deployment (no explicit APP_URL
+  // override for that specific branch) has APP_ENV default to "development", so
+  // the superRefine below never fired, and this field's own localhost default
+  // silently won — every invitation/notification link from that preview pointed
+  // at http://localhost:3000, unreachable for a real recipient. Fixed in
+  // parseServerEnv below: when APP_URL isn't explicitly set, fall back to
+  // Vercel's own auto-injected VERCEL_URL (present on every Vercel deployment,
+  // preview or production) before ever reaching this field's localhost default.
   APP_URL: z.string().url().default("http://localhost:3000"),
   // Sprint 6 (docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md): Supabase Storage
   // credentials for the private signed-agreement-PDF bucket. Optional at the environment-schema
@@ -185,11 +195,19 @@ export class EnvironmentValidationError extends Error {
  * variables, so this lets that integration work without requiring a
  * hand-added duplicate `DATABASE_URL` variable in the Vercel dashboard.
  * `DATABASE_URL` still wins when both are set.
+ *
+ * `APP_URL` gets the same "fill in from what the platform already gives us" treatment: if it isn't
+ * explicitly set but `VERCEL_URL` is (Vercel auto-injects this — the unique hostname of the current
+ * deployment — into every deployment, preview or production, with no manual configuration), links
+ * resolve to that real, reachable deployment origin instead of silently falling through to this
+ * field's own "http://localhost:3000" default. An explicit `APP_URL` (e.g. production's custom
+ * domain) still always wins over both `VERCEL_URL` and the localhost default.
  */
 export function parseServerEnv(raw: Record<string, string | undefined>): ServerEnv {
   const normalized = {
     ...raw,
     DATABASE_URL: raw.DATABASE_URL ?? raw.POSTGRES_URL,
+    APP_URL: raw.APP_URL ?? (raw.VERCEL_URL ? `https://${raw.VERCEL_URL}` : undefined),
   };
   const result = serverEnvSchema.safeParse(normalized);
   if (!result.success) {

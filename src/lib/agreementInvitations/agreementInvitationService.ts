@@ -2,6 +2,7 @@ import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
 import type { AgreementService, DraftTermsInput, PartyRole } from "@/lib/agreements/agreementService";
 import { buildTerms } from "@/lib/agreements/agreementService";
+import { isPastDate } from "@/lib/agreements/schedule";
 import { generateOpaqueToken, hashOpaqueToken } from "@/lib/auth/token";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { normalizeE164 } from "@/lib/phone";
@@ -231,6 +232,11 @@ export class AgreementInvitationService {
     // computes the schedule preview — never persisted separately (see this class's own doc
     // comment), just used here to fail fast on obviously-invalid terms before storing anything.
     buildTerms(input.terms);
+    // Agreement Lifecycle V2 UAT (Defect 5 — date picker must not allow a past first payment date):
+    // creation-time only, mirrors AgreementService.createDraft's identical new check.
+    if (isPastDate(input.terms.firstPaymentDate)) {
+      throw new ValidationError("First payment date cannot be in the past.");
+    }
 
     const { frequency, feeAllocation, ...proposedTerms } = input.terms;
 

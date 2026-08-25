@@ -313,6 +313,11 @@ export class RelationshipService {
     let nextStatus: RelationshipStatus | null = null;
     if (detail.version.signedAt) {
       nextStatus = "signed";
+    } else if (detail.agreement.status === "mutually_canceled") {
+      // Agreement Lifecycle V2 UAT (Defect 3): without this branch, "mutually_canceled" (not in
+      // preSignatureStatuses) would fall into the catch-all below and incorrectly sync the
+      // relationship to "agreement_ready" — implying it's ready to sign, the opposite of cancelled.
+      nextStatus = "cancelled";
     } else if (detail.agreement.status === "awaiting_signatures") {
       nextStatus = "signature_pending";
     } else if (!preSignatureStatuses.includes(detail.agreement.status)) {

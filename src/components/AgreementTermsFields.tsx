@@ -2,6 +2,7 @@
 
 import { useId } from "react";
 import { feeAllocationLabel } from "@/lib/ui/statusLabels";
+import { todayLocalIsoDate } from "@/lib/ui/date";
 
 export interface AgreementTermsFormValues {
   category: string;
@@ -164,9 +165,15 @@ export function AgreementTermsFields({
             id={`${idPrefix}-first-date`}
             type="date"
             value={values.firstPaymentDate}
+            min={todayLocalIsoDate()}
             onChange={(event) => onChange({ firstPaymentDate: event.target.value })}
             required
           />
+          {values.firstPaymentDate && values.firstPaymentDate < todayLocalIsoDate() && (
+            <p className="field-error" role="alert">
+              First payment date cannot be in the past.
+            </p>
+          )}
         </div>
       </div>
 

@@ -48,6 +48,18 @@ describe("AgreementInvitationService", () => {
     } as Parameters<typeof ctx.invitationService.createInvitation>[0]);
   }
 
+  describe("Agreement Lifecycle V2 UAT (Defect 5 — first-payment-date calendar must not allow a past date)", () => {
+    it("rejects a first payment date in the past, server-side, even if a manipulated client submits one", async () => {
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      await expect(createInvitation({ terms: baseTerms({ firstPaymentDate: yesterday }) })).rejects.toThrow(ValidationError);
+    });
+
+    it("accepts today as the first payment date (never stricter than 'not in the past')", async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      await expect(createInvitation({ terms: baseTerms({ firstPaymentDate: today }) })).resolves.toBeTruthy();
+    });
+  });
+
   describe("Scenario A — new individual recipient", () => {
     it("full flow: create -> anonymous review -> accept as a new user -> durable participant created -> token cannot be reused", async () => {
       const { invitation, rawToken } = await createInvitation();

@@ -3,8 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgreementDetail } from "./AgreementDetail";
 
+const mockRouterPush = vi.fn();
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams({ id: "agreement-1" }),
+  useRouter: () => ({ push: mockRouterPush }),
 }));
 
 const BASE_TERMS = {
@@ -65,6 +67,7 @@ function mockFetchByUrl(handlers: Record<string, { status?: number; body: unknow
 describe("AgreementDetail", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    mockRouterPush.mockClear();
   });
 
   it("falls back to the restricted witness view when the party-only detail fetch returns 403", async () => {
@@ -212,6 +215,106 @@ describe("AgreementDetail", () => {
     await waitFor(() => expect(screen.getByText(/verify it's you/i)).toBeInTheDocument());
   });
 
+  it("Problem 2 remediation: shows an inline schedule-revision form (not a dead-end error) when signing fails because the first payment date has already passed, and successfully proposing a new date returns to normal signing", async () => {
+    const user = userEvent.setup();
+    let revised = false;
+    const staleDetailBody = detailBody({
+      status: "awaiting_signatures",
+      version: { ...detailBody().version, creditorSignedAt: null, debtorSignedAt: null },
+    });
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/agreements/detail")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => staleDetailBody });
+      }
+      if (url.includes("/api/agreements/sign")) {
+        return revised
+          ? Promise.resolve({ ok: true, status: 200, json: async () => ({ status: "awaiting_signatures", signatureEventId: "sig-1", pdfGenerated: false }) })
+          : Promise.resolve({
+              ok: false,
+              status: 400,
+              json: async () => ({
+                status: "error",
+                code: "SCHEDULE_REVISION_REQUIRED",
+                message: "The proposed first payment date (2026-01-01) has already passed. This agreement's schedule must be revised before it can be signed.",
+              }),
+            });
+      }
+      if (url.includes("/api/agreements/revise-first-payment-date")) {
+        revised = true;
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ status: "awaiting_signatures", firstPaymentDate: "2026-12-01" }) });
+      }
+      const match = Object.entries({
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+      }).find(([key]) => url.includes(key));
+      if (!match) return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => match[1].body });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AgreementDetail />);
+    const signButton = await screen.findByRole("button", { name: /sign this agreement/i });
+    await user.click(signButton);
+
+    const dateInput = await screen.findByLabelText(/new first payment date/i);
+    expect(screen.getByText(/already passed/i)).toBeInTheDocument();
+    // A dead-end error would have no further control — this must offer a real, actionable form instead.
+    expect(screen.queryByRole("button", { name: /^sign this agreement$/i })).not.toBeInTheDocument();
+
+    await user.type(dateInput, "2026-12-01");
+    await user.click(screen.getByRole("button", { name: /propose new date/i }));
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/revise-first-payment-date"))).toBe(true),
+    );
+    // Back to the normal signing state — the revision form is gone and the page reloaded successfully.
+    await waitFor(() => expect(screen.getByRole("button", { name: /^sign this agreement$/i })).toBeInTheDocument());
+  });
+
+  it("Problem 3 remediation: renders the Agreement Progress panel from /api/agreements/progress", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "awaiting_signatures" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/progress": {
+          body: {
+            agreementId: "agreement-1",
+            myRole: "creditor",
+            status: "awaiting_signatures",
+            steps: [
+              { key: "details_terms", label: "Agreement details & terms", status: "complete", description: "x", cta: null },
+              { key: "acceptance", label: "Review & acceptance", status: "complete", description: "x", cta: null },
+              { key: "payment_method", label: "Payment method", status: "optional", description: "Not required for this agreement.", cta: null },
+              { key: "identity_verification", label: "Identity verification", status: "complete", description: "x", cta: null },
+              { key: "signatures", label: "Review & signatures", status: "action_required", description: "Review the agreement and sign to continue.", cta: null },
+              { key: "active", label: "Agreement active", status: "not_started", description: "x", cta: null },
+            ],
+            primaryAction: { label: "Review and sign", description: "Review the agreement and sign to continue.", cta: null },
+            actionableForMeCount: 1,
+          },
+        },
+      }),
+    );
+
+    render(<AgreementDetail />);
+
+    expect(await screen.findByText("Agreement progress")).toBeInTheDocument();
+    expect(screen.getByText("Step 5 — Review & signatures")).toBeInTheDocument();
+  });
+
   it("PRSprint 25: rejecting an agreement requires confirmation — declining the dialog never calls the API", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn().mockImplementation(mockFetchByUrl({
@@ -234,5 +337,125 @@ describe("AgreementDetail", () => {
 
     expect(confirmSpy).toHaveBeenCalled();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/decide"))).toBe(false);
+  });
+
+  it("Agreement Lifecycle V2: the debtor can request changes (not just acknowledge) at awaiting_debtor_acknowledgment, via the shared revise-terms path", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockImplementation(
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "awaiting_debtor_acknowledgment" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/revise-terms": { body: { status: "awaiting_creditor_acceptance", versionNumber: 2 } },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AgreementDetail />);
+    const requestChangesButton = await screen.findByRole("button", { name: /request changes/i });
+    await user.click(requestChangesButton);
+
+    const reasonField = await screen.findByLabelText(/why are you requesting changes/i);
+    await user.type(reasonField, "I can only afford smaller installments.");
+    await user.click(screen.getByRole("button", { name: /send requested changes/i }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/revise-terms"))).toBe(true);
+    });
+  });
+
+  it("Agreement Lifecycle V2 UAT (Defect 3): Delete Draft asks for confirmation, then navigates to /agreements on success", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockImplementation(
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "draft" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/delete-draft": { body: { status: "deleted" } },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<AgreementDetail />);
+    const deleteButton = await screen.findByRole("button", { name: /^delete draft$/i });
+    await user.click(deleteButton);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => expect(mockRouterPush).toHaveBeenCalledWith("/agreements"));
+    confirmSpy.mockRestore();
+  });
+
+  it("Agreement Lifecycle V2 UAT (Defect 3): declining the Delete Draft confirmation dialog never calls the API", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockImplementation(
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "draft" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<AgreementDetail />);
+    const deleteButton = await screen.findByRole("button", { name: /^delete draft$/i });
+    await user.click(deleteButton);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/delete-draft"))).toBe(false);
+    expect(mockRouterPush).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("Agreement Lifecycle V2 UAT (Defect 3): Cancel Agreement requires a reason and shows the exact required explanatory text before confirming", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockImplementation(
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "awaiting_signatures" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/cancel": { body: { status: "mutually_canceled" } },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AgreementDetail />);
+    const openButton = await screen.findByRole("button", { name: /^cancel agreement$/i });
+    await user.click(openButton);
+
+    expect(screen.getByText(/this agreement has not been fully executed/i)).toBeInTheDocument();
+    expect(screen.getByText(/historical record will be retained/i)).toBeInTheDocument();
+
+    const confirmButton = screen.getByRole("button", { name: /confirm cancellation/i });
+    expect(confirmButton).toBeDisabled(); // no reason entered yet
+
+    await user.type(screen.getByLabelText(/reason \(required\)/i), "Changed my mind.");
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/cancel"))).toBe(true);
+    });
   });
 });

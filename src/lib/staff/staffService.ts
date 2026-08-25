@@ -168,6 +168,22 @@ export class StaffService {
     return this.staffMembers.listActiveByBusiness(businessProfileId);
   }
 
+  /**
+   * Dashboard consistency fix: a plain count, deliberately with NO active-staff authorization check
+   * of its own. Business profile creation has never seeded an "owner" business_staff_member row for
+   * the creating user (a separate, pre-existing gap, flagged in this iteration's completion report —
+   * out of scope to fix broadly here), so a business owner viewing their own dashboard has no
+   * staff_member row and fails requireActiveStaff every time, which previously made the whole
+   * GET /api/dashboard/business request 403 before returning any summary data at all. Safe to expose
+   * without its own gate here because the only caller (the business dashboard route) has *already*
+   * independently verified the caller owns this exact business via
+   * ProfileAccessService.resolveActiveProfile before this is ever reached.
+   */
+  async countActiveStaff(businessProfileId: string): Promise<number> {
+    const staff = await this.staffMembers.listActiveByBusiness(businessProfileId);
+    return staff.length;
+  }
+
   async listCustomRoles(businessProfileId: string, requestingUserId: string): Promise<CustomRoleRecord[]> {
     await this.requireActiveStaff(businessProfileId, requestingUserId);
     return this.customRoles.listByBusiness(businessProfileId);

@@ -73,7 +73,15 @@ describe("GET /api/dashboard/business", () => {
     );
   }
 
-  /** Every dashboard call authorizes both through ProfileAccessService (ownership) and AgreementService's own active-staff check — an owner is always active staff (Sprint 4), so both are seeded together here. */
+  /**
+   * Dashboard consistency fix: this helper previously ALSO manually seeded an "owner"
+   * business_staff_member row (via agreementCtx.staffCtx.staffMembers.insert), on the stated
+   * assumption "an owner is always active staff (Sprint 4)" — that assumption does not actually hold
+   * in production: BusinessProfileService.createBusinessProfile has never seeded any such row, so
+   * every real business owner has none. Seeding it here masked exactly the bug the Product Owner hit
+   * live (GET /api/dashboard/business 403ing for a real owner). This helper now mirrors real
+   * createBusinessProfile behavior — no staff row — matching every actual production business.
+   */
   async function seedOwnedBusiness() {
     const business = await accessCtx.businessProfiles.insert({
       ownerUserId: userId,
@@ -85,17 +93,16 @@ describe("GET /api/dashboard/business", () => {
       state: "CA",
     });
     agreementCtx.profileOwners.set("business", business.id, userId);
-    await agreementCtx.staffCtx.staffMembers.insert({
-      businessProfileId: business.id,
-      userId,
-      role: "owner",
-      customRoleId: null,
-      isAuthorizedRepresentative: true,
-    });
     return business;
   }
 
-  it("returns real empty-state data for an owned business", async () => {
+  it("dashboard consistency fix (root cause): returns 200 for a real business owner who has no business_staff_member row — this is the exact live regression (previously 403'd via staffService.listStaff's active-staff requirement, silently blanking the entire summary section)", async () => {
+    const business = await seedOwnedBusiness();
+    const response = await handlerFor()(getWithCookie(business.id, token));
+    expect(response.status).toBe(200);
+  });
+
+  it("returns real empty-state data for an owned business, including the upcomingPayments/requests fields the Personal dashboard also has", async () => {
     const business = await seedOwnedBusiness();
     const response = await handlerFor()(getWithCookie(business.id, token));
     expect(response.status).toBe(200);
@@ -105,8 +112,24 @@ describe("GET /api/dashboard/business", () => {
       payablesMinorUnits: 0,
       agreements: [],
       customers: [],
-      staffCount: 1,
+      upcomingPayments: [],
+      requests: [],
+      staffCount: 0,
     });
+  });
+
+  it("staffCount still correctly reflects an explicitly-added staff member, even though the owner themself has no row", async () => {
+    const business = await seedOwnedBusiness();
+    await agreementCtx.staffCtx.staffMembers.insert({
+      businessProfileId: business.id,
+      userId: "some-other-staff-user",
+      role: "manager",
+      customRoleId: null,
+      isAuthorizedRepresentative: false,
+    });
+    const response = await handlerFor()(getWithCookie(business.id, token));
+    const body = (await response.json()) as { staffCount: number };
+    expect(body.staffCount).toBe(1);
   });
 
   it("rejects a business the caller does not own with 403", async () => {

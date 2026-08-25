@@ -366,6 +366,9 @@ export class SignatureService {
       amendmentReference: detail.version.isOriginal
         ? null
         : { versionNumber: detail.version.versionNumber, parentVersionNumber: detail.version.versionNumber - 1 },
+      // Only ever called from generatePdf, itself only called once signResult.bothSigned — this is
+      // always the immutable, fully-executed record.
+      isFullyExecuted: true,
     });
     const documentHash = hashPdfContent(bytes);
     const path = `${detail.agreement.id}/${versionId}.pdf`;
@@ -407,5 +410,51 @@ export class SignatureService {
       throw new ValidationError("No signed PDF exists yet for this agreement.");
     }
     return this.deps.storage.createSignedUrl(pdf.storagePath, SIGNED_PDF_URL_TTL_SECONDS);
+  }
+
+  /**
+   * Agreement Lifecycle V2 (Part 6 — Print/PDF): a Draft/Review-state preview, generated fresh on
+   * every call (never stored — this is a live view of mutable current terms, unlike the immutable
+   * executed PDF above) so an authorized party can always print/save the exact current proposed
+   * version. Same authorization as every other agreement read (getAgreement's authorizeEitherParty).
+   * Reuses generateAgreementPdf directly with `isFullyExecuted: false` and whatever signature(s)
+   * already exist on the current version (a partial signature, mid-signing, is legitimate to show).
+   */
+  async getPreviewPdf(agreementId: string, actingUserId: string): Promise<Uint8Array> {
+    const detail = await this.deps.agreementService.getAgreement(agreementId, actingUserId);
+    const [creditorName, debtorName] = await Promise.all([
+      this.deps.profileDisplay.getDisplayName(detail.agreement.creditorProfileKind, detail.agreement.creditorProfileId),
+      this.deps.profileDisplay.getDisplayName(detail.agreement.debtorProfileKind, detail.agreement.debtorProfileId),
+    ]);
+    const signatureEvents = await this.deps.signatureEvents.listForVersion(detail.version.id);
+    const signatures = await Promise.all(
+      signatureEvents.map(async (event) => ({
+        role: event.signerRole,
+        signerDisplayName: await this.deps.profileDisplay.getDisplayName(event.signerProfileKind, event.signerProfileId),
+        signedAt: event.signedAt,
+        authMethod: event.authMethod,
+      })),
+    );
+
+    return generateAgreementPdf({
+      agreementId: detail.agreement.id,
+      versionNumber: detail.version.versionNumber,
+      relationshipShape: this.deps.agreementService.relationshipShape(detail.agreement),
+      currency: detail.agreement.currency,
+      creditor: { kind: detail.agreement.creditorProfileKind, id: detail.agreement.creditorProfileId, displayName: creditorName },
+      debtor: { kind: detail.agreement.debtorProfileKind, id: detail.agreement.debtorProfileId, displayName: debtorName },
+      terms: detail.version.terms,
+      frequency: detail.version.frequency,
+      feeAllocation: detail.version.feeAllocation,
+      schedule: detail.schedule,
+      signatures,
+      documentHash: detail.version.documentHash ?? computeVersionHash(detail.version),
+      executionId: randomUUID(),
+      generatedAt: new Date(),
+      amendmentReference: detail.version.isOriginal
+        ? null
+        : { versionNumber: detail.version.versionNumber, parentVersionNumber: detail.version.versionNumber - 1 },
+      isFullyExecuted: !!detail.version.signedAt,
+    });
   }
 }

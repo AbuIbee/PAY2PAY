@@ -1,6 +1,6 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
   AgreementTermsFields,
@@ -8,8 +8,10 @@ import {
   type AgreementTermsFormValues,
 } from "./AgreementTermsFields";
 import { StepUpChallenge } from "./StepUpChallenge";
+import { AgreementProgress } from "./AgreementProgress";
+import type { AgreementProgress as AgreementProgressData } from "@/lib/agreements/agreementProgressService";
 import type { SelectableProfile } from "./ProfileSwitcher";
-import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
+import { apiFetch, ApiError, isScheduleRevisionRequired } from "@/lib/ui/apiFetch";
 import { useStepUpGuardedAction } from "@/lib/ui/useStepUpGuardedAction";
 import { formatMoney } from "@/lib/ui/money";
 import { formatDate, formatDateTime } from "@/lib/ui/date";
@@ -143,6 +145,34 @@ interface DisputeItem {
   createdAt: string;
 }
 
+/** Agreement Lifecycle V2 (Part 5 — version history): mirrors AgreementService.listVersionHistory's own shape. */
+interface VersionHistoryItem {
+  id: string;
+  versionNumber: number;
+  parentVersionId: string | null;
+  isOriginal: boolean;
+  producedBy: string;
+  creditorSignedAt: string | null;
+  debtorSignedAt: string | null;
+  signedAt: string | null;
+  createdAt: string;
+}
+
+function versionProducedByLabel(producedBy: string): string {
+  switch (producedBy) {
+    case "initial_signing":
+      return "Original terms";
+    case "debtor_revision":
+      return "Revised by debtor";
+    case "creditor_revision":
+      return "Revised by creditor";
+    case "first_payment_date_revision":
+      return "First payment date revised";
+    default:
+      return producedBy.replace(/_/g, " ");
+  }
+}
+
 type LoadStatus = "loading" | "ready" | "witness" | "unauthorized" | "error";
 type ActionStatus = "idle" | "working" | "error";
 
@@ -165,6 +195,7 @@ function Chip({ label, tone }: { label: string; tone: ChipTone }) {
  * (not a party) falls back to the restricted witness view (Sprint 7) instead of the full detail.
  */
 export function AgreementDetail() {
+  const router = useRouter();
   const agreementId = useSearchParams().get("id");
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [data, setData] = useState<AgreementDetailData | null>(null);
@@ -175,6 +206,12 @@ export function AgreementDetail() {
   const [showCounterForm, setShowCounterForm] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [counterTerms, setCounterTerms] = useState<AgreementTermsFormValues | null>(null);
+  const [showDebtorReviseForm, setShowDebtorReviseForm] = useState(false);
+  const [debtorReviseTerms, setDebtorReviseTerms] = useState<AgreementTermsFormValues | null>(null);
+  const [debtorReviseReason, setDebtorReviseReason] = useState("");
+  const [showCancelForm, setShowCancelForm] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [deleteStatus, setDeleteStatus] = useState<"idle" | "working" | "error">("idle");
 
   const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
   const [witnesses, setWitnesses] = useState<WitnessItem[]>([]);
@@ -183,6 +220,8 @@ export function AgreementDetail() {
   const [settlements, setSettlements] = useState<SettlementItem[]>([]);
   const [disputes, setDisputes] = useState<DisputeItem[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [progress, setProgress] = useState<AgreementProgressData | null>(null);
+  const [versions, setVersions] = useState<VersionHistoryItem[]>([]);
 
   const load = useCallback(async () => {
     if (!agreementId) {
@@ -196,13 +235,20 @@ export function AgreementDetail() {
       ]);
       setData(detail);
       setActive(activeProfile);
-      const [evidenceRes, witnessRes, amendmentRes, partialRes, settlementRes, disputeRes] = await Promise.all([
+      // Agreement workflow remediation (Problem 3): UX-only — a failure here degrades to no progress
+      // panel rather than blocking the rest of the page, matching this file's own established
+      // tolerant-fetch pattern for evidence/witnesses/amendments/etc. below.
+      apiFetch<AgreementProgressData>(`/api/agreements/progress?id=${encodeURIComponent(agreementId)}`)
+        .then((body) => setProgress(Array.isArray(body?.steps) ? body : null))
+        .catch(() => setProgress(null));
+      const [evidenceRes, witnessRes, amendmentRes, partialRes, settlementRes, disputeRes, versionsRes] = await Promise.all([
         apiFetch<{ evidence: EvidenceItem[] }>(`/api/agreements/evidence?agreementId=${agreementId}`).catch(() => ({ evidence: [] })),
         apiFetch<{ witnesses: WitnessItem[] }>(`/api/agreements/witnesses?agreementId=${agreementId}`).catch(() => ({ witnesses: [] })),
         apiFetch<{ amendments: AmendmentItem[] }>(`/api/agreements/amendments?agreementId=${agreementId}`).catch(() => ({ amendments: [] })),
         apiFetch<{ requests: PartialPaymentItem[] }>(`/api/agreements/partial-payments?agreementId=${agreementId}`).catch(() => ({ requests: [] })),
         apiFetch<{ proposals: SettlementItem[] }>(`/api/agreements/settlements?agreementId=${agreementId}`).catch(() => ({ proposals: [] })),
         apiFetch<{ disputes: DisputeItem[] }>(`/api/agreements/disputes?agreementId=${agreementId}`).catch(() => ({ disputes: [] })),
+        apiFetch<{ versions: VersionHistoryItem[] }>(`/api/agreements/versions?agreementId=${agreementId}`).catch(() => ({ versions: [] })),
       ]);
       setEvidence(evidenceRes.evidence);
       setWitnesses(witnessRes.witnesses);
@@ -210,6 +256,7 @@ export function AgreementDetail() {
       setPartialPayments(partialRes.requests);
       setSettlements(settlementRes.proposals);
       setDisputes(disputeRes.disputes);
+      setVersions(versionsRes.versions ?? []);
       setLoadStatus("ready");
     } catch (error) {
       if (error instanceof ApiError && error.httpStatus === 401) {
@@ -255,6 +302,20 @@ export function AgreementDetail() {
     } catch (error) {
       setActionError(error instanceof ApiError ? error.message : "That action could not be completed.");
       setActionStatus("error");
+    }
+  }
+
+  async function handleDeleteDraft() {
+    if (!data) return;
+    if (!window.confirm("Delete this draft agreement? It has not been sent or executed. This cannot be undone.")) return;
+    setDeleteStatus("working");
+    setActionError(null);
+    try {
+      await apiFetch("/api/agreements/delete-draft", { method: "POST", body: JSON.stringify({ agreementId: data.id }) });
+      router.push("/agreements");
+    } catch (error) {
+      setActionError(error instanceof ApiError ? error.message : "This draft could not be deleted.");
+      setDeleteStatus("error");
     }
   }
 
@@ -379,6 +440,14 @@ export function AgreementDetail() {
           {terms.numberOfInstallments} remaining, final payment {formatMoney(terms.finalPaymentMinorUnits)})
         </p>
         <p style={{ margin: 0 }}>Fee allocation: {feeAllocationLabel(data.version.feeAllocation)}</p>
+        <button
+          type="button"
+          className="button button--ghost"
+          style={{ marginTop: "0.75rem", marginRight: "0.5rem" }}
+          onClick={() => window.open(`/api/agreements/pdf/preview?id=${data.id}`, "_blank", "noopener,noreferrer")}
+        >
+          Print / PDF
+        </button>
         {isSignedOrLater && (
           <button type="button" className="button button--ghost" style={{ marginTop: "0.75rem" }} onClick={() => void handleViewPdf()}>
             View signed PDF
@@ -392,6 +461,8 @@ export function AgreementDetail() {
           </p>
         )}
       </div>
+
+      {progress && <AgreementProgress data={progress} />}
 
       <div className="table-wrap">
         <table className="table">
@@ -414,6 +485,49 @@ export function AgreementDetail() {
         </table>
       </div>
 
+      {versions.length > 1 && (
+        <div className="card">
+          <div className="card__header">
+            <h3>Version history</h3>
+          </div>
+          <div className="table-wrap table-wrap--responsive-cards">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Version</th>
+                  <th>Change</th>
+                  <th>Created</th>
+                  <th>Signatures</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...versions]
+                  .sort((a, b) => b.versionNumber - a.versionNumber)
+                  .map((v) => (
+                    <tr key={v.id}>
+                      <td data-label="Version">
+                        v{v.versionNumber}
+                        {v.id === data.version.id ? " (current)" : ""}
+                      </td>
+                      <td data-label="Change">{versionProducedByLabel(v.producedBy)}</td>
+                      <td data-label="Created">{formatDateTime(v.createdAt)}</td>
+                      <td data-label="Signatures">
+                        {v.signedAt ? (
+                          "Fully signed"
+                        ) : v.creditorSignedAt || v.debtorSignedAt ? (
+                          "Partially signed"
+                        ) : (
+                          "Not signed"
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {actionError && (
         <p className="form-status form-status--error" role="alert">
           {actionError}
@@ -430,10 +544,57 @@ export function AgreementDetail() {
           >
             Submit for debtor acknowledgment
           </button>
+          <button type="button" className="button button--ghost" disabled={deleteStatus === "working"} onClick={() => void handleDeleteDraft()}>
+            {deleteStatus === "working" ? "Deleting…" : "Delete Draft"}
+          </button>
         </div>
       )}
 
-      {data.status === "awaiting_debtor_acknowledgment" && (
+      {["awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance", "awaiting_signatures"].includes(data.status) && !showCancelForm && (
+        <div style={{ marginTop: "-0.5rem" }}>
+          <button type="button" className="button button--ghost" onClick={() => setShowCancelForm(true)}>
+            Cancel Agreement
+          </button>
+        </div>
+      )}
+
+      {["awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance", "awaiting_signatures"].includes(data.status) && showCancelForm && (
+        <div className="card" role="alertdialog" aria-labelledby="cancel-agreement-heading">
+          <h3 id="cancel-agreement-heading" style={{ marginTop: 0 }}>
+            Cancel this agreement?
+          </h3>
+          <p style={{ color: "var(--ink-soft)" }}>
+            This agreement has not been fully executed. Cancelling it will prevent either party from continuing the
+            current agreement. The historical record will be retained.
+          </p>
+          <div className="field">
+            <label htmlFor="cancel-reason">Reason (required)</label>
+            <input id="cancel-reason" value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} />
+          </div>
+          <div className="hero__actions">
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={actionStatus === "working" || !cancelReason.trim()}
+              onClick={() =>
+                void runAction(() =>
+                  apiFetch("/api/agreements/cancel", { method: "POST", body: JSON.stringify({ agreementId: data.id, reason: cancelReason }) }),
+                ).then(() => {
+                  setShowCancelForm(false);
+                  setCancelReason("");
+                })
+              }
+            >
+              Confirm Cancellation
+            </button>
+            <button type="button" className="button button--ghost" onClick={() => setShowCancelForm(false)}>
+              Never mind
+            </button>
+          </div>
+        </div>
+      )}
+
+      {data.status === "awaiting_debtor_acknowledgment" && !showDebtorReviseForm && (
         <div className="hero__actions">
           <button
             type="button"
@@ -443,7 +604,69 @@ export function AgreementDetail() {
           >
             I acknowledge this obligation is owed
           </button>
+          <button
+            type="button"
+            className="button button--ghost"
+            onClick={() => {
+              setDebtorReviseTerms({
+                category: terms.category,
+                description: terms.description,
+                originalAmountMinorUnits: terms.originalAmountMinorUnits,
+                previousPaymentsMinorUnits: terms.previousPaymentsMinorUnits,
+                firstPaymentMinorUnits: terms.firstPaymentMinorUnits,
+                installmentAmountMinorUnits: terms.installmentAmountMinorUnits,
+                frequency: data.version.frequency,
+                firstPaymentDate: terms.firstPaymentDate,
+                feeAllocation: data.version.feeAllocation,
+                earlyPayoffTerms: terms.earlyPayoffTerms,
+                hardshipRules: terms.hardshipRules,
+                partialPaymentRules: terms.partialPaymentRules,
+                settlementRules: terms.settlementRules,
+                disputeProcedure: terms.disputeProcedure,
+              });
+              setShowDebtorReviseForm(true);
+            }}
+          >
+            Request changes
+          </button>
         </div>
+      )}
+
+      {data.status === "awaiting_debtor_acknowledgment" && showDebtorReviseForm && debtorReviseTerms && (
+        <form
+          className="card"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void runAction(() =>
+              apiFetch("/api/agreements/revise-terms", {
+                method: "POST",
+                body: JSON.stringify({ agreementId: data.id, newTerms: debtorReviseTerms, reason: debtorReviseReason }),
+              }),
+            ).then(() => {
+              setShowDebtorReviseForm(false);
+              setDebtorReviseReason("");
+            });
+          }}
+        >
+          <div className="field">
+            <label htmlFor="debtor-revise-reason">Why are you requesting changes?</label>
+            <input
+              id="debtor-revise-reason"
+              value={debtorReviseReason}
+              onChange={(event) => setDebtorReviseReason(event.target.value)}
+              required
+            />
+          </div>
+          <AgreementTermsFields values={debtorReviseTerms} onChange={(patch) => setDebtorReviseTerms((v) => (v ? { ...v, ...patch } : v))} />
+          <div className="hero__actions">
+            <button type="submit" className="button button--primary" disabled={actionStatus === "working" || !debtorReviseReason.trim()}>
+              Send requested changes
+            </button>
+            <button type="button" className="button button--ghost" onClick={() => setShowDebtorReviseForm(false)}>
+              Cancel
+            </button>
+          </div>
+        </form>
       )}
 
       {data.status === "awaiting_creditor_acceptance" && !showCounterForm && (
@@ -527,10 +750,12 @@ export function AgreementDetail() {
 
       {data.status === "awaiting_signatures" && myRole && (
         <SignaturePanel
+          agreementId={data.id}
           myRole={myRole}
           creditorSignedAt={data.version.creditorSignedAt}
           debtorSignedAt={data.version.debtorSignedAt}
           signAction={signAction}
+          onRevised={() => void load()}
         />
       )}
 
@@ -586,19 +811,49 @@ function WitnessAttestPanel({ agreementId, onDone }: { agreementId: string; onDo
 }
 
 function SignaturePanel({
+  agreementId,
   myRole,
   creditorSignedAt,
   debtorSignedAt,
   signAction,
+  onRevised,
 }: {
+  agreementId: string;
   myRole: "creditor" | "debtor";
   creditorSignedAt: string | null;
   debtorSignedAt: string | null;
   signAction: ReturnType<typeof useStepUpGuardedAction<["totp" | "sms"], unknown>>;
+  onRevised: () => void;
 }) {
   const alreadySigned = myRole === "creditor" ? !!creditorSignedAt : !!debtorSignedAt;
   const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  // Agreement workflow remediation (Problem 2): set instead of `error` when signing fails because the
+  // proposed first payment date has already passed — see ScheduleRevisionRequiredError. Replaces the
+  // dead-end error text with the actual required resolution: propose a new date, right here.
+  const [needsScheduleRevision, setNeedsScheduleRevision] = useState(false);
+  const [newDate, setNewDate] = useState("");
+  const [revising, setRevising] = useState(false);
+  const [reviseError, setReviseError] = useState<string | null>(null);
+
+  async function handleRevise(event: React.FormEvent) {
+    event.preventDefault();
+    if (!newDate) return;
+    setRevising(true);
+    setReviseError(null);
+    try {
+      await apiFetch("/api/agreements/revise-first-payment-date", {
+        method: "POST",
+        body: JSON.stringify({ agreementId, newFirstPaymentDate: newDate }),
+      });
+      setNeedsScheduleRevision(false);
+      onRevised();
+    } catch (e) {
+      setReviseError(e instanceof ApiError ? e.message : "Could not update the schedule. Please try again.");
+    } finally {
+      setRevising(false);
+    }
+  }
 
   return (
     <div className="card">
@@ -608,34 +863,82 @@ function SignaturePanel({
       <p style={{ margin: 0 }}>Creditor signed: {creditorSignedAt ? formatDateTime(creditorSignedAt) : "not yet"}</p>
       <p style={{ margin: "0.25rem 0 0" }}>Debtor signed: {debtorSignedAt ? formatDateTime(debtorSignedAt) : "not yet"}</p>
       <p className="form-status" style={{ marginTop: "0.75rem" }}>
-        By signing, you consent to this agreement&apos;s terms as shown above. A fresh verification challenge is required.
+        By signing, you consent to this agreement&apos;s terms as shown above. A fresh verification challenge may be required.
       </p>
-      {error && (
-        <p className="field-error" role="alert">
-          {error}
-        </p>
-      )}
-      {!alreadySigned ? (
-        <button
-          type="button"
-          className="button button--primary"
-          disabled={status === "working"}
-          onClick={() => {
-            setStatus("working");
-            setError(null);
-            signAction
-              .run("totp")
-              .then(() => window.location.reload())
-              .catch((e: unknown) => {
-                setError(e instanceof ApiError ? e.message : "Signing failed. Please try again.");
-                setStatus("idle");
-              });
-          }}
-        >
-          {status === "working" ? "Signing…" : "Sign this agreement"}
-        </button>
+
+      {needsScheduleRevision ? (
+        <form onSubmit={(event) => void handleRevise(event)} style={{ marginTop: "0.75rem", display: "grid", gap: "0.6rem" }}>
+          <p className="field-error" role="alert" style={{ margin: 0 }}>
+            {error}
+          </p>
+          <div className="field">
+            <label htmlFor="revised-first-payment-date">New first payment date</label>
+            <input
+              id="revised-first-payment-date"
+              type="date"
+              required
+              value={newDate}
+              onChange={(event) => setNewDate(event.target.value)}
+            />
+          </div>
+          {reviseError && (
+            <p className="field-error" role="alert">
+              {reviseError}
+            </p>
+          )}
+          <div className="hero__actions">
+            <button type="submit" className="button button--primary" disabled={revising}>
+              {revising ? "Updating…" : "Propose new date"}
+            </button>
+          </div>
+        </form>
       ) : (
-        <p className="form-status">Waiting on the other party to sign.</p>
+        <>
+          {error && (
+            <p className="field-error" role="alert">
+              {error}
+            </p>
+          )}
+          {!alreadySigned ? (
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={status === "working"}
+              onClick={() => {
+                setStatus("working");
+                setError(null);
+                // Agreement Lifecycle V2: record the signer's *actual* enrolled MFA method as
+                // evidence, rather than always claiming "totp" regardless of what they use — a
+                // signature_event's authMethod is legally evidentiary (master spec §27), so an
+                // SMS-only signer must never be recorded as having authenticated via an
+                // authenticator app they don't have.
+                apiFetch<{ enrolled: boolean; methods: Array<"totp" | "sms"> }>("/api/auth/mfa/status")
+                  .then((mfaStatus) => mfaStatus.methods?.[0] ?? "totp")
+                  // Never let this best-effort lookup itself block signing — an unexpected shape or
+                  // a transient failure here still lets the real signing attempt proceed (falling
+                  // back to "totp"), which is exactly as good as this flow's prior, unconditional
+                  // behavior — just no longer *worse* for an SMS-only signer.
+                  .catch(() => "totp" as const)
+                  .then((authMethod) => signAction.run(authMethod))
+                  .then(() => window.location.reload())
+                  .catch((e: unknown) => {
+                    if (isScheduleRevisionRequired(e)) {
+                      setError(e.message);
+                      setNeedsScheduleRevision(true);
+                      setStatus("idle");
+                      return;
+                    }
+                    setError(e instanceof ApiError ? e.message : "Signing failed. Please try again.");
+                    setStatus("idle");
+                  });
+              }}
+            >
+              {status === "working" ? "Signing…" : "Sign this agreement"}
+            </button>
+          ) : (
+            <p className="form-status">Waiting on the other party to sign.</p>
+          )}
+        </>
       )}
       {signAction.isChallengeOpen && (
         <StepUpChallenge

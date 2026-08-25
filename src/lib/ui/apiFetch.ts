@@ -29,6 +29,13 @@ export function isStepUpRequired(error: unknown): error is ApiError {
   return error instanceof ApiError && error.code === STEP_UP_REQUIRED_CODE;
 }
 
+/** Agreement workflow remediation (Problem 2) — mirrors isStepUpRequired's identical "distinct code -> distinct guided recovery UI" pattern for ScheduleRevisionRequiredError. */
+export const SCHEDULE_REVISION_REQUIRED_CODE = "SCHEDULE_REVISION_REQUIRED";
+
+export function isScheduleRevisionRequired(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.code === SCHEDULE_REVISION_REQUIRED_CODE;
+}
+
 /**
  * Runs `request` and throws ApiError on any non-2xx response with the
  * standard error shape. Callers that need to retry after a step-up

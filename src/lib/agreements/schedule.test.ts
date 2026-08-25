@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ValidationError } from "@/lib/errors";
-import { addFrequencyInterval, computeSchedule } from "./schedule";
+import { addFrequencyInterval, computeSchedule, isPastDate } from "./schedule";
 
 describe("computeSchedule", () => {
   it("schedule arithmetic: evenly-divisible balance produces equal installments and the right count", () => {
@@ -155,5 +155,30 @@ describe("computeSchedule", () => {
         firstPaymentDate: "not-a-date",
       }),
     ).toThrow(ValidationError);
+  });
+});
+
+describe("isPastDate", () => {
+  // Fixed reference instant — Wed Aug 12 2026 (UTC) — so these assertions never depend on the real
+  // clock (agreement workflow remediation, Problem 2).
+  const NOW_MS = Date.UTC(2026, 7, 12, 15, 0, 0);
+
+  it("returns true for a date strictly before today (UTC)", () => {
+    expect(isPastDate("2026-08-11", NOW_MS)).toBe(true);
+    expect(isPastDate("2026-01-01", NOW_MS)).toBe(true);
+  });
+
+  it("returns false for today itself", () => {
+    expect(isPastDate("2026-08-12", NOW_MS)).toBe(false);
+  });
+
+  it("returns false for a future date", () => {
+    expect(isPastDate("2026-08-13", NOW_MS)).toBe(false);
+    expect(isPastDate("2027-01-01", NOW_MS)).toBe(false);
+  });
+
+  it("compares whole UTC calendar days, not exact instants — late-in-the-day 'now' still treats today as not-past", () => {
+    const lateInDay = Date.UTC(2026, 7, 12, 23, 59, 59);
+    expect(isPastDate("2026-08-12", lateInDay)).toBe(false);
   });
 });

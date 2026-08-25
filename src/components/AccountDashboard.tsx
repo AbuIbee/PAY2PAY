@@ -8,6 +8,7 @@ interface DashboardData {
   email: string;
   mfaEnrolled: boolean;
   publicReference: string;
+  emailVerified: boolean;
 }
 
 type LoadStatus = "loading" | "ready" | "unauthorized" | "error";
@@ -114,9 +115,11 @@ export function AccountDashboard() {
           <Link className="button button--ghost" href="/dashboard">
             Go to dashboard
           </Link>
-          <button type="button" className="button button--ghost" onClick={() => void handleResendVerification()}>
-            Resend verification email
-          </button>
+          {!data.emailVerified && (
+            <button type="button" className="button button--ghost" onClick={() => void handleResendVerification()}>
+              Resend verification email
+            </button>
+          )}
           <button type="button" className="button button--ghost" onClick={() => void handleLogout()}>
             Sign out
           </button>
