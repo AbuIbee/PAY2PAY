@@ -26,7 +26,47 @@ interface BusinessDashboardData {
   payablesMinorUnits: number;
   agreements: unknown[];
   customers: unknown[];
+  upcomingPayments: unknown[];
+  requests: ActionRequiredItem[];
   staffCount: number;
+}
+
+/**
+ * Dashboard consistency fix (Product Owner UAT): Personal and Business previously rendered two
+ * entirely different summary sections — different labels, different card counts, and (root cause)
+ * Business's own summary silently vanished whenever GET /api/dashboard/business 403'd (see that
+ * route's own doc comment). One shared shape, sourced from whichever dataset is active, so both
+ * contexts render the identical five-card framework — same layout, only the underlying values
+ * (and, for money, which field they come from) differ per context.
+ */
+interface DashboardSummary {
+  moneyIOweMinorUnits: number;
+  moneyOwedToMeMinorUnits: number;
+  agreementsCount: number;
+  upcomingPaymentsCount: number;
+  actionRequiredCount: number;
+}
+
+function summaryFor(active: SelectableProfile | null, personalData: PersonalDashboardData | null, businessData: BusinessDashboardData | null): DashboardSummary | null {
+  if (active?.kind === "personal" && personalData) {
+    return {
+      moneyIOweMinorUnits: personalData.moneyIOweMinorUnits,
+      moneyOwedToMeMinorUnits: personalData.moneyOwedToMeMinorUnits,
+      agreementsCount: personalData.agreements.length,
+      upcomingPaymentsCount: personalData.upcomingPayments.length,
+      actionRequiredCount: personalData.requests.length,
+    };
+  }
+  if (active?.kind === "business" && businessData) {
+    return {
+      moneyIOweMinorUnits: businessData.payablesMinorUnits,
+      moneyOwedToMeMinorUnits: businessData.receivablesMinorUnits,
+      agreementsCount: businessData.agreements.length,
+      upcomingPaymentsCount: businessData.upcomingPayments.length,
+      actionRequiredCount: businessData.requests.length,
+    };
+  }
+  return null;
 }
 
 type LoadStatus = "loading" | "ready" | "unauthorized" | "error";
@@ -211,6 +251,8 @@ export function Dashboard() {
     );
   }
 
+  const summary = summaryFor(active, personalData, businessData);
+
   return (
     <div style={{ display: "grid", gap: "2rem" }}>
       {active && <OnboardingBanner kind={active.kind} />}
@@ -220,48 +262,27 @@ export function Dashboard() {
         <BusinessProfileForm onCreated={() => void loadAll()} />
       </div>
 
-      {active?.kind === "personal" && personalData ? (
+      {summary ? (
         <div className="card-grid">
           <div className="stat-card">
             <span className="stat-card__label">Money I owe</span>
-            <span className="stat-card__value">{formatMoney(personalData.moneyIOweMinorUnits)}</span>
+            <span className="stat-card__value">{formatMoney(summary.moneyIOweMinorUnits)}</span>
           </div>
           <div className="stat-card">
             <span className="stat-card__label">Money owed to me</span>
-            <span className="stat-card__value">{formatMoney(personalData.moneyOwedToMeMinorUnits)}</span>
+            <span className="stat-card__value">{formatMoney(summary.moneyOwedToMeMinorUnits)}</span>
           </div>
           <div className="stat-card">
             <span className="stat-card__label">Agreements</span>
-            <span className="stat-card__value">{personalData.agreements.length}</span>
+            <span className="stat-card__value">{summary.agreementsCount}</span>
           </div>
           <div className="stat-card">
             <span className="stat-card__label">Upcoming payments</span>
-            <span className="stat-card__value">{personalData.upcomingPayments.length}</span>
+            <span className="stat-card__value">{summary.upcomingPaymentsCount}</span>
           </div>
           <div className="stat-card">
             <span className="stat-card__label">Action required</span>
-            <span className="stat-card__value">{personalData.requests.length}</span>
-          </div>
-        </div>
-      ) : null}
-
-      {active?.kind === "business" && businessData ? (
-        <div className="card-grid">
-          <div className="stat-card">
-            <span className="stat-card__label">Receivables</span>
-            <span className="stat-card__value">{formatMoney(businessData.receivablesMinorUnits)}</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card__label">Payables</span>
-            <span className="stat-card__value">{formatMoney(businessData.payablesMinorUnits)}</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card__label">Agreements</span>
-            <span className="stat-card__value">{businessData.agreements.length}</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-card__label">Customers</span>
-            <span className="stat-card__value">{businessData.customers.length}</span>
+            <span className="stat-card__value">{summary.actionRequiredCount}</span>
           </div>
         </div>
       ) : null}
@@ -269,13 +290,17 @@ export function Dashboard() {
       {active?.kind === "business" && businessData && (
         <p style={{ margin: 0 }}>
           <Link href="/organization/staff">Manage staff</Link> for {active.displayName} ({businessData.staffCount}{" "}
-          {businessData.staffCount === 1 ? "member" : "members"}).
+          {businessData.staffCount === 1 ? "member" : "members"}, {businessData.customers.length}{" "}
+          {businessData.customers.length === 1 ? "customer" : "customers"}).
         </p>
       )}
 
       <div>
         <h2 style={{ margin: "0 0 1rem", fontSize: "1.1rem" }}>What requires action</h2>
-        <ActionCards unreadNotifications={unreadNotifications} requests={active?.kind === "personal" ? personalData?.requests ?? null : null} />
+        <ActionCards
+          unreadNotifications={unreadNotifications}
+          requests={active?.kind === "personal" ? (personalData?.requests ?? null) : (businessData?.requests ?? null)}
+        />
       </div>
     </div>
   );

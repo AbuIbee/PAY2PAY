@@ -28,6 +28,17 @@ interface CustomerRef {
   id: string;
 }
 
+interface UpcomingPayment {
+  agreementId: string;
+  dueDate: string;
+  amountMinorUnits: number;
+}
+
+interface ActionRequiredItem {
+  agreementId: string;
+  reason: "awaiting_your_acknowledgment" | "awaiting_your_decision" | "awaiting_your_signature";
+}
+
 function customerKey(ref: CustomerRef): string {
   return `${ref.kind}:${ref.id}`;
 }
@@ -64,9 +75,12 @@ export function createBusinessDashboardHandler(
 
     const agreements = await agreementService.listAgreements(userId, { kind: "business", id: businessProfileId });
 
+    const today = new Date().toISOString().slice(0, 10);
     let receivablesMinorUnits = 0;
     let payablesMinorUnits = 0;
     const customers = new Map<string, CustomerRef>();
+    const upcomingPayments: UpcomingPayment[] = [];
+    const requests: ActionRequiredItem[] = [];
 
     for (const agreement of agreements) {
       const role = roleFor(agreement, businessProfileId);
@@ -80,10 +94,40 @@ export function createBusinessDashboardHandler(
         const balance = await balanceService.getAgreementBalance(agreement.id);
         if (role === "creditor") receivablesMinorUnits += balance.remainingBalanceMinorUnits;
         if (role === "debtor") payablesMinorUnits += balance.remainingBalanceMinorUnits;
+
+        // Dashboard consistency fix: mirrors the personal dashboard's identical "Upcoming payments"
+        // computation exactly, scoped to this business profile's own agreements.
+        const detail = await agreementService.getAgreement(agreement.id, userId);
+        for (const item of detail.schedule) {
+          if (item.dueDate >= today) {
+            upcomingPayments.push({ agreementId: agreement.id, dueDate: item.dueDate, amountMinorUnits: item.amountMinorUnits });
+          }
+        }
+        continue;
+      }
+
+      // Dashboard consistency fix: mirrors the personal dashboard's identical "Action required"
+      // computation. Deliberately does not include relationship-invitation-style items — those are a
+      // personal-to-personal connection concept, not applicable to a business acting-as context.
+      if (agreement.status === "awaiting_creditor_acceptance" && role === "creditor") {
+        requests.push({ agreementId: agreement.id, reason: "awaiting_your_decision" });
+      } else if (agreement.status === "awaiting_debtor_acknowledgment" && role === "debtor") {
+        requests.push({ agreementId: agreement.id, reason: "awaiting_your_acknowledgment" });
+      } else if (agreement.status === "awaiting_signatures") {
+        const detail = await agreementService.getAgreement(agreement.id, userId);
+        const alreadySigned = role === "debtor" ? detail.version.debtorSignedAt : detail.version.creditorSignedAt;
+        if (!alreadySigned) requests.push({ agreementId: agreement.id, reason: "awaiting_your_signature" });
       }
     }
 
-    const staff = await staffService.listStaff(businessProfileId, userId);
+    upcomingPayments.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
+    // Dashboard consistency fix: previously staffService.listStaff, which requires the caller to
+    // already have an active business_staff_member row — a business owner (the common case for a
+    // dashboard view) has never had one seeded automatically, so this 403'd before returning any
+    // summary data at all, and the entire card-grid silently disappeared client-side. countActiveStaff
+    // is a plain, ungated count — this route already independently verified ownership above.
+    const staffCount = await staffService.countActiveStaff(businessProfileId);
 
     const summaries: DashboardAgreementSummary[] = agreements.map((a) => ({ id: a.id, status: a.status }));
 
@@ -93,7 +137,9 @@ export function createBusinessDashboardHandler(
         payablesMinorUnits,
         agreements: summaries,
         customers: [...customers.values()],
-        staffCount: staff.length,
+        upcomingPayments: upcomingPayments.slice(0, 10),
+        requests,
+        staffCount,
       },
       { status: 200 },
     );
