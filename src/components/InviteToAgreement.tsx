@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
+import { todayLocalIsoDate } from "@/lib/ui/date";
 
 type Frequency = "weekly" | "biweekly" | "monthly";
 type Role = "creditor" | "debtor";
@@ -199,7 +200,14 @@ export function InviteToAgreement() {
       </div>
       <div className="field">
         <label htmlFor="invite-first-date">First payment date</label>
-        <input id="invite-first-date" type="date" required value={firstPaymentDate} onChange={(e) => setFirstPaymentDate(e.target.value)} />
+        <input
+          id="invite-first-date"
+          type="date"
+          required
+          min={todayLocalIsoDate()}
+          value={firstPaymentDate}
+          onChange={(e) => setFirstPaymentDate(e.target.value)}
+        />
       </div>
       <div className="field">
         <label htmlFor="invite-message">Message (optional)</label>

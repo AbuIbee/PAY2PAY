@@ -3,8 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgreementDetail } from "./AgreementDetail";
 
+const mockRouterPush = vi.fn();
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams({ id: "agreement-1" }),
+  useRouter: () => ({ push: mockRouterPush }),
 }));
 
 const BASE_TERMS = {
@@ -65,6 +67,7 @@ function mockFetchByUrl(handlers: Record<string, { status?: number; body: unknow
 describe("AgreementDetail", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    mockRouterPush.mockClear();
   });
 
   it("falls back to the restricted witness view when the party-only detail fetch returns 403", async () => {
@@ -363,6 +366,96 @@ describe("AgreementDetail", () => {
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/revise-terms"))).toBe(true);
+    });
+  });
+
+  it("Agreement Lifecycle V2 UAT (Defect 3): Delete Draft asks for confirmation, then navigates to /agreements on success", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockImplementation(
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "draft" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/delete-draft": { body: { status: "deleted" } },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<AgreementDetail />);
+    const deleteButton = await screen.findByRole("button", { name: /^delete draft$/i });
+    await user.click(deleteButton);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => expect(mockRouterPush).toHaveBeenCalledWith("/agreements"));
+    confirmSpy.mockRestore();
+  });
+
+  it("Agreement Lifecycle V2 UAT (Defect 3): declining the Delete Draft confirmation dialog never calls the API", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockImplementation(
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "draft" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<AgreementDetail />);
+    const deleteButton = await screen.findByRole("button", { name: /^delete draft$/i });
+    await user.click(deleteButton);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/delete-draft"))).toBe(false);
+    expect(mockRouterPush).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("Agreement Lifecycle V2 UAT (Defect 3): Cancel Agreement requires a reason and shows the exact required explanatory text before confirming", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockImplementation(
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "awaiting_signatures" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/cancel": { body: { status: "mutually_canceled" } },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AgreementDetail />);
+    const openButton = await screen.findByRole("button", { name: /^cancel agreement$/i });
+    await user.click(openButton);
+
+    expect(screen.getByText(/this agreement has not been fully executed/i)).toBeInTheDocument();
+    expect(screen.getByText(/historical record will be retained/i)).toBeInTheDocument();
+
+    const confirmButton = screen.getByRole("button", { name: /confirm cancellation/i });
+    expect(confirmButton).toBeDisabled(); // no reason entered yet
+
+    await user.type(screen.getByLabelText(/reason \(required\)/i), "Changed my mind.");
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/cancel"))).toBe(true);
     });
   });
 });

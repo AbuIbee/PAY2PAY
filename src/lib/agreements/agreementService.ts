@@ -107,6 +107,8 @@ export interface AgreementRepository {
   findById(id: string): Promise<AgreementRecord | null>;
   updateStatus(id: string, status: AgreementStatus): Promise<void>;
   setCurrentVersionId(id: string, versionId: string): Promise<void>;
+  /** Agreement Lifecycle V2 UAT (Defect 3 — Delete Draft): hard delete, only ever called after AgreementService.deleteDraft's own status/authorization checks. */
+  deleteDraft(id: string): Promise<void>;
   /**
    * PRSprint 26 (docs/prsprints/PRSPRINT_26_SEARCH_FILTER_PAGINATION_RECORD_MANAGEMENT.md):
    * `pageParams` is optional so every pre-existing caller (tests, any future admin/batch tooling)
@@ -377,6 +379,14 @@ export class AgreementService {
     }
 
     const { terms, schedule } = buildTerms(input);
+    // Agreement Lifecycle V2 UAT (Defect 5 — date picker must not allow a past first payment date):
+    // creation-time only. Deliberately does not touch reviseTermsBeforeSignature/amendments/
+    // acceptPlan — an already-created draft that ages past its proposed date remains the existing,
+    // deliberately-preserved stale-date-at-sign-time mechanism's job (see signAgreementWithEvidence's
+    // own isPastDate check), not this one.
+    if (isPastDate(terms.firstPaymentDate)) {
+      throw new ValidationError("First payment date cannot be in the past.");
+    }
 
     const agreement = await this.deps.agreements.insert({
       creditorProfileKind: input.creditor.kind,
@@ -418,6 +428,62 @@ export class AgreementService {
     });
 
     return { agreement: { ...agreement, currentVersionId: version.id }, version, schedule };
+  }
+
+  /**
+   * Agreement Lifecycle V2 UAT (Defect 3 — Delete Draft): a true, irreversible hard delete, only
+   * ever available while the agreement is still an unsent, unsigned Draft — never transmitted to
+   * the counterparty, no signatures, no payments, no contractual acceptance. Once an agreement
+   * leaves "draft" (submitDraft), this is no longer available; cancelAgreement is the corresponding
+   * action for a sent-but-unexecuted agreement, which preserves history instead of erasing it.
+   * Originator-only (mirrors createDraft's own authorization: whichever party the creator is
+   * authorized for).
+   */
+  async deleteDraft(agreementId: string, actingUserId: string): Promise<void> {
+    const agreement = await this.requireAgreement(agreementId);
+    this.requireStatus(agreement, "draft");
+    const originatorRole = await this.resolvePartyRole(agreementId, agreement.createdByUserId);
+    await this.authorizeAsRole(agreement, originatorRole, actingUserId, "create_agreement");
+    await this.deps.agreements.deleteDraft(agreementId);
+  }
+
+  /**
+   * Agreement Lifecycle V2 UAT (Defect 3 — Cancel/Withdraw): for an agreement already sent to the
+   * counterparty but not yet Fully Executed — preserves the full audit/version history (never
+   * erases anything; mutually_canceled is a terminal status like any other, not a deletion). Either
+   * party may cancel while the agreement is still pre-execution: at this stage neither party has a
+   * completed contract to be protected from the other unilaterally walking away, mirroring ordinary
+   * pre-signature contract negotiation. Every subsequent lifecycle action (submitDraft/
+   * acknowledgeDebt/creditorDecide/reviseTermsBeforeSignature/signAgreementWithEvidence) already
+   * gates on an exact expected status, so simply leaving the agreement in "mutually_canceled"
+   * automatically blocks all of them with no further changes needed — see each of those methods'
+   * own status guard.
+   */
+  async cancelAgreement(agreementId: string, actingUserId: string, reason: string): Promise<AgreementWithDetail> {
+    if (!reason.trim()) {
+      throw new ValidationError("A reason is required to cancel this agreement.");
+    }
+    const agreement = await this.requireAgreement(agreementId);
+    const role = await this.authorizeEitherParty(agreement, actingUserId, null);
+    const cancellableStatuses: AgreementStatus[] = ["awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance", "awaiting_signatures"];
+    if (!cancellableStatuses.includes(agreement.status)) {
+      throw new ValidationError(
+        `This agreement can no longer be cancelled this way — it is "${agreement.status}". A draft may be deleted instead; a fully executed agreement has its own dispute/settlement lifecycle.`,
+      );
+    }
+    // Captured before the status write below — some repository implementations (e.g. the in-memory
+    // test fake) mutate the same object `agreement` already points to, which would otherwise make
+    // `agreement.status` read back as "mutually_canceled" instead of the real prior status.
+    const previousStatus = agreement.status;
+    const versionIdAtCancellation = agreement.currentVersionId;
+    await this.deps.agreements.updateStatus(agreementId, "mutually_canceled");
+    await this.recordAudit(agreementId, actingUserId, "agreement_cancelled", {
+      cancelledByRole: role,
+      previousStatus,
+      versionId: versionIdAtCancellation,
+      reason,
+    });
+    return this.getAgreement(agreementId, actingUserId);
   }
 
   async submitDraft(agreementId: string, actingUserId: string): Promise<void> {

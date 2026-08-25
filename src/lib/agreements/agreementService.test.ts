@@ -430,6 +430,133 @@ describe("AgreementService", () => {
     });
   });
 
+  describe("Agreement Lifecycle V2 UAT (Defect 3 — Delete Draft / Cancel Agreement)", () => {
+    async function createTwoPartyDraft(overrides: Partial<DraftTermsInput> = {}) {
+      const creditorUserId = randomUUID();
+      const debtorUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      const debtorProfileId = randomUUID();
+      ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+      ctx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+      const created = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(overrides),
+      });
+      return { agreementId: created.agreement.id, creditorUserId, debtorUserId, creditorProfileId, debtorProfileId };
+    }
+
+    describe("deleteDraft", () => {
+      it("the originator can delete their own unsent draft", async () => {
+        const { agreementId, creditorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.deleteDraft(agreementId, creditorUserId);
+        expect(await ctx.agreements.findById(agreementId)).toBeNull();
+      });
+
+      it("rejects a non-originator party (the counterparty did not create this draft)", async () => {
+        const { agreementId, debtorUserId } = await createTwoPartyDraft();
+        await expect(ctx.agreementService.deleteDraft(agreementId, debtorUserId)).rejects.toThrow(ForbiddenError);
+        expect(await ctx.agreements.findById(agreementId)).not.toBeNull();
+      });
+
+      it("rejects a complete stranger", async () => {
+        const { agreementId } = await createTwoPartyDraft();
+        await expect(ctx.agreementService.deleteDraft(agreementId, randomUUID())).rejects.toThrow(ForbiddenError);
+      });
+
+      it("rejects deletion once the draft has been submitted (no longer 'draft')", async () => {
+        const { agreementId, creditorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+        await expect(ctx.agreementService.deleteDraft(agreementId, creditorUserId)).rejects.toThrow(ValidationError);
+        expect(await ctx.agreements.findById(agreementId)).not.toBeNull();
+      });
+    });
+
+    describe("cancelAgreement", () => {
+      it("either party can cancel while awaiting the debtor's acknowledgment", async () => {
+        const { agreementId, creditorUserId, debtorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+        const result = await ctx.agreementService.cancelAgreement(agreementId, debtorUserId, "Changed my mind.");
+        expect(result.agreement.status).toBe("mutually_canceled");
+      });
+
+      it("either party can cancel while awaiting the creditor's acceptance", async () => {
+        const { agreementId, creditorUserId, debtorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+        await ctx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
+        const result = await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "No longer needed.");
+        expect(result.agreement.status).toBe("mutually_canceled");
+      });
+
+      it("either party can cancel while awaiting signatures, before either has signed", async () => {
+        const { agreementId, creditorUserId, debtorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+        await ctx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
+        await ctx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" });
+        const result = await ctx.agreementService.cancelAgreement(agreementId, debtorUserId, "Plans changed.");
+        expect(result.agreement.status).toBe("mutually_canceled");
+      });
+
+      it("cancellation blocks every subsequent lifecycle action — signing, submitting, revising", async () => {
+        const { agreementId, creditorUserId, debtorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+        await ctx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
+        await ctx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" });
+        await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "No longer needed.");
+
+        await expect(ctx.agreementService.signAgreement(agreementId, debtorUserId)).rejects.toThrow(ValidationError);
+        await expect(
+          ctx.agreementService.reviseTermsBeforeSignature({ agreementId, actingUserId: debtorUserId, newTerms: baseTerms(), reason: "test" }),
+        ).rejects.toThrow(ValidationError);
+      });
+
+      it("rejects cancelling a still-unsent draft (use deleteDraft instead)", async () => {
+        const { agreementId, creditorUserId } = await createTwoPartyDraft();
+        await expect(ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test")).rejects.toThrow(ValidationError);
+      });
+
+      it("rejects cancelling once the agreement is fully signed (has its own settlement/dispute lifecycle)", async () => {
+        const { agreementId, creditorUserId, debtorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+        await ctx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
+        await ctx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" });
+        await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+        await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+        await expect(ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test")).rejects.toThrow(ValidationError);
+      });
+
+      it("rejects a complete stranger", async () => {
+        const { agreementId, creditorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+        await expect(ctx.agreementService.cancelAgreement(agreementId, randomUUID(), "test")).rejects.toThrow(ForbiddenError);
+      });
+
+      it("rejects an empty reason", async () => {
+        const { agreementId, creditorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+        await expect(ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "   ")).rejects.toThrow(ValidationError);
+      });
+
+      it("preserves audit history: records who cancelled, when, the prior status, and the version at time of cancellation", async () => {
+        const { agreementId, creditorUserId } = await createTwoPartyDraft();
+        await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+        const before = await ctx.agreements.findById(agreementId);
+        await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "No longer needed.");
+
+        const event = ctx.auditRepo.events.find((e) => e.agreementId === agreementId && e.action === "agreement_cancelled");
+        expect(event).toBeTruthy();
+        expect(event?.actorUserId).toBe(creditorUserId);
+        expect(event?.newValue).toMatchObject({
+          cancelledByRole: "creditor",
+          previousStatus: "awaiting_debtor_acknowledgment",
+          versionId: before?.currentVersionId,
+          reason: "No longer needed.",
+        });
+      });
+    });
+  });
+
   describe("required-field validation", () => {
     it("rejects a draft missing a required text field", async () => {
       const creditorUserId = randomUUID();
@@ -461,6 +588,42 @@ describe("AgreementService", () => {
         }),
       ).rejects.toThrow(ValidationError);
     });
+
+    it("Agreement Lifecycle V2 UAT (Defect 5): rejects a first payment date in the past, server-side, even if a manipulated client submits one", async () => {
+      const creditorUserId = randomUUID();
+      const debtorUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      const debtorProfileId = randomUUID();
+      ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+      ctx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      await expect(
+        ctx.agreementService.createDraft({
+          creatorUserId: creditorUserId,
+          creditor: { kind: "personal", id: creditorProfileId },
+          debtor: { kind: "personal", id: debtorProfileId },
+          ...baseTerms({ firstPaymentDate: yesterday }),
+        }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("Agreement Lifecycle V2 UAT (Defect 5): accepts today as the first payment date (never stricter than 'not in the past')", async () => {
+      const creditorUserId = randomUUID();
+      const debtorUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      const debtorProfileId = randomUUID();
+      ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+      ctx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+      const today = new Date().toISOString().slice(0, 10);
+      await expect(
+        ctx.agreementService.createDraft({
+          creatorUserId: creditorUserId,
+          creditor: { kind: "personal", id: creditorProfileId },
+          debtor: { kind: "personal", id: debtorProfileId },
+          ...baseTerms({ firstPaymentDate: today }),
+        }),
+      ).resolves.toBeTruthy();
+    });
   });
 
   /**
@@ -477,12 +640,22 @@ describe("AgreementService", () => {
       const debtorProfileId = randomUUID();
       ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
       ctx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+      // Agreement Lifecycle V2 UAT (Defect 5): createDraft now rejects a past firstPaymentDate
+      // server-side, so a literal past-date override can no longer flow through createDraft itself —
+      // create with a valid (future) date, then mutate the version directly to simulate the date
+      // having lapsed since creation, exactly like this suite's own "date lapses between the two
+      // signatures" test already does below.
+      const { firstPaymentDate: staleDateOverride, ...restOverrides } = overrides;
       const created = await ctx.agreementService.createDraft({
         creatorUserId: creditorUserId,
         creditor: { kind: "personal", id: creditorProfileId },
         debtor: { kind: "personal", id: debtorProfileId },
-        ...baseTerms(overrides),
+        ...baseTerms(restOverrides),
       });
+      if (staleDateOverride) {
+        const version = await ctx.versions.findById(created.agreement.currentVersionId!);
+        version!.terms = { ...version!.terms, firstPaymentDate: staleDateOverride };
+      }
       await ctx.agreementService.submitDraft(created.agreement.id, creditorUserId);
       await ctx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
       await ctx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });

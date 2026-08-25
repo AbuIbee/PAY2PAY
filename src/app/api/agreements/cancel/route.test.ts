@@ -5,13 +5,9 @@ import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
-import { createAgreementReviseFirstPaymentDateHandler } from "./route";
+import { createAgreementCancelHandler } from "./route";
 
-/**
- * Agreement workflow remediation (Problem 2) — route-level coverage for the resolution path a
- * ScheduleRevisionRequiredError is supposed to lead to. Mirrors detail/route.test.ts's exact
- * create*Handler + in-memory-service pattern.
- */
+/** Agreement Lifecycle V2 UAT (Defect 3 — Cancel/Withdraw a sent, unexecuted agreement): route-level coverage. */
 function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
   return {
     category: "personal_loan",
@@ -21,7 +17,7 @@ function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
     firstPaymentMinorUnits: 20_000,
     installmentAmountMinorUnits: 20_000,
     frequency: "monthly",
-    firstPaymentDate: "2020-01-01",
+    firstPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
     feeAllocation: "debtor_pays",
     earlyPayoffTerms: "No penalty for early payoff.",
     hardshipRules: "Borrower may request hardship relief; no interest or penalty added.",
@@ -33,47 +29,48 @@ function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
 }
 
 function postWithCookie(body: unknown, token?: string) {
-  return new NextRequest("http://localhost/api/agreements/revise-first-payment-date", {
+  return new NextRequest("http://localhost/api/agreements/cancel", {
     method: "POST",
     body: JSON.stringify(body),
     headers: { "content-type": "application/json", ...(token ? { cookie: `p2p_session=${token}` } : {}) },
   });
 }
 
-describe("POST /api/agreements/revise-first-payment-date", () => {
+describe("POST /api/agreements/cancel", () => {
   let authCtx: ReturnType<typeof createTestAuthService>;
   let agreementCtx: ReturnType<typeof createTestAgreementService>;
   let agreementId: string;
   let creditorToken: string;
+  let debtorToken: string;
   let strangerToken: string;
-  const futureDate = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   beforeEach(async () => {
     authCtx = createTestAuthService();
     agreementCtx = createTestAgreementService();
 
     const creditor = await authCtx.authService.signup({
-      email: "revise-creditor@example.com",
+      email: "cancel-creditor@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });
     const debtor = await authCtx.authService.signup({
-      email: "revise-debtor@example.com",
+      email: "cancel-debtor@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });
     const stranger = await authCtx.authService.signup({
-      email: "revise-stranger@example.com",
+      email: "cancel-stranger@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });
     creditorToken = creditor.token;
+    debtorToken = debtor.token;
     strangerToken = stranger.token;
 
     const creditorProfileId = randomUUID();
@@ -81,54 +78,40 @@ describe("POST /api/agreements/revise-first-payment-date", () => {
     agreementCtx.profileOwners.set("personal", creditorProfileId, creditor.user.id);
     agreementCtx.profileOwners.set("personal", debtorProfileId, debtor.user.id);
 
-    // Agreement Lifecycle V2 UAT (Defect 5): createDraft now rejects a past firstPaymentDate
-    // server-side — create with a valid (future) date, then mutate the version directly to simulate
-    // the date having lapsed since creation (this whole route exists to resolve exactly that state).
     const created = await agreementCtx.agreementService.createDraft({
       creatorUserId: creditor.user.id,
       creditor: { kind: "personal", id: creditorProfileId },
       debtor: { kind: "personal", id: debtorProfileId },
-      ...baseTerms({ firstPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) }),
+      ...baseTerms(),
     });
     agreementId = created.agreement.id;
-    const staleVersion = await agreementCtx.versions.findById(created.agreement.currentVersionId!);
-    staleVersion!.terms = { ...staleVersion!.terms, firstPaymentDate: "2020-01-01" };
     await agreementCtx.agreementService.submitDraft(agreementId, creditor.user.id);
-    await agreementCtx.agreementService.acknowledgeDebt(agreementId, debtor.user.id);
-    await agreementCtx.agreementService.creditorDecide({ agreementId, actingUserId: creditor.user.id, decision: "accept" });
   });
 
   function handlerFor() {
-    return withErrorHandling(
-      "agreement_revise_first_payment_date",
-      createAgreementReviseFirstPaymentDateHandler(authCtx.authService, agreementCtx.agreementService),
-    );
+    return withErrorHandling("agreement_cancel", createAgreementCancelHandler(authCtx.authService, agreementCtx.agreementService));
   }
 
-  it("lets a real party revise the stale schedule end to end (200), unblocking signing", async () => {
-    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: futureDate }, creditorToken));
+  it("lets either party cancel a sent, unexecuted agreement (200)", async () => {
+    const response = await handlerFor()(postWithCookie({ agreementId, reason: "Changed my mind." }, debtorToken));
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { status: string; firstPaymentDate: string };
-    expect(body.firstPaymentDate).toBe(futureDate);
+    const body = (await response.json()) as { status: string };
+    expect(body.status).toBe("mutually_canceled");
   });
 
-  it("rejects an unauthenticated request with 401", async () => {
-    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: futureDate }));
+  it("rejects an unauthenticated request (401)", async () => {
+    const response = await handlerFor()(postWithCookie({ agreementId, reason: "test" }));
     expect(response.status).toBe(401);
   });
 
-  it("rejects a cross-tenant stranger attempting to revise someone else's agreement (403)", async () => {
-    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: futureDate }, strangerToken));
+  it("rejects a stranger with no relationship to either party (403)", async () => {
+    const response = await handlerFor()(postWithCookie({ agreementId, reason: "test" }, strangerToken));
     expect(response.status).toBe(403);
   });
 
-  it("rejects a malformed date before ever reaching AgreementService (400)", async () => {
-    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: "not-a-date" }, creditorToken));
+  it("rejects a missing/empty reason (400)", async () => {
+    const response = await handlerFor()(postWithCookie({ agreementId, reason: "" }, creditorToken));
     expect(response.status).toBe(400);
   });
 
-  it("rejects a new date that is itself still in the past (400)", async () => {
-    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: "2020-06-01" }, creditorToken));
-    expect(response.status).toBe(400);
-  });
 });

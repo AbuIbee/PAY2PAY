@@ -26,6 +26,12 @@ export function withErrorHandling<Args extends unknown[]>(
     } catch (error) {
       const safe = toSafeErrorResponse(error);
       const correlationId = randomUUID();
+      // Agreement Lifecycle V2 UAT (Send secure invitation "Unexpected error occurred"): a wrapped
+      // driver/ORM error (e.g. postgres.js/drizzle's own "Failed query: ..." message) hides the real
+      // underlying database error in `.cause` — logging only `.message`/`.stack` made the actual
+      // failure undiagnosable from server logs alone. Captured one level deep, matching the shape
+      // ad-hoc call sites elsewhere in this codebase already log (`causeName`/`causeCode`/`causeMessage`).
+      const cause = error instanceof Error ? error.cause : undefined;
       logger.error(`${routeName}_failed`, {
         correlationId,
         route: routeName,
@@ -33,6 +39,11 @@ export function withErrorHandling<Args extends unknown[]>(
         code: safe.code,
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
+        ...(cause instanceof Error
+          ? { causeName: cause.name, causeMessage: cause.message, causeCode: (cause as { code?: string }).code }
+          : cause !== undefined
+            ? { cause: String(cause) }
+            : {}),
       });
       return NextResponse.json(
         {

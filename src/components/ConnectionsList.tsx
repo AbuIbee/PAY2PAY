@@ -96,9 +96,9 @@ export function ConnectionsList() {
     return (
       <div className="empty-state">
         <h3>No connections yet</h3>
-        <p>Invite a counterparty to start a repayment relationship.</p>
-        <Link href="/connections/invite" className="button button--primary">
-          Invite a counterparty
+        <p>Propose a payment plan to start a repayment relationship — no existing connection required.</p>
+        <Link href="/agreements/invite" className="button button--primary">
+          Propose a payment plan
         </Link>
       </div>
     );

@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { createTestCsvImportService } from "./testFakes";
 
+// Agreement Lifecycle V2 UAT (Defect 5): AgreementService.createDraft now rejects a past
+// firstPaymentDate server-side, so this must stay in the future regardless of when the suite runs.
+const FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 const VALID_CSV = [
   "customerEmail,customerName,invoiceReference,balance,installmentAmount,frequency,firstPaymentDate",
-  "alice@example.com,Alice Smith,INV-100,1200.00,200.00,monthly,2026-03-01",
-  "bob@example.com,Bob Jones,INV-101,600.00,150.00,monthly,2026-03-01",
+  `alice@example.com,Alice Smith,INV-100,1200.00,200.00,monthly,${FUTURE_DATE}`,
+  `bob@example.com,Bob Jones,INV-101,600.00,150.00,monthly,${FUTURE_DATE}`,
 ].join("\n");
 
 describe("CsvImportService", () => {

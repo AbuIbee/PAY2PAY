@@ -90,6 +90,11 @@ export class InMemoryAgreementRepository implements AgreementRepository {
     if (record) record.currentVersionId = versionId;
   }
 
+  /** Agreement Lifecycle V2 UAT (Defect 3 — Delete Draft): mirrors DrizzleAgreementRepository.deleteDraft's own contract (irreversible, called only after AgreementService.deleteDraft's own checks). */
+  async deleteDraft(id: string): Promise<void> {
+    this.byId.delete(id);
+  }
+
   async listForProfile(profileKind: ProfileKind, profileId: string, pageParams?: PageParams): Promise<AgreementRecord[]> {
     const matches = [...this.byId.values()]
       .filter(

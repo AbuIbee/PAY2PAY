@@ -1,6 +1,6 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
   AgreementTermsFields,
@@ -195,6 +195,7 @@ function Chip({ label, tone }: { label: string; tone: ChipTone }) {
  * (not a party) falls back to the restricted witness view (Sprint 7) instead of the full detail.
  */
 export function AgreementDetail() {
+  const router = useRouter();
   const agreementId = useSearchParams().get("id");
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [data, setData] = useState<AgreementDetailData | null>(null);
@@ -208,6 +209,9 @@ export function AgreementDetail() {
   const [showDebtorReviseForm, setShowDebtorReviseForm] = useState(false);
   const [debtorReviseTerms, setDebtorReviseTerms] = useState<AgreementTermsFormValues | null>(null);
   const [debtorReviseReason, setDebtorReviseReason] = useState("");
+  const [showCancelForm, setShowCancelForm] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [deleteStatus, setDeleteStatus] = useState<"idle" | "working" | "error">("idle");
 
   const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
   const [witnesses, setWitnesses] = useState<WitnessItem[]>([]);
@@ -298,6 +302,20 @@ export function AgreementDetail() {
     } catch (error) {
       setActionError(error instanceof ApiError ? error.message : "That action could not be completed.");
       setActionStatus("error");
+    }
+  }
+
+  async function handleDeleteDraft() {
+    if (!data) return;
+    if (!window.confirm("Delete this draft agreement? It has not been sent or executed. This cannot be undone.")) return;
+    setDeleteStatus("working");
+    setActionError(null);
+    try {
+      await apiFetch("/api/agreements/delete-draft", { method: "POST", body: JSON.stringify({ agreementId: data.id }) });
+      router.push("/agreements");
+    } catch (error) {
+      setActionError(error instanceof ApiError ? error.message : "This draft could not be deleted.");
+      setDeleteStatus("error");
     }
   }
 
@@ -526,6 +544,53 @@ export function AgreementDetail() {
           >
             Submit for debtor acknowledgment
           </button>
+          <button type="button" className="button button--ghost" disabled={deleteStatus === "working"} onClick={() => void handleDeleteDraft()}>
+            {deleteStatus === "working" ? "Deleting…" : "Delete Draft"}
+          </button>
+        </div>
+      )}
+
+      {["awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance", "awaiting_signatures"].includes(data.status) && !showCancelForm && (
+        <div style={{ marginTop: "-0.5rem" }}>
+          <button type="button" className="button button--ghost" onClick={() => setShowCancelForm(true)}>
+            Cancel Agreement
+          </button>
+        </div>
+      )}
+
+      {["awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance", "awaiting_signatures"].includes(data.status) && showCancelForm && (
+        <div className="card" role="alertdialog" aria-labelledby="cancel-agreement-heading">
+          <h3 id="cancel-agreement-heading" style={{ marginTop: 0 }}>
+            Cancel this agreement?
+          </h3>
+          <p style={{ color: "var(--ink-soft)" }}>
+            This agreement has not been fully executed. Cancelling it will prevent either party from continuing the
+            current agreement. The historical record will be retained.
+          </p>
+          <div className="field">
+            <label htmlFor="cancel-reason">Reason (required)</label>
+            <input id="cancel-reason" value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} />
+          </div>
+          <div className="hero__actions">
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={actionStatus === "working" || !cancelReason.trim()}
+              onClick={() =>
+                void runAction(() =>
+                  apiFetch("/api/agreements/cancel", { method: "POST", body: JSON.stringify({ agreementId: data.id, reason: cancelReason }) }),
+                ).then(() => {
+                  setShowCancelForm(false);
+                  setCancelReason("");
+                })
+              }
+            >
+              Confirm Cancellation
+            </button>
+            <button type="button" className="button button--ghost" onClick={() => setShowCancelForm(false)}>
+              Never mind
+            </button>
+          </div>
         </div>
       )}
 

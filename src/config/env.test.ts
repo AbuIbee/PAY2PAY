@@ -130,6 +130,26 @@ describe("parseServerEnv", () => {
     expect(env.APP_URL).toBe("https://paid2you.com");
   });
 
+  it("Agreement Lifecycle V2 UAT fix: falls back to https://VERCEL_URL when APP_URL isn't explicitly set", () => {
+    const env = parseServerEnv({ ...validEnv, VERCEL_URL: "pay-2-abc123-pay2-pay.vercel.app" });
+    expect(env.APP_URL).toBe("https://pay-2-abc123-pay2-pay.vercel.app");
+  });
+
+  it("prefers an explicit APP_URL over VERCEL_URL when both are set", () => {
+    const env = parseServerEnv({ ...validEnv, APP_URL: "https://paid2you.com", VERCEL_URL: "pay-2-abc123-pay2-pay.vercel.app" });
+    expect(env.APP_URL).toBe("https://paid2you.com");
+  });
+
+  it("still falls back to the localhost default when neither APP_URL nor VERCEL_URL is set (genuine local dev)", () => {
+    const env = parseServerEnv(validEnv);
+    expect(env.APP_URL).toBe("http://localhost:3000");
+  });
+
+  it("an unconfigured Preview deployment (APP_ENV defaults to development, VERCEL_URL present) resolves to the real deployment origin, never localhost", () => {
+    const env = parseServerEnv({ ...validEnv, APP_ENV: "development", VERCEL_URL: "pay-2-pay-git-some-branch-pay2-pay.vercel.app" });
+    expect(env.APP_URL).toBe("https://pay-2-pay-git-some-branch-pay2-pay.vercel.app");
+  });
+
   it("does not reject a localhost APP_URL outside production (development/test/staging)", () => {
     for (const appEnv of ["development", "test", "staging"] as const) {
       expect(() => parseServerEnv({ ...validEnv, APP_ENV: appEnv, APP_URL: "http://localhost:3000" })).not.toThrow();

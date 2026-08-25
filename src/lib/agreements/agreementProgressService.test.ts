@@ -96,12 +96,20 @@ describe("AgreementProgressService", () => {
     // Agreement Lifecycle V2: the debtor originates so the creditor is the counterparty and may
     // legitimately sign first in the tests below (signAgreement now requires the counterparty to
     // sign before the originator).
+    // Agreement Lifecycle V2 UAT (Defect 5): createDraft now rejects a past firstPaymentDate
+    // server-side — create with a valid (future) date, then mutate the version directly to simulate
+    // the date having lapsed since creation, same pattern as agreementService.test.ts's own fixture.
+    const { firstPaymentDate: staleDateOverride, ...restOverrides } = overrides;
     const created = await ctx.agreementService.createDraft({
       creatorUserId: debtorUserId,
       creditor: { kind: "personal", id: creditorProfileId },
       debtor: { kind: "personal", id: debtorProfileId },
-      ...baseTerms(overrides),
+      ...baseTerms(restOverrides),
     });
+    if (staleDateOverride) {
+      const version = await ctx.versions.findById(created.agreement.currentVersionId!);
+      version!.terms = { ...version!.terms, firstPaymentDate: staleDateOverride };
+    }
     return { agreementId: created.agreement.id, creditorUserId, debtorUserId, creditorProfileId, debtorProfileId };
   }
 
