@@ -76,6 +76,53 @@ describe("RelationshipInvitationService", () => {
       expect(JSON.stringify(stored)).not.toContain(rawToken);
     });
 
+    /**
+     * Production follow-up (production-only customer email URLs), test item 5: relationship
+     * invitation links must use whatever canonical appUrl this service is configured with — the same
+     * single, centralized source (getServerEnv().APP_URL in real wiring) every other customer email
+     * link reads. Covers both delivery paths: the not-yet-registered invitee's direct token-bearing
+     * email, and an existing invitee's in-app/email notification (routed through
+     * NotificationService.buildCtaUrl's own relatedInvitationId branch).
+     */
+    it("5. the not-yet-registered invitee's enrollment email link uses the configured canonical appUrl", async () => {
+      const prodCtx = createTestRelationshipServices("https://paid2you.com");
+      const creditorUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      prodCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+
+      const { rawToken } = await prodCtx.relationshipInvitationService.createInvitation({
+        actingUserId: creditorUserId,
+        actingParty: { kind: "personal", id: creditorProfileId },
+        inviteeEmail: "newperson@example.com",
+        inviteeRole: "debtor",
+      });
+
+      const link = prodCtx.emailSender.sent[0]?.body.match(/https?:\/\/\S+/)?.[0];
+      expect(link).toContain(rawToken);
+      expect(new URL(link!).hostname).toBe("paid2you.com");
+    });
+
+    it("5. an existing invitee's notification CTA link uses the configured canonical appUrl", async () => {
+      const prodCtx = createTestRelationshipServices("https://paid2you.com");
+      const creditorUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      const debtorUserId = randomUUID();
+      prodCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+      prodCtx.users.set("debtor@example.com", debtorUserId);
+      prodCtx.notifyCtx.contacts.set(debtorUserId, "debtor@example.com");
+
+      await prodCtx.relationshipInvitationService.createInvitation({
+        actingUserId: creditorUserId,
+        actingParty: { kind: "personal", id: creditorProfileId },
+        inviteeEmail: "debtor@example.com",
+        inviteeRole: "debtor",
+      });
+
+      const sent = prodCtx.notifyCtx.emailSender.sent.find((e) => e.to === "debtor@example.com");
+      expect(sent?.ctaUrl).toBeTruthy();
+      expect(new URL(sent!.ctaUrl!).hostname).toBe("paid2you.com");
+    });
+
     it("rejects creating an invitation for a profile the caller does not own", async () => {
       const ownerUserId = randomUUID();
       const otherUserId = randomUUID();

@@ -537,10 +537,10 @@ class InMemoryAuditEventRepositoryForRelationships implements AuditEventReposito
  * wired to the same shared `profileOwners`/`staffService`, so `linkAgreement`/`syncFromAgreement`
  * exercise real Sprint 5 agreement logic rather than a stub.
  */
-export function createTestRelationshipServices() {
+export function createTestRelationshipServices(appUrl: string = "https://app.test") {
   const profileOwners = new InMemoryProfileOwnerReader();
   const staffCtx = createTestStaffService();
-  const notifyCtx = createTestNotificationService();
+  const notifyCtx = createTestNotificationService(undefined, appUrl);
   const riskCtx = createTestRiskEventService();
 
   const agreements = new InMemoryAgreementRepository();
@@ -615,7 +615,7 @@ export function createTestRelationshipServices() {
     notifications: notifyCtx.notificationService,
     emailSender,
     audit: new AuditService(invitationAuditRepo),
-    appUrl: "https://app.test",
+    appUrl,
   });
 
   const financialAccountAuditRepo = new InMemoryAuditEventRepositoryForRelationships();

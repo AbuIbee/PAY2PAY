@@ -250,6 +250,49 @@ describe("NotificationService", () => {
       expect(emailSender.sent[0]?.ctaUrl).toBeUndefined();
     });
 
+    /**
+     * Production follow-up (missing Agreement Invitation CTA / DEFECT 1): ctaOverride exists for
+     * notification types like agreement_invitation whose CTA route (a pre-agreement, secure-token
+     * `/i/<token>` link) buildCtaUrl has no stored id to derive — see ctaOverride's own doc comment
+     * on notify()'s input type for why it's a transient, non-persisted parameter.
+     */
+    it("ctaOverride wins over buildCtaUrl's own derivation, even when a relatedAgreementId is also present", async () => {
+      const { notificationService, contacts, emailSender } = createTestNotificationService();
+      contacts.set("user-1", "user1@example.com");
+      await notificationService.notify({
+        recipientUserId: "user-1",
+        notificationType: "agreement_invitation",
+        relatedAgreementId: null,
+        payload: { counterpartyName: "Jordan" },
+        ctaOverride: { ctaUrl: "https://paid2you.com/i/some-opaque-token", ctaText: "Review agreement" },
+      });
+      expect(emailSender.sent).toHaveLength(1);
+      expect(emailSender.sent[0]?.ctaUrl).toBe("https://paid2you.com/i/some-opaque-token");
+      expect(emailSender.sent[0]?.ctaText).toBe("Review agreement");
+    });
+
+    it("ctaOverride is never persisted onto the notification_event row — a later retry re-renders with no CTA, not a stale/incorrect one", async () => {
+      const { notificationService, contacts, emailSender } = createTestNotificationService({ retryDelayMs: 1000, maxAttempts: 5 });
+      contacts.set("user-1", "user1@example.com");
+      emailSender.failNext = true;
+      emailSender.failNextRetryable = true;
+
+      const [record] = await notificationService.notify({
+        recipientUserId: "user-1",
+        notificationType: "agreement_invitation",
+        relatedAgreementId: null,
+        payload: { counterpartyName: "Jordan" },
+        ctaOverride: { ctaUrl: "https://paid2you.com/i/some-opaque-token", ctaText: "Review agreement" },
+      });
+      if (!record) throw new Error("expected a record");
+      expect(record.relatedAgreementId).toBeNull();
+      expect(record.payload).toEqual({ counterpartyName: "Jordan" }); // the token/ctaUrl is nowhere in the stored payload
+
+      await notificationService.retryDueNotifications(new Date(Date.now() + 2000));
+      expect(emailSender.sent).toHaveLength(1); // the retried send went out with no CTA at all — never a stale/reused token
+      expect(emailSender.sent[0]?.ctaUrl).toBeUndefined();
+    });
+
     it("a non-retryable EmailDeliveryError dead-letters immediately instead of exhausting the retry budget", async () => {
       const { notificationService, contacts, emailSender, events } = createTestNotificationService({ retryDelayMs: 1000, maxAttempts: 5 });
       contacts.set("user-1", "user1@example.com");
