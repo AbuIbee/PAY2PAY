@@ -335,4 +335,34 @@ describe("AgreementDetail", () => {
     expect(confirmSpy).toHaveBeenCalled();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/decide"))).toBe(false);
   });
+
+  it("Agreement Lifecycle V2: the debtor can request changes (not just acknowledge) at awaiting_debtor_acknowledgment, via the shared revise-terms path", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockImplementation(
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "awaiting_debtor_acknowledgment" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/revise-terms": { body: { status: "awaiting_creditor_acceptance", versionNumber: 2 } },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AgreementDetail />);
+    const requestChangesButton = await screen.findByRole("button", { name: /request changes/i });
+    await user.click(requestChangesButton);
+
+    const reasonField = await screen.findByLabelText(/why are you requesting changes/i);
+    await user.type(reasonField, "I can only afford smaller installments.");
+    await user.click(screen.getByRole("button", { name: /send requested changes/i }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/revise-terms"))).toBe(true);
+    });
+  });
 });

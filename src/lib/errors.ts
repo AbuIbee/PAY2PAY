@@ -140,6 +140,21 @@ export class StepUpRequiredError extends ForbiddenError {
   }
 }
 
+/**
+ * Agreement Lifecycle V2: the invited counterparty must review, accept, and sign before the
+ * originator (whoever created the draft) is allowed to sign — "the agreement is NOT Active yet"
+ * after only the counterparty has signed, and the originator's own attempt to sign first must be
+ * blocked with a specific, actionable message rather than silently allowed out of order. Still an
+ * instanceof ForbiddenError (this is an authorization/ordering rule, not a data-validation one), with
+ * its own code so the client can show "waiting on the other party" rather than a generic error.
+ */
+export class CounterpartyMustSignFirstError extends ForbiddenError {
+  constructor(message = "The other party must review and sign first. You'll be notified as soon as they do.") {
+    super(message, "COUNTERPARTY_MUST_SIGN_FIRST");
+    this.name = "CounterpartyMustSignFirstError";
+  }
+}
+
 export class RateLimitedError extends AppError {
   constructor(message = "Too many requests. Please try again later.") {
     super(message, {

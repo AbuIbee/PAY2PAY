@@ -4,7 +4,7 @@ import { logger } from "@/lib/logger";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
-import { ForbiddenError, ScheduleRevisionRequiredError, ValidationError } from "@/lib/errors";
+import { CounterpartyMustSignFirstError, ForbiddenError, ScheduleRevisionRequiredError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { PageParams } from "@/lib/pagination";
 import { computeSchedule, isPastDate } from "./schedule";
@@ -465,35 +465,95 @@ export class AgreementService {
       return;
     }
 
-    // counter — still unsigned, so mutating the version's terms in place is not an FR-AGR-006
-    // violation (immutability applies only after signing).
+    // counter — delegates to the shared, versioned pre-signature revision path (Agreement Lifecycle
+    // V2) rather than mutating the version's terms in place. Kept as a distinct `creditorDecide`
+    // input shape for backward API compatibility; see reviseTermsBeforeSignature's own doc comment
+    // for why in-place mutation was superseded.
     if (!input.counterTerms) {
       throw new ValidationError("counterTerms is required for a counterproposal.");
     }
+    await this.reviseTermsBeforeSignature({
+      agreementId: input.agreementId,
+      actingUserId: input.actingUserId,
+      newTerms: input.counterTerms,
+      reason: input.reason ?? "The creditor proposed different terms.",
+    });
+  }
+
+  /**
+   * Agreement Lifecycle V2 (Part 5 — versioning): the single, shared pre-signature negotiation
+   * primitive for both parties. Supersedes the old in-place `versions.updateTerms` counter path —
+   * "once an agreement has been sent to the other party, material contractual terms may not be
+   * silently edited in place... every contractual revision must be associated with an identifiable
+   * version." Only the party whose turn it currently is may call this (mirrors
+   * acknowledgeDebt/creditorDecide's own role-scoped gates exactly): while
+   * `awaiting_debtor_acknowledgment`, only the debtor; while `awaiting_creditor_acceptance`, only the
+   * creditor. Creates a new `agreement_version` (never mutates the current one), makes it the
+   * agreement's current version, and flips the review stage to the *other* party — the revision loop
+   * this class's own doc comment describes. `reason` is this pass's comments mechanism (task's
+   * "REVISION COMMENTS" requirement) — audited and surfaced in the UI/PDF, but never itself a
+   * contractual amendment; only the new version's terms are.
+   */
+  async reviseTermsBeforeSignature(input: {
+    agreementId: string;
+    actingUserId: string;
+    newTerms: DraftTermsInput;
+    reason: string;
+  }): Promise<AgreementWithDetail> {
+    if (!input.reason.trim()) {
+      throw new ValidationError("A reason is required when proposing revised terms.");
+    }
+    const agreement = await this.requireAgreement(input.agreementId);
+    const revisableStatuses: AgreementStatus[] = ["awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance"];
+    if (!revisableStatuses.includes(agreement.status)) {
+      throw new ValidationError(
+        `Terms can only be revised while the agreement is awaiting review, but it is "${agreement.status}".`,
+      );
+    }
+    // Whose turn it is IS the role permitted to revise right now — mirrors acknowledgeDebt/
+    // creditorDecide's own role-scoped authorization for the identical status.
+    const actingRole: PartyRole = agreement.status === "awaiting_debtor_acknowledgment" ? "debtor" : "creditor";
+    await this.authorizeAsRole(agreement, actingRole, input.actingUserId, null);
     if (!agreement.currentVersionId) {
-      throw new ValidationError("This agreement has no current version to counter.");
+      throw new ValidationError("This agreement has no current version to revise.");
     }
-    const { terms } = buildTerms(input.counterTerms);
-    const version = await this.requireVersion(agreement.currentVersionId);
-    if (version.signedAt) {
-      throw new ValidationError("Cannot counter a signed version.");
+    const currentVersion = await this.requireVersion(agreement.currentVersionId);
+    if (currentVersion.signedAt) {
+      throw new ValidationError("This agreement is already fully signed and can no longer be revised this way.");
     }
-    await this.deps.versions.updateTerms(version.id, {
-      frequency: input.counterTerms.frequency,
-      feeAllocation: input.counterTerms.feeAllocation,
+
+    const { terms, schedule } = buildTerms(input.newTerms);
+    const versionNumber = currentVersion.versionNumber + 1;
+    const newVersion = await this.deps.versions.insert({
+      agreementId: agreement.id,
+      versionNumber,
+      parentVersionId: currentVersion.id,
+      isOriginal: false,
+      producedBy: `${actingRole}_revision`,
+      frequency: input.newTerms.frequency,
+      feeAllocation: input.newTerms.feeAllocation,
       terms,
     });
-    const computed = computeSchedule({
-      currentPrincipalMinorUnits: terms.currentPrincipalMinorUnits,
-      firstPaymentMinorUnits: terms.firstPaymentMinorUnits,
-      installmentAmountMinorUnits: terms.installmentAmountMinorUnits,
-      frequency: input.counterTerms.frequency,
-      firstPaymentDate: terms.firstPaymentDate,
+    await this.deps.scheduleItems.replaceForVersion(newVersion.id, schedule);
+    await this.deps.agreements.setCurrentVersionId(agreement.id, newVersion.id);
+
+    // Flip to the *other* party's review — the revision loop: whoever didn't just propose this
+    // change must acknowledge/accept (or revise again) the new version before signing can begin.
+    const otherRole: PartyRole = actingRole === "debtor" ? "creditor" : "debtor";
+    const nextStatus: AgreementStatus = otherRole === "debtor" ? "awaiting_debtor_acknowledgment" : "awaiting_creditor_acceptance";
+    await this.deps.agreements.updateStatus(agreement.id, nextStatus);
+
+    const auditId = await this.recordAudit(agreement.id, input.actingUserId, "agreement_terms_revised", {
+      previousVersionId: currentVersion.id,
+      previousVersionNumber: currentVersion.versionNumber,
+      newVersionId: newVersion.id,
+      newVersionNumber: versionNumber,
+      proposedByRole: actingRole,
+      reason: input.reason,
     });
-    await this.deps.scheduleItems.replaceForVersion(version.id, computed.items);
-    await this.deps.agreements.updateStatus(agreement.id, "draft");
-    const auditId = await this.recordAudit(agreement.id, input.actingUserId, "creditor_countered", null);
-    await this.notifyParty(agreement, "debtor", "agreement_action_required", { stage: "review_counter" }, auditId);
+    await this.notifyParty(agreement, otherRole, "agreement_action_required", { stage: "review_revision", versionNumber }, auditId);
+
+    return this.getAgreement(input.agreementId, input.actingUserId);
   }
 
   /**
@@ -536,6 +596,18 @@ export class AgreementService {
     }
     if (role === "debtor" && version.debtorSignedAt) {
       throw new ValidationError("The debtor has already signed this agreement.");
+    }
+    // Agreement Lifecycle V2: the invited counterparty (whoever did NOT create this agreement) must
+    // review, accept, and sign before the originator does — "the agreement is NOT Active yet" after
+    // only the counterparty has signed; the originator signs last, after being notified. `createdByUserId`
+    // always resolves to a real party role (createDraft requires the creator be authorized for one
+    // side), so this never throws for a legitimately-created agreement.
+    const originatorRole = await this.resolvePartyRole(agreementId, agreement.createdByUserId);
+    if (role === originatorRole) {
+      const counterpartySignedAt = originatorRole === "creditor" ? version.debtorSignedAt : version.creditorSignedAt;
+      if (!counterpartySignedAt) {
+        throw new CounterpartyMustSignFirstError();
+      }
     }
     // Closed-beta remediation (Problem 2 — expired first payment date): nothing before this point
     // ever revisits `firstPaymentDate` against the clock once it's computed at draft/counter time, so
@@ -628,14 +700,30 @@ export class AgreementService {
       numberOfInstallments: computed.numberOfInstallments,
     };
 
-    await this.deps.versions.updateTerms(version.id, { frequency: version.frequency, feeAllocation: version.feeAllocation, terms });
-    await this.deps.scheduleItems.replaceForVersion(version.id, computed.items);
+    // Agreement Lifecycle V2 (Part 7): a first-payment-date change is a material contractual change
+    // like any other, so — same as reviseTermsBeforeSignature — it must create a new version rather
+    // than mutate the current one in place. A brand-new version has no signatures on it by
+    // construction, so any partial signature on the prior version is invalidated implicitly, not by
+    // clearing it after the fact.
     const hadPartialSignature = !!version.creditorSignedAt || !!version.debtorSignedAt;
-    if (hadPartialSignature) {
-      await this.deps.versions.clearSignatures(version.id);
-    }
+    const newVersion = await this.deps.versions.insert({
+      agreementId: agreement.id,
+      versionNumber: version.versionNumber + 1,
+      parentVersionId: version.id,
+      isOriginal: false,
+      producedBy: "first_payment_date_revision",
+      frequency: version.frequency,
+      feeAllocation: version.feeAllocation,
+      terms,
+    });
+    await this.deps.scheduleItems.replaceForVersion(newVersion.id, computed.items);
+    await this.deps.agreements.setCurrentVersionId(agreement.id, newVersion.id);
 
     await this.recordAudit(agreement.id, input.actingUserId, "agreement_first_payment_date_revised", {
+      previousVersionId: version.id,
+      previousVersionNumber: version.versionNumber,
+      newVersionId: newVersion.id,
+      newVersionNumber: newVersion.versionNumber,
       previousFirstPaymentDate,
       newFirstPaymentDate: input.newFirstPaymentDate,
       priorSignatureInvalidated: hadPartialSignature,

@@ -68,11 +68,13 @@ describe("AgreementService", () => {
       agreement = await ctx.agreements.findById(created.agreement.id);
       expect(agreement?.status).toBe("awaiting_signatures");
 
-      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
+      // Agreement Lifecycle V2: the counterparty (debtor — the creditor originated this agreement)
+      // must sign before the originator.
+      await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId);
       agreement = await ctx.agreements.findById(created.agreement.id);
       expect(agreement?.status).toBe("awaiting_signatures"); // only one party has signed so far
 
-      await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId);
+      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
       agreement = await ctx.agreements.findById(created.agreement.id);
       expect(agreement?.status).toBe("first_payment_pending");
 
@@ -241,8 +243,9 @@ describe("AgreementService", () => {
       expect(rejectionEvent?.newValue).toEqual({ reason: "Amount is too high." });
     });
 
-    it("counter: updates terms/schedule in place and returns the agreement to draft", async () => {
+    it("counter (Agreement Lifecycle V2): creates a new agreement version instead of mutating in place, and returns to the debtor for review", async () => {
       const { created, creditorUserId } = await setupAwaitingCreditorAcceptance();
+      const originalVersionId = created.version.id;
       await ctx.agreementService.creditorDecide({
         agreementId: created.agreement.id,
         actingUserId: creditorUserId,
@@ -250,11 +253,21 @@ describe("AgreementService", () => {
         counterTerms: baseTerms({ installmentAmountMinorUnits: 10_000 }),
       });
       const agreement = await ctx.agreements.findById(created.agreement.id);
-      expect(agreement?.status).toBe("draft");
+      // Sent back to the debtor (the other party) for fresh review — not silently treated as agreed,
+      // and never "draft" (that would hand control back to the originator alone).
+      expect(agreement?.status).toBe("awaiting_debtor_acknowledgment");
+      expect(agreement?.currentVersionId).not.toBe(originalVersionId);
+
       const version = await ctx.versions.findById(agreement!.currentVersionId!);
+      expect(version?.versionNumber).toBe(2);
+      expect(version?.parentVersionId).toBe(originalVersionId);
       expect(version?.terms.installmentAmountMinorUnits).toBe(10_000);
       const schedule = await ctx.scheduleItems.listForVersion(version!.id);
       expect(schedule.length).toBeGreaterThan(6); // smaller installments -> more of them
+
+      // The original version is preserved untouched, not overwritten.
+      const original = await ctx.versions.findById(originalVersionId);
+      expect(original?.terms.installmentAmountMinorUnits).not.toBe(10_000);
     });
 
     it("rejects a decision made by anyone other than the creditor", async () => {
@@ -322,8 +335,8 @@ describe("AgreementService", () => {
       await ctx.agreementService.submitDraft(created.agreement.id, creditorUserId);
       await ctx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
       await ctx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
-      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
-      await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId);
+      await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId); // counterparty first
+      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId); // originator last
 
       // Status is now first_payment_pending — creditorDecide requires awaiting_creditor_acceptance.
       await expect(
@@ -357,8 +370,8 @@ describe("AgreementService", () => {
       await ctx.agreementService.submitDraft(created.agreement.id, creditorUserId);
       await ctx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
       await ctx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
-      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
-      await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId);
+      await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId); // counterparty first
+      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId); // originator last
 
       await expect(ctx.agreementService.signAgreement(created.agreement.id, creditorUserId)).rejects.toThrow(ValidationError);
     });
@@ -476,31 +489,33 @@ describe("AgreementService", () => {
       return { agreementId: created.agreement.id, creditorUserId, debtorUserId };
     }
 
-    it("blocks the first signature attempt once the proposed first payment date has already passed", async () => {
-      const { agreementId, creditorUserId } = await setUpAwaitingSignatures({ firstPaymentDate: "2020-01-01" });
-      await expect(ctx.agreementService.signAgreement(agreementId, creditorUserId)).rejects.toThrow(ValidationError);
+    it("blocks the first (counterparty) signature attempt once the proposed first payment date has already passed", async () => {
+      const { agreementId, debtorUserId } = await setUpAwaitingSignatures({ firstPaymentDate: "2020-01-01" });
+      // Agreement Lifecycle V2: the creditor here is the originator, so the debtor (counterparty)
+      // is the legitimate first signer — this proves the date guard, not the turn-order guard.
+      await expect(ctx.agreementService.signAgreement(agreementId, debtorUserId)).rejects.toThrow(ValidationError);
       const agreement = await ctx.agreements.findById(agreementId);
       expect(agreement?.status).toBe("awaiting_signatures"); // never advanced to signed
     });
 
-    it("also blocks the completing (second) signature if the date lapses between the two signatures", async () => {
+    it("also blocks the completing (originator's) signature if the date lapses between the two signatures", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await setUpAwaitingSignatures();
-      await ctx.agreementService.signAgreement(agreementId, creditorUserId); // valid at the time
+      await ctx.agreementService.signAgreement(agreementId, debtorUserId); // counterparty first, valid at the time
       // Simulate real-world delay: the version's own terms are mutated directly, exactly as if enough
-      // wall-clock time had passed for the proposed date to lapse before the debtor got to sign.
+      // wall-clock time had passed for the proposed date to lapse before the originator got to sign.
       const agreement = await ctx.agreements.findById(agreementId);
       const version = await ctx.versions.findById(agreement!.currentVersionId!);
       version!.terms = { ...version!.terms, firstPaymentDate: "2020-01-01" };
 
-      await expect(ctx.agreementService.signAgreement(agreementId, debtorUserId)).rejects.toThrow(ValidationError);
+      await expect(ctx.agreementService.signAgreement(agreementId, creditorUserId)).rejects.toThrow(ValidationError);
       const stillPending = await ctx.agreements.findById(agreementId);
       expect(stillPending?.status).toBe("awaiting_signatures"); // never reached first_payment_pending
     });
 
     it("does not block signing when the proposed first payment date is today or in the future", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await setUpAwaitingSignatures();
-      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
-      await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+      await ctx.agreementService.signAgreement(agreementId, debtorUserId); // counterparty first
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId); // originator last
       const agreement = await ctx.agreements.findById(agreementId);
       expect(agreement?.status).toBe("first_payment_pending");
     });
@@ -517,18 +532,18 @@ describe("AgreementService", () => {
       expect(result.version.terms.firstPaymentDate).toBe(futureDate);
       expect(result.schedule[0]?.dueDate).toBe(futureDate);
 
-      // Now unblocked — both parties can sign normally.
-      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+      // Now unblocked — counterparty (debtor) signs first, then the originator (creditor).
       await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
       const agreement = await ctx.agreements.findById(agreementId);
       expect(agreement?.status).toBe("first_payment_pending");
     });
 
     it("reviseFirstPaymentDate: invalidates an already-recorded partial signature, since it was captured against the old (stale) terms", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await setUpAwaitingSignatures();
-      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+      await ctx.agreementService.signAgreement(agreementId, debtorUserId); // counterparty signs first, validly
 
-      // Simulate the date lapsing before the debtor signs (see the earlier test for the same setup).
+      // Simulate the date lapsing before the originator signs (see the earlier test for the same setup).
       const agreement = await ctx.agreements.findById(agreementId);
       const version = await ctx.versions.findById(agreement!.currentVersionId!);
       version!.terms = { ...version!.terms, firstPaymentDate: "2020-01-01" };
@@ -540,9 +555,9 @@ describe("AgreementService", () => {
       expect(revisedVersion?.creditorSignedAt).toBeNull();
       expect(revisedVersion?.debtorSignedAt).toBeNull();
 
-      // Creditor must sign again under the new terms.
-      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+      // The counterparty (debtor) must sign again under the new terms, then the originator.
       await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
       const finalAgreement = await ctx.agreements.findById(agreementId);
       expect(finalAgreement?.status).toBe("first_payment_pending");
     });
@@ -564,8 +579,8 @@ describe("AgreementService", () => {
 
     it("reviseFirstPaymentDate: rejects once the agreement is fully signed (immutable past that point)", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await setUpAwaitingSignatures();
-      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
-      await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+      await ctx.agreementService.signAgreement(agreementId, debtorUserId); // counterparty first
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId); // originator last
       const futureDate = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       await expect(
         ctx.agreementService.reviseFirstPaymentDate({ agreementId, actingUserId: creditorUserId, newFirstPaymentDate: futureDate }),
@@ -650,7 +665,7 @@ describe("AgreementService", () => {
       expect(decided?.payload).toMatchObject({ decision: "rejected" });
     });
 
-    it("creditorDecide(counter) notifies the debtor to review new terms, and a SECOND counter round after resubmission produces a distinct, non-deduplicated notification", async () => {
+    it("creditorDecide(counter) notifies the debtor to review the new version, and a SECOND counter round after debtor acknowledgment produces a distinct, non-deduplicated notification", async () => {
       const { localCtx, notifyCtx, created, creditorUserId, debtorUserId } = await setupNotifiedAgreement();
       await localCtx.agreementService.submitDraft(created.agreement.id, created.agreement.createdByUserId);
       await localCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
@@ -660,9 +675,9 @@ describe("AgreementService", () => {
         decision: "counter",
         counterTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
       });
-      // Second round: debtor resubmits, acknowledges again is N/A (debtor already the one who must
-      // review) — instead simulate the natural next round via submitDraft → acknowledgeDebt → counter again.
-      await localCtx.agreementService.submitDraft(created.agreement.id, creditorUserId);
+      // Second round (Agreement Lifecycle V2's revision loop): the creditor's counter created a new
+      // version and returned it to the debtor (awaiting_debtor_acknowledgment) — the debtor
+      // acknowledges that version, sending it back to the creditor, who counters again.
       await localCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
       await localCtx.agreementService.creditorDecide({
         agreementId: created.agreement.id,
@@ -675,8 +690,8 @@ describe("AgreementService", () => {
       );
       // Both counter rounds must be represented (one email-channel row each) — PRSprint 13's own
       // "do not over-deduplicate legitimate distinct events" requirement.
-      const reviewCounterNotifications = debtorNotifications.filter((n) => (n.payload as { stage?: string }).stage === "review_counter");
-      expect(reviewCounterNotifications.length).toBe(2);
+      const reviewRevisionNotifications = debtorNotifications.filter((n) => (n.payload as { stage?: string }).stage === "review_revision");
+      expect(reviewRevisionNotifications.length).toBe(2);
     });
 
     it("business profile recipient resolution notifies the business owner, not a bare profile id", async () => {

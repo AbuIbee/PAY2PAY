@@ -39,8 +39,9 @@ describe("AgreementDisputeService", () => {
     ctx.agreementCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
     ctx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtorUserId);
 
+    // Agreement Lifecycle V2: debtor originates so the creditor is the counterparty and may sign first.
     const created = await ctx.agreementCtx.agreementService.createDraft({
-      creatorUserId: creditorUserId,
+      creatorUserId: debtorUserId,
       creditor: { kind: "personal", id: creditorProfileId },
       debtor: { kind: "personal", id: debtorProfileId },
       ...baseTerms(),
@@ -50,8 +51,8 @@ describe("AgreementDisputeService", () => {
     await ctx.agreementCtx.agreementService.submitDraft(agreementId, creditorUserId);
     await ctx.agreementCtx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
     await ctx.agreementCtx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" });
-    await ctx.agreementCtx.agreementService.signAgreement(agreementId, creditorUserId);
-    await ctx.agreementCtx.agreementService.signAgreement(agreementId, debtorUserId);
+    await ctx.agreementCtx.agreementService.signAgreement(agreementId, creditorUserId); // counterparty first
+    await ctx.agreementCtx.agreementService.signAgreement(agreementId, debtorUserId); // originator last
   });
 
   let nextEvidenceByte = 1;

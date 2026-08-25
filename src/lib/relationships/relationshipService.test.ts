@@ -120,8 +120,8 @@ describe("RelationshipService", () => {
       let synced = await ctx.relationshipService.syncFromAgreement(relationship.id, creditorUserId);
       expect(synced.status).toBe("signature_pending");
 
-      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
       await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId);
+      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
       synced = await ctx.relationshipService.syncFromAgreement(relationship.id, creditorUserId);
       expect(synced.status).toBe("signed");
     });
@@ -297,8 +297,8 @@ describe("RelationshipService", () => {
       await ctx.agreementService.submitDraft(created.agreement.id, creditorUserId);
       await ctx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
       await ctx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
-      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
       await ctx.agreementService.signAgreement(created.agreement.id, debtorUserId);
+      await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
 
       check = await ctx.relationshipService.checkActivationPrerequisites(relationship.id);
       expect(check.eligible).toBe(true);

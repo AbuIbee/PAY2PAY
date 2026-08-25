@@ -176,12 +176,16 @@ export class AgreementProgressService {
     steps.push(verificationStep);
 
     // Step 5 — signatures: dependency-aware on verification and on the schedule not being stale —
-    // never invites a signature attempt that would just fail server-side.
+    // never invites a signature attempt that would just fail server-side. Also Originator/Counterparty
+    // aware (Agreement Lifecycle V2): the counterparty must sign first, so an originator with nothing
+    // else blocking them still shows "waiting", never a same-moment "action_required" for both parties.
+    const originatorRole = await this.deps.agreementService.resolvePartyRole(agreementId, agreement.createdByUserId);
     steps.push(
       this.signaturesStep({
         status: agreement.status,
         myRole,
         otherRole,
+        isOriginator: myRole === originatorRole,
         creditorSignedAt: version.creditorSignedAt,
         debtorSignedAt: version.debtorSignedAt,
         firstPaymentDate: version.terms.firstPaymentDate,
@@ -368,6 +372,7 @@ export class AgreementProgressService {
     status: AgreementStatus;
     myRole: PartyRole;
     otherRole: PartyRole;
+    isOriginator: boolean;
     creditorSignedAt: Date | string | null;
     debtorSignedAt: Date | string | null;
     firstPaymentDate: string;
@@ -421,6 +426,21 @@ export class AgreementProgressService {
         description: "Signing requires identity verification. Complete that step to continue.",
         cta: { label: "Verify identity", href: "/account/verification" },
       };
+    }
+    if (input.isOriginator) {
+      // Counterparty-first-signing rule (Agreement Lifecycle V2): the originator can't sign until the
+      // counterparty has, regardless of whatever else is ready — mirrors CounterpartyMustSignFirstError.
+      // Once the counterparty HAS signed, it genuinely is the originator's turn (falls through below).
+      const counterpartySigned = input.otherRole === "creditor" ? !!input.creditorSignedAt : !!input.debtorSignedAt;
+      if (!counterpartySigned) {
+        return {
+          key: "signatures",
+          label: "Review & signatures",
+          status: "waiting",
+          description: "The other party must review and sign first. You'll be notified as soon as they do.",
+          cta: null,
+        };
+      }
     }
     return {
       key: "signatures",

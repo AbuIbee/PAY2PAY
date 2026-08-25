@@ -149,8 +149,10 @@ describe("B2BWorkflowService", () => {
     it("a fully-signed B2B agreement (both sides business) correctly captures each signer's title and authority", async () => {
       const creditor = await seedBusiness();
       const debtor = await seedBusiness();
+      // Agreement Lifecycle V2: debtor originates so the creditor is the counterparty and may
+      // legitimately sign first below.
       const draft = await ctx.b2bWorkflowService.createB2BDraft({
-        creatorUserId: creditor.ownerId,
+        creatorUserId: debtor.ownerId,
         creditor: { kind: "business", id: creditor.businessId },
         debtor: { kind: "business", id: debtor.businessId },
         ...baseTerms(),

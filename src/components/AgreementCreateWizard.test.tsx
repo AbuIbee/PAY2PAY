@@ -40,6 +40,48 @@ describe("AgreementCreateWizard", () => {
     expect(screen.getByRole("link", { name: /invite a counterparty/i })).toHaveAttribute("href", "/connections/invite");
   });
 
+  it("Agreement Lifecycle V2 (Next: Terms regression): excludes a still-pending ('invited') connection from the picker, instead of offering a selection that dead-ends with Next: Terms permanently disabled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        "/api/profiles": { body: { profiles: [{ kind: "personal", personalProfileId: "p1", displayName: "Jane Doe" }] } },
+        "/api/relationships?": {
+          body: { relationships: [{ id: "rel-invited", status: "invited", currentAgreementId: null }] },
+        },
+      }),
+    );
+
+    render(<AgreementCreateWizard />);
+
+    // Awaited directly (not a separate sync follow-up) — "No eligible connections" is also what
+    // renders on the very first tick before the relationships fetch resolves, so only this specific,
+    // fetch-derived text proves the async data actually landed.
+    expect(await screen.findByText(/aren.t ready for a new agreement yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no eligible connections/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/connection/i)).not.toBeInTheDocument();
+  });
+
+  it("Agreement Lifecycle V2: also excludes a closed/cancelled/restricted/suspended connection from the picker", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        "/api/profiles": { body: { profiles: [{ kind: "personal", personalProfileId: "p1", displayName: "Jane Doe" }] } },
+        "/api/relationships?": {
+          body: {
+            relationships: [
+              { id: "rel-closed", status: "closed", currentAgreementId: null },
+              { id: "rel-restricted", status: "restricted", currentAgreementId: null },
+            ],
+          },
+        },
+      }),
+    );
+
+    render(<AgreementCreateWizard />);
+    expect(await screen.findByText(/aren.t ready for a new agreement yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no eligible connections/i)).toBeInTheDocument();
+  });
+
   it("derives both parties' roles from the selected connection and creates + links a draft agreement", async () => {
     const user = userEvent.setup();
     vi.stubGlobal(

@@ -93,8 +93,11 @@ describe("AgreementProgressService", () => {
     verification.set("personal", creditorProfileId, "FULL_VERIFIED");
     verification.set("personal", debtorProfileId, "FULL_VERIFIED");
 
+    // Agreement Lifecycle V2: the debtor originates so the creditor is the counterparty and may
+    // legitimately sign first in the tests below (signAgreement now requires the counterparty to
+    // sign before the originator).
     const created = await ctx.agreementService.createDraft({
-      creatorUserId: creditorUserId,
+      creatorUserId: debtorUserId,
       creditor: { kind: "personal", id: creditorProfileId },
       debtor: { kind: "personal", id: debtorProfileId },
       ...baseTerms(overrides),
@@ -317,6 +320,28 @@ describe("AgreementProgressService", () => {
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       expect(progress.steps.find((s) => s.key === "signatures")?.status).toBe("complete");
+    });
+
+    it("Agreement Lifecycle V2 — the originator sees 'waiting' (never action_required) before the counterparty has signed, even though everything else is ready", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+
+      // debtor originated (see createAgreement) — so the debtor must wait for the creditor (the
+      // counterparty) to sign first, never shown as their turn.
+      const debtorProgress = await progressService.getProgress(agreementId, debtorUserId);
+      const debtorStep = debtorProgress.steps.find((s) => s.key === "signatures");
+      expect(debtorStep?.status).toBe("waiting");
+      expect(debtorStep?.description).toMatch(/other party must review and sign first/i);
+    });
+
+    it("Agreement Lifecycle V2 — once the counterparty signs, it genuinely becomes the originator's turn (action_required, not waiting)", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+
+      const debtorProgress = await progressService.getProgress(agreementId, debtorUserId);
+      const debtorStep = debtorProgress.steps.find((s) => s.key === "signatures");
+      expect(debtorStep?.status).toBe("action_required");
     });
   });
 

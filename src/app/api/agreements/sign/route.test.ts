@@ -78,7 +78,7 @@ describe("POST /api/agreements/sign", () => {
     const creditorProfileId = await seedPersonalParty(sigCtx, creditorUserId);
     const debtorProfileId = await seedPersonalParty(sigCtx, debtorUserId);
     const created = await sigCtx.agreementCtx.agreementService.createDraft({
-      creatorUserId: creditorUserId,
+      creatorUserId: debtorUserId,
       creditor: { kind: "personal", id: creditorProfileId },
       debtor: { kind: "personal", id: debtorProfileId },
       category: "personal_loan",
@@ -96,7 +96,7 @@ describe("POST /api/agreements/sign", () => {
       settlementRules: "none",
       disputeProcedure: "none",
     });
-    await sigCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, creditorUserId);
+    await sigCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, debtorUserId);
     await sigCtx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
     await sigCtx.agreementCtx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
 
@@ -121,8 +121,10 @@ describe("POST /api/agreements/sign", () => {
     const debtorUserId = "44444444-4444-4444-4444-444444444444";
     const creditorProfileId = await seedPersonalParty(sigCtx, signup.user.id);
     const debtorProfileId = await seedPersonalParty(sigCtx, debtorUserId);
+    // Agreement Lifecycle V2: debtor originates so the creditor (signup.user.id) is the counterparty
+    // and may sign first through the actual route.
     const created = await sigCtx.agreementCtx.agreementService.createDraft({
-      creatorUserId: signup.user.id,
+      creatorUserId: debtorUserId,
       creditor: { kind: "personal", id: creditorProfileId },
       debtor: { kind: "personal", id: debtorProfileId },
       category: "personal_loan",
@@ -140,7 +142,7 @@ describe("POST /api/agreements/sign", () => {
       settlementRules: "none",
       disputeProcedure: "none",
     });
-    await sigCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, signup.user.id);
+    await sigCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, debtorUserId);
     await sigCtx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
     await sigCtx.agreementCtx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: signup.user.id, decision: "accept" });
 

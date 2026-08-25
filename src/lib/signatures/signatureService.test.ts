@@ -60,13 +60,16 @@ describe("SignatureService", () => {
     const creditorProfileId = await seedPersonalParty(ctx, creditorUserId);
     const debtorProfileId = await seedPersonalParty(ctx, debtorUserId);
 
+    // Agreement Lifecycle V2: the debtor originates so the creditor is the counterparty — the
+    // legitimate *first* signer this file's tests exercise throughout (signAgreement now requires
+    // the counterparty to sign before the originator).
     const created = await ctx.agreementCtx.agreementService.createDraft({
-      creatorUserId: creditorUserId,
+      creatorUserId: debtorUserId,
       creditor: { kind: "personal", id: creditorProfileId },
       debtor: { kind: "personal", id: debtorProfileId },
       ...baseTerms(),
     });
-    await ctx.agreementCtx.agreementService.submitDraft(created.agreement.id, creditorUserId);
+    await ctx.agreementCtx.agreementService.submitDraft(created.agreement.id, debtorUserId);
     await ctx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
     await ctx.agreementCtx.agreementService.creditorDecide({
       agreementId: created.agreement.id,
@@ -263,13 +266,15 @@ describe("SignatureService", () => {
       ctx.agreementCtx.profileOwners.set("business", businessId, ownerUserId);
       const debtorProfileId = await seedPersonalParty(ctx, debtorUserId);
 
+      // Agreement Lifecycle V2: debtor originates so the business owner is the counterparty and may
+      // legitimately sign first.
       const created = await ctx.agreementCtx.agreementService.createDraft({
-        creatorUserId: ownerUserId,
+        creatorUserId: debtorUserId,
         creditor: { kind: "business", id: businessId },
         debtor: { kind: "personal", id: debtorProfileId },
         ...baseTerms(),
       });
-      await ctx.agreementCtx.agreementService.submitDraft(created.agreement.id, ownerUserId);
+      await ctx.agreementCtx.agreementService.submitDraft(created.agreement.id, debtorUserId);
       await ctx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
       await ctx.agreementCtx.agreementService.creditorDecide({
         agreementId: created.agreement.id,
@@ -306,13 +311,15 @@ describe("SignatureService", () => {
       ctx.agreementCtx.profileOwners.set("business", businessId, ownerUserId);
       const debtorProfileId = await seedPersonalParty(ctx, debtorUserId);
 
+      // Agreement Lifecycle V2: debtor originates so the business owner is the counterparty and may
+      // legitimately sign first.
       const created = await ctx.agreementCtx.agreementService.createDraft({
-        creatorUserId: ownerUserId,
+        creatorUserId: debtorUserId,
         creditor: { kind: "business", id: businessId },
         debtor: { kind: "personal", id: debtorProfileId },
         ...baseTerms(),
       });
-      await ctx.agreementCtx.agreementService.submitDraft(created.agreement.id, ownerUserId);
+      await ctx.agreementCtx.agreementService.submitDraft(created.agreement.id, debtorUserId);
       await ctx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
       await ctx.agreementCtx.agreementService.creditorDecide({
         agreementId: created.agreement.id,
@@ -619,13 +626,15 @@ describe("SignatureService", () => {
       const debtorUserId = randomUUID();
       const creditorProfileId = await seedPersonalParty(notifiedCtx, creditorUserId);
       const debtorProfileId = await seedPersonalParty(notifiedCtx, debtorUserId);
+      // Agreement Lifecycle V2: debtor originates so the creditor is the counterparty and may
+      // legitimately sign first (matches this file's other helpers).
       const created = await notifiedCtx.agreementCtx.agreementService.createDraft({
-        creatorUserId: creditorUserId,
+        creatorUserId: debtorUserId,
         creditor: { kind: "personal", id: creditorProfileId },
         debtor: { kind: "personal", id: debtorProfileId },
         ...baseTerms(),
       });
-      await notifiedCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, creditorUserId);
+      await notifiedCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, debtorUserId);
       await notifiedCtx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
       await notifiedCtx.agreementCtx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
       const creditorSession = randomUUID();

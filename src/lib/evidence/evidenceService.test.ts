@@ -38,8 +38,10 @@ describe("EvidenceService", () => {
     const debtorProfileId = randomUUID();
     ctx.agreementCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
     ctx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+    // Agreement Lifecycle V2: debtor originates so the creditor is the counterparty and may sign
+    // first in signBothParties below.
     const created = await ctx.agreementCtx.agreementService.createDraft({
-      creatorUserId: creditorUserId,
+      creatorUserId: debtorUserId,
       creditor: { kind: "personal", id: creditorProfileId },
       debtor: { kind: "personal", id: debtorProfileId },
       ...baseTerms(),

@@ -35,6 +35,26 @@ interface CounterpartyRef {
 
 type Step = "parties" | "terms" | "review";
 
+/**
+ * Agreement Lifecycle V2 (Next: Terms regression fix): a relationship is only usable as a new
+ * agreement's counterparty connection once BOTH participants have actually joined it — "invited"
+ * means only the inviter's own side exists yet, so `/api/relationships/detail` can never resolve a
+ * second (counterparty) participant for it, and selecting one silently dead-ends the wizard with
+ * "This connection doesn't have two confirmed participants yet," permanently disabling Next: Terms
+ * with no explanation. The prior filter checked only `currentAgreementId === null`, which correctly
+ * excludes a relationship already governing an agreement but never excluded a still-pending
+ * invitation or a terminal (closed/cancelled/restricted/suspended) relationship.
+ */
+const NOT_YET_JOINED_STATUS = "invited";
+const TERMINAL_STATUSES = ["restricted", "suspended", "closed", "cancelled"];
+function isEligibleForNewAgreement(relationship: RelationshipSummary): boolean {
+  return (
+    relationship.currentAgreementId === null &&
+    relationship.status !== NOT_YET_JOINED_STATUS &&
+    !TERMINAL_STATUSES.includes(relationship.status)
+  );
+}
+
 function profileRef(profile: SelectableProfile): { kind: "personal" | "business"; id: string } | null {
   if (profile.kind === "personal") return profile.personalProfileId ? { kind: "personal", id: profile.personalProfileId } : null;
   return profile.businessProfileId ? { kind: "business", id: profile.businessProfileId } : null;
@@ -57,6 +77,7 @@ export function AgreementCreateWizard() {
   const [profiles, setProfiles] = useState<SelectableProfile[]>([]);
   const [actingProfile, setActingProfile] = useState<SelectableProfile | null>(null);
   const [relationships, setRelationships] = useState<RelationshipSummary[]>([]);
+  const [hasAnyConnections, setHasAnyConnections] = useState(false);
   const [selectedRelationshipId, setSelectedRelationshipId] = useState<string>("");
   const [counterparty, setCounterparty] = useState<CounterpartyRef | null>(null);
   const [myRole, setMyRole] = useState<"creditor" | "debtor" | null>(null);
@@ -97,9 +118,15 @@ export function AgreementCreateWizard() {
         const body = await apiFetch<{ relationships: RelationshipSummary[] }>(
           `/api/relationships?partyKind=${ref.kind}&partyId=${ref.id}`,
         );
-        if (!cancelled) setRelationships(body.relationships.filter((r) => r.currentAgreementId === null));
+        if (!cancelled) {
+          setHasAnyConnections(body.relationships.length > 0);
+          setRelationships(body.relationships.filter(isEligibleForNewAgreement));
+        }
       } catch {
-        if (!cancelled) setRelationships([]);
+        if (!cancelled) {
+          setHasAnyConnections(false);
+          setRelationships([]);
+        }
       }
     })();
     return () => {
@@ -212,10 +239,18 @@ export function AgreementCreateWizard() {
           {relationships.length === 0 ? (
             <div className="empty-state">
               <h3>No eligible connections</h3>
-              <p>
-                You need an active connection with a counterparty before creating an agreement.{" "}
-                <a href="/connections/invite">Invite a counterparty</a> first.
-              </p>
+              {hasAnyConnections ? (
+                <p>
+                  Your existing connections aren&apos;t ready for a new agreement yet — an invitation may
+                  still be waiting on the other person to accept, or the connection has been closed. Check{" "}
+                  <a href="/connections">Connections</a>, or <a href="/connections/invite">invite a counterparty</a>.
+                </p>
+              ) : (
+                <p>
+                  You need an active connection with a counterparty before creating an agreement.{" "}
+                  <a href="/connections/invite">Invite a counterparty</a> first.
+                </p>
+              )}
             </div>
           ) : (
             <div className="field">
