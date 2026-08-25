@@ -199,6 +199,44 @@ describe("AppNav", () => {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}$`, "i") })).toBeInTheDocument();
     }
     expect(screen.getByRole("link", { name: /^settings$/i })).toHaveAttribute("href", "/account");
-    expect(screen.getByRole("link", { name: /^staff$/i })).toHaveAttribute("href", "/organization/staff");
+    // Organization Features: Coming Soon treatment — "Staff" is intentionally no longer a working
+    // link (StaffService.requireActiveStaff blocks a real business owner every time; see AppNav.tsx's
+    // own doc comment) — it must still be visible, just non-interactive.
+    expect(screen.queryByRole("link", { name: /^staff$/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Staff")).toBeInTheDocument();
+  });
+
+  describe("Organization Features: Coming Soon treatment", () => {
+    it("3/4/5. every Organization link (Staff, Custom roles, Approvals) shows visible 'Coming Soon' text and is not a working/navigable link", async () => {
+      vi.stubGlobal("fetch", stubNavFetches());
+      render(<AppNav />);
+      await screen.findByRole("button", { name: /^menu$/i });
+
+      for (const label of ["Staff", "Custom roles", "Approvals"]) {
+        expect(screen.queryByRole("link", { name: new RegExp(`^${label}$`, "i") })).not.toBeInTheDocument();
+        expect(screen.getByText(label)).toBeInTheDocument();
+      }
+      // "Coming Soon" is visible text, not merely a color/style difference — one per Organization item.
+      expect(screen.getAllByText("Coming Soon")).toHaveLength(3);
+    });
+
+    it("3/4. the Coming Soon rows carry accessible disabled semantics (aria-disabled), not just visual styling", async () => {
+      vi.stubGlobal("fetch", stubNavFetches());
+      render(<AppNav />);
+      await screen.findByRole("button", { name: /^menu$/i });
+
+      const staffRow = screen.getByText("Staff").closest("[aria-disabled]");
+      expect(staffRow).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("6. working navigation links (Dashboard, Connections, Settings, etc.) remain real, clickable links, unaffected by the Organization Coming Soon treatment", async () => {
+      vi.stubGlobal("fetch", stubNavFetches());
+      render(<AppNav />);
+      await screen.findByRole("button", { name: /^menu$/i });
+
+      expect(screen.getByRole("link", { name: /^dashboard$/i })).toHaveAttribute("href", "/dashboard");
+      expect(screen.getByRole("link", { name: /^connections$/i })).toHaveAttribute("href", "/connections");
+      expect(screen.getByRole("link", { name: /^settings$/i })).toHaveAttribute("href", "/account");
+    });
   });
 });

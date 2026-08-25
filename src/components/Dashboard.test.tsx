@@ -214,4 +214,18 @@ describe("Dashboard summary — Personal/Business consistency", () => {
     await screen.findByText("$900.00");
     expect(screen.getByText("What requires action")).toBeInTheDocument();
   });
+
+  it("Organization Features: Coming Soon treatment — 'Manage staff' on the Business dashboard is no longer a working link into the broken Staff page", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", buildContextFetchMock());
+    render(<Dashboard />);
+    await screen.findByText("Money I owe");
+
+    await user.selectOptions(screen.getByLabelText("Viewing as"), "Salahuddeen Enterprises");
+    await screen.findByText("$900.00");
+
+    expect(screen.queryByRole("link", { name: /manage staff/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/manage staff/i)).toBeInTheDocument();
+    expect(screen.getByText("Coming Soon")).toBeInTheDocument();
+  });
 });

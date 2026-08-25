@@ -289,7 +289,10 @@ export function Dashboard() {
 
       {active?.kind === "business" && businessData && (
         <p style={{ margin: 0 }}>
-          <Link href="/organization/staff">Manage staff</Link> for {active.displayName} ({businessData.staffCount}{" "}
+          {/* Organization Features: Coming Soon treatment — Manage Staff is not yet reachable (see
+              /organization/staff's own doc comment for the root cause); plain text, not a link, so
+              this never behaves like a working control. */}
+          Manage staff <span className="chip chip--neutral">Coming Soon</span> for {active.displayName} ({businessData.staffCount}{" "}
           {businessData.staffCount === 1 ? "member" : "members"}, {businessData.customers.length}{" "}
           {businessData.customers.length === 1 ? "customer" : "customers"}).
         </p>
