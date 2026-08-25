@@ -4,14 +4,28 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
+import { AgreementProgressService, type PersonalProfileReader, type RelationshipPaymentMethodReader, type VerificationStateReader } from "@/lib/agreements/agreementProgressService";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
-import { createAgreementVersionsHandler } from "./route";
+import type { VerificationState } from "@/lib/profiles/verificationService";
+import { createAgreementProgressHandler } from "./route";
 
-/**
- * PRSprint 11 (docs/prsprints/PRSPRINT_11_AGREEMENT_VERSIONING_AMENDMENTS_MUTUAL_APPROVAL.md):
- * route-level cross-tenant/IDOR coverage for GET /api/agreements/versions, mirroring
- * /api/agreements/detail/route.test.ts's identical pattern.
- */
+class FakeVerification implements VerificationStateReader {
+  async getVerificationState(): Promise<VerificationState> {
+    return "FULL_VERIFIED";
+  }
+}
+class FakePersonalProfiles implements PersonalProfileReader {
+  byUserId = new Map<string, { id: string }>();
+  async findByUserId(userId: string) {
+    return this.byUserId.get(userId) ?? null;
+  }
+}
+class FakePaymentMethods implements RelationshipPaymentMethodReader {
+  async getRelationshipAccounts() {
+    return [];
+  }
+}
+
 function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
   return {
     category: "personal_loan",
@@ -33,53 +47,59 @@ function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
 }
 
 function getWithCookie(agreementId: string | null, token?: string) {
-  const url = agreementId
-    ? `http://localhost/api/agreements/versions?agreementId=${agreementId}`
-    : "http://localhost/api/agreements/versions";
+  const url = agreementId ? `http://localhost/api/agreements/progress?id=${agreementId}` : "http://localhost/api/agreements/progress";
   return new NextRequest(url, { method: "GET", headers: token ? { cookie: `p2p_session=${token}` } : {} });
 }
 
-describe("GET /api/agreements/versions", () => {
+describe("GET /api/agreements/progress", () => {
   let authCtx: ReturnType<typeof createTestAuthService>;
   let agreementCtx: ReturnType<typeof createTestAgreementService>;
+  let progressService: AgreementProgressService;
   let agreementId: string;
   let creditorToken: string;
-  let debtorToken: string;
   let strangerToken: string;
 
   beforeEach(async () => {
     authCtx = createTestAuthService();
     agreementCtx = createTestAgreementService();
+    const personalProfiles = new FakePersonalProfiles();
+    progressService = new AgreementProgressService({
+      agreementService: agreementCtx.agreementService,
+      verification: new FakeVerification(),
+      personalProfiles,
+      relationshipPaymentMethods: new FakePaymentMethods(),
+    });
 
     const creditor = await authCtx.authService.signup({
-      email: "versions-creditor@example.com",
+      email: "progress-creditor@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });
     const debtor = await authCtx.authService.signup({
-      email: "versions-debtor@example.com",
+      email: "progress-debtor@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });
     const stranger = await authCtx.authService.signup({
-      email: "versions-stranger@example.com",
+      email: "progress-stranger@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });
     creditorToken = creditor.token;
-    debtorToken = debtor.token;
     strangerToken = stranger.token;
 
     const creditorProfileId = randomUUID();
     const debtorProfileId = randomUUID();
     agreementCtx.profileOwners.set("personal", creditorProfileId, creditor.user.id);
     agreementCtx.profileOwners.set("personal", debtorProfileId, debtor.user.id);
+    personalProfiles.byUserId.set(creditor.user.id, { id: creditorProfileId });
+    personalProfiles.byUserId.set(debtor.user.id, { id: debtorProfileId });
 
     const created = await agreementCtx.agreementService.createDraft({
       creatorUserId: creditor.user.id,
@@ -91,29 +111,17 @@ describe("GET /api/agreements/versions", () => {
   });
 
   function handlerFor() {
-    return withErrorHandling(
-      "agreement_versions",
-      createAgreementVersionsHandler(authCtx.authService, agreementCtx.agreementService),
-    );
+    return withErrorHandling("agreement_progress", createAgreementProgressHandler(authCtx.authService, progressService));
   }
 
-  it("lets the creditor party list the version history, oldest first", async () => {
+  it("returns the full step list for a real party (200)", async () => {
     const response = await handlerFor()(getWithCookie(agreementId, creditorToken));
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { versions: { versionNumber: number; isOriginal: boolean }[] };
-    expect(body.versions).toHaveLength(1);
-    expect(body.versions[0]!.versionNumber).toBe(1);
-    expect(body.versions[0]!.isOriginal).toBe(true);
-  });
-
-  it("lets the debtor party list the version history", async () => {
-    const response = await handlerFor()(getWithCookie(agreementId, debtorToken));
-    expect(response.status).toBe(200);
-  });
-
-  it("rejects a cross-tenant IDOR attempt: an authenticated stranger cannot list another agreement's version history", async () => {
-    const response = await handlerFor()(getWithCookie(agreementId, strangerToken));
-    expect(response.status).toBe(403);
+    const body = (await response.json()) as { steps: unknown[]; myRole: string; primaryAction: unknown };
+    expect(Array.isArray(body.steps)).toBe(true);
+    expect(body.steps.length).toBeGreaterThan(0);
+    expect(body.myRole).toBe("creditor");
+    expect(body.primaryAction).toBeTruthy();
   });
 
   it("rejects an unauthenticated request with 401", async () => {
@@ -121,8 +129,13 @@ describe("GET /api/agreements/versions", () => {
     expect(response.status).toBe(401);
   });
 
-  it("rejects a tampered/nonexistent agreement id with a non-200, without leaking existence of other agreements", async () => {
-    const response = await handlerFor()(getWithCookie(randomUUID(), creditorToken));
-    expect(response.status).not.toBe(200);
+  it("rejects a cross-tenant stranger — this is UX data, but still never leaks another party's agreement state", async () => {
+    const response = await handlerFor()(getWithCookie(agreementId, strangerToken));
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects a request missing the id parameter (400)", async () => {
+    const response = await handlerFor()(getWithCookie(null, creditorToken));
+    expect(response.status).toBe(400);
   });
 });

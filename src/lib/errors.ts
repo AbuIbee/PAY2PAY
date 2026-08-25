@@ -41,14 +41,28 @@ export class ConfigurationError extends AppError {
 }
 
 export class ValidationError extends AppError {
-  constructor(message: string, cause?: unknown) {
+  constructor(message: string, cause?: unknown, code = "VALIDATION_ERROR") {
     super(message, {
       statusCode: 400,
-      code: "VALIDATION_ERROR",
+      code,
       isOperational: true,
       cause,
     });
     this.name = "ValidationError";
+  }
+}
+
+/**
+ * The agreement's proposed first-payment date has already passed while it is still unsigned. Still
+ * an instanceof ValidationError (existing callers/tests that check for that keep working), but with
+ * its own `code` so a client can reliably offer a schedule-revision action and retry, instead of
+ * treating this as an ordinary, non-actionable validation failure — mirrors StepUpRequiredError's
+ * identical "distinct code for a distinct guided recovery flow" precedent.
+ */
+export class ScheduleRevisionRequiredError extends ValidationError {
+  constructor(message = "This agreement's proposed first payment date has already passed and must be revised before signing.") {
+    super(message, undefined, "SCHEDULE_REVISION_REQUIRED");
+    this.name = "ScheduleRevisionRequiredError";
   }
 }
 

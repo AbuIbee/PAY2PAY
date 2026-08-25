@@ -67,6 +67,7 @@ export class InMemoryAgreementRepository implements AgreementRepository {
       status: "draft",
       country: "US",
       currentVersionId: null,
+      relationshipId: null,
       createdAt: new Date(),
       closedAt: null,
       ...input,
@@ -162,6 +163,14 @@ export class InMemoryAgreementVersionRepository implements AgreementVersionRepos
     if (record) {
       record.documentHash = input.documentHash;
       record.signedAt = input.signedAt;
+    }
+  }
+
+  async clearSignatures(id: string): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) {
+      record.creditorSignedAt = null;
+      record.debtorSignedAt = null;
     }
   }
 }

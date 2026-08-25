@@ -13,7 +13,7 @@ function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
     firstPaymentMinorUnits: 20_000,
     installmentAmountMinorUnits: 20_000,
     frequency: "monthly",
-    firstPaymentDate: "2026-02-01",
+    firstPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
     feeAllocation: "debtor_pays",
     earlyPayoffTerms: "No penalty for early payoff.",
     hardshipRules: "Borrower may request hardship relief; no interest or penalty added.",
@@ -447,6 +447,141 @@ describe("AgreementService", () => {
           ...baseTerms(),
         }),
       ).rejects.toThrow(ValidationError);
+    });
+  });
+
+  /**
+   * Agreement workflow remediation (Problem 2 — a UAT-discovered live defect: an unsigned agreement's
+   * proposed first payment date can silently pass while parties negotiate/verify, then get signed
+   * anyway with an already-stale schedule). Covers the signing guard and its required resolution
+   * path, reviseFirstPaymentDate.
+   */
+  describe("Problem 2 — expired first payment date", () => {
+    async function setUpAwaitingSignatures(overrides: Partial<DraftTermsInput> = {}) {
+      const creditorUserId = randomUUID();
+      const debtorUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      const debtorProfileId = randomUUID();
+      ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+      ctx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+      const created = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(overrides),
+      });
+      await ctx.agreementService.submitDraft(created.agreement.id, creditorUserId);
+      await ctx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+      await ctx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" });
+      return { agreementId: created.agreement.id, creditorUserId, debtorUserId };
+    }
+
+    it("blocks the first signature attempt once the proposed first payment date has already passed", async () => {
+      const { agreementId, creditorUserId } = await setUpAwaitingSignatures({ firstPaymentDate: "2020-01-01" });
+      await expect(ctx.agreementService.signAgreement(agreementId, creditorUserId)).rejects.toThrow(ValidationError);
+      const agreement = await ctx.agreements.findById(agreementId);
+      expect(agreement?.status).toBe("awaiting_signatures"); // never advanced to signed
+    });
+
+    it("also blocks the completing (second) signature if the date lapses between the two signatures", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await setUpAwaitingSignatures();
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId); // valid at the time
+      // Simulate real-world delay: the version's own terms are mutated directly, exactly as if enough
+      // wall-clock time had passed for the proposed date to lapse before the debtor got to sign.
+      const agreement = await ctx.agreements.findById(agreementId);
+      const version = await ctx.versions.findById(agreement!.currentVersionId!);
+      version!.terms = { ...version!.terms, firstPaymentDate: "2020-01-01" };
+
+      await expect(ctx.agreementService.signAgreement(agreementId, debtorUserId)).rejects.toThrow(ValidationError);
+      const stillPending = await ctx.agreements.findById(agreementId);
+      expect(stillPending?.status).toBe("awaiting_signatures"); // never reached first_payment_pending
+    });
+
+    it("does not block signing when the proposed first payment date is today or in the future", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await setUpAwaitingSignatures();
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+      await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+      const agreement = await ctx.agreements.findById(agreementId);
+      expect(agreement?.status).toBe("first_payment_pending");
+    });
+
+    it("reviseFirstPaymentDate: either party can propose a new date, recomputing the schedule and unblocking signing", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await setUpAwaitingSignatures({ firstPaymentDate: "2020-01-01" });
+      const futureDate = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+      const result = await ctx.agreementService.reviseFirstPaymentDate({
+        agreementId,
+        actingUserId: debtorUserId, // the debtor (not just the creditor) may propose the revision
+        newFirstPaymentDate: futureDate,
+      });
+      expect(result.version.terms.firstPaymentDate).toBe(futureDate);
+      expect(result.schedule[0]?.dueDate).toBe(futureDate);
+
+      // Now unblocked — both parties can sign normally.
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+      await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+      const agreement = await ctx.agreements.findById(agreementId);
+      expect(agreement?.status).toBe("first_payment_pending");
+    });
+
+    it("reviseFirstPaymentDate: invalidates an already-recorded partial signature, since it was captured against the old (stale) terms", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await setUpAwaitingSignatures();
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+
+      // Simulate the date lapsing before the debtor signs (see the earlier test for the same setup).
+      const agreement = await ctx.agreements.findById(agreementId);
+      const version = await ctx.versions.findById(agreement!.currentVersionId!);
+      version!.terms = { ...version!.terms, firstPaymentDate: "2020-01-01" };
+
+      const futureDate = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      await ctx.agreementService.reviseFirstPaymentDate({ agreementId, actingUserId: debtorUserId, newFirstPaymentDate: futureDate });
+
+      const revisedVersion = await ctx.versions.findById(agreement!.currentVersionId!);
+      expect(revisedVersion?.creditorSignedAt).toBeNull();
+      expect(revisedVersion?.debtorSignedAt).toBeNull();
+
+      // Creditor must sign again under the new terms.
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+      await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+      const finalAgreement = await ctx.agreements.findById(agreementId);
+      expect(finalAgreement?.status).toBe("first_payment_pending");
+    });
+
+    it("reviseFirstPaymentDate: rejects a new date that is itself still in the past", async () => {
+      const { agreementId, creditorUserId } = await setUpAwaitingSignatures({ firstPaymentDate: "2020-01-01" });
+      await expect(
+        ctx.agreementService.reviseFirstPaymentDate({ agreementId, actingUserId: creditorUserId, newFirstPaymentDate: "2020-06-01" }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("reviseFirstPaymentDate: rejects a stranger with no relationship to either party", async () => {
+      const { agreementId } = await setUpAwaitingSignatures({ firstPaymentDate: "2020-01-01" });
+      const futureDate = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      await expect(
+        ctx.agreementService.reviseFirstPaymentDate({ agreementId, actingUserId: randomUUID(), newFirstPaymentDate: futureDate }),
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it("reviseFirstPaymentDate: rejects once the agreement is fully signed (immutable past that point)", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await setUpAwaitingSignatures();
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId);
+      await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+      const futureDate = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      await expect(
+        ctx.agreementService.reviseFirstPaymentDate({ agreementId, actingUserId: creditorUserId, newFirstPaymentDate: futureDate }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("every schedule revision is audited with the before/after dates", async () => {
+      const { agreementId, creditorUserId } = await setUpAwaitingSignatures({ firstPaymentDate: "2020-01-01" });
+      const futureDate = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      await ctx.agreementService.reviseFirstPaymentDate({ agreementId, actingUserId: creditorUserId, newFirstPaymentDate: futureDate });
+
+      const revisionEvent = ctx.auditRepo.events.find(
+        (e) => e.agreementId === agreementId && e.action === "agreement_first_payment_date_revised",
+      );
+      expect(revisionEvent).toBeTruthy();
+      expect(revisionEvent?.newValue).toMatchObject({ previousFirstPaymentDate: "2020-01-01", newFirstPaymentDate: futureDate });
     });
   });
 

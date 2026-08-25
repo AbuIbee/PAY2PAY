@@ -4,10 +4,10 @@ import { logger } from "@/lib/logger";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { ForbiddenError, ScheduleRevisionRequiredError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { PageParams } from "@/lib/pagination";
-import { computeSchedule } from "./schedule";
+import { computeSchedule, isPastDate } from "./schedule";
 import type { PaymentFrequency, ScheduleItem } from "./schedule";
 
 export type AgreementStatus =
@@ -63,6 +63,15 @@ export interface AgreementRecord {
   currency: string;
   country: string;
   currentVersionId: string | null;
+  /**
+   * Agreement workflow remediation: read-only surfacing of `agreement.relationship_id` (already
+   * written by DrizzleAgreementRelationshipLinker, but never previously exposed through
+   * AgreementRepository/AgreementRecord) — AgreementProgressService uses this to determine whether a
+   * funding/payout payment method is already assigned. Null for any agreement never linked to a
+   * relationship (every pre-existing agreement, and any created outside the relationship-invitation
+   * flow) — callers must treat null as "not applicable," never as "missing."
+   */
+  relationshipId: string | null;
   createdByUserId: string;
   createdAt: Date;
   closedAt: Date | null;
@@ -137,6 +146,15 @@ export interface AgreementVersionRepository {
   ): Promise<void>;
   recordSignature(id: string, role: PartyRole, signedAt: Date): Promise<void>;
   lock(id: string, input: { documentHash: string; signedAt: Date }): Promise<void>;
+  /**
+   * Agreement workflow remediation (Problem 2): reviseFirstPaymentDate calls this whenever a
+   * schedule revision happens on a version that already carries a partial (not-yet-both-complete)
+   * signature — the terms are changing, so any signature already recorded against the old terms no
+   * longer applies to the new ones and must not silently survive under the revised schedule. Only
+   * ever called pre-lock (an already-`signedAt`-locked version is immutable and never reaches this
+   * method — reviseFirstPaymentDate's own status/signedAt guard ensures that).
+   */
+  clearSignatures(id: string): Promise<void>;
 }
 
 /** Real implementation: DrizzleAgreementPartyRepository. */
@@ -519,6 +537,19 @@ export class AgreementService {
     if (role === "debtor" && version.debtorSignedAt) {
       throw new ValidationError("The debtor has already signed this agreement.");
     }
+    // Closed-beta remediation (Problem 2 — expired first payment date): nothing before this point
+    // ever revisits `firstPaymentDate` against the clock once it's computed at draft/counter time, so
+    // real-world delay between proposing terms and both parties actually signing can silently carry
+    // an already-past date straight into a signed, first_payment_pending agreement. Block *every*
+    // signature attempt (not just the completing one) once the date has lapsed — see
+    // reviseFirstPaymentDate for the required resolution path — so no party's signature is ever
+    // captured against a schedule that's already stale, and no wasted first signature exists to
+    // reconcile if the second party is the one who hits this block.
+    if (isPastDate(version.terms.firstPaymentDate)) {
+      throw new ScheduleRevisionRequiredError(
+        `The proposed first payment date (${version.terms.firstPaymentDate}) has already passed. This agreement's schedule must be revised before it can be signed.`,
+      );
+    }
 
     const now = new Date();
     const result = await this.deps.signing.applySigningAtomically({
@@ -548,6 +579,72 @@ export class AgreementService {
     // integrate payments); this is purely a status placeholder for Sprint 9+ to act on later.
     await this.recordAudit(agreement.id, actingUserId, "agreement_first_payment_pending", null);
     return { signatureEventId: result.signatureEventId, signedAt: now, bothSigned: true, agreementStatus: "first_payment_pending" };
+  }
+
+  /**
+   * Closed-beta remediation (Problem 2 — expired first payment date): the required resolution path
+   * for signAgreementWithEvidence's ScheduleRevisionRequiredError. Deliberately narrower than
+   * creditorDecide's "counter" mechanism (which only runs from `awaiting_creditor_acceptance` and is
+   * creditor-only): this is reachable from `awaiting_signatures` — the exact state a stale date can
+   * be discovered in — and either party may propose the new date, since nothing is contractually
+   * locked yet (master spec §3: agreements become locked only "after signing") and no counterparty
+   * approval is required to revise still-provisional terms pre-signature, mirroring the "counter"
+   * flow's own identical "still unsigned, so mutating the version's terms in place is not an
+   * FR-AGR-006 violation" precedent. If either party had already signed this version before the date
+   * lapsed, that signature is invalidated (clearSignatures) — it was captured against terms that no
+   * longer exist — and audited explicitly, rather than silently surviving under the new schedule.
+   */
+  async reviseFirstPaymentDate(input: {
+    agreementId: string;
+    actingUserId: string;
+    newFirstPaymentDate: string;
+  }): Promise<AgreementWithDetail> {
+    const agreement = await this.requireAgreement(input.agreementId);
+    const revisingRole = await this.authorizeEitherParty(agreement, input.actingUserId, null);
+    this.requireStatus(agreement, "awaiting_signatures");
+    if (!agreement.currentVersionId) {
+      throw new ValidationError("This agreement has no current version to revise.");
+    }
+    const version = await this.requireVersion(agreement.currentVersionId);
+    if (version.signedAt) {
+      throw new ValidationError("This agreement is already fully signed and can no longer be revised this way.");
+    }
+    if (isPastDate(input.newFirstPaymentDate)) {
+      throw new ValidationError("The new first payment date must not already be in the past.");
+    }
+
+    const previousFirstPaymentDate = version.terms.firstPaymentDate;
+    const computed = computeSchedule({
+      currentPrincipalMinorUnits: version.terms.currentPrincipalMinorUnits,
+      firstPaymentMinorUnits: version.terms.firstPaymentMinorUnits,
+      installmentAmountMinorUnits: version.terms.installmentAmountMinorUnits,
+      frequency: version.frequency,
+      firstPaymentDate: input.newFirstPaymentDate,
+    });
+    const terms: AgreementTerms = {
+      ...version.terms,
+      firstPaymentDate: input.newFirstPaymentDate,
+      finalPaymentMinorUnits: computed.finalPaymentMinorUnits,
+      numberOfInstallments: computed.numberOfInstallments,
+    };
+
+    await this.deps.versions.updateTerms(version.id, { frequency: version.frequency, feeAllocation: version.feeAllocation, terms });
+    await this.deps.scheduleItems.replaceForVersion(version.id, computed.items);
+    const hadPartialSignature = !!version.creditorSignedAt || !!version.debtorSignedAt;
+    if (hadPartialSignature) {
+      await this.deps.versions.clearSignatures(version.id);
+    }
+
+    await this.recordAudit(agreement.id, input.actingUserId, "agreement_first_payment_date_revised", {
+      previousFirstPaymentDate,
+      newFirstPaymentDate: input.newFirstPaymentDate,
+      priorSignatureInvalidated: hadPartialSignature,
+    });
+    const auditId = await this.recordAudit(agreement.id, input.actingUserId, "agreement_action_required", { stage: "review_revised_schedule" });
+    const otherRole: PartyRole = revisingRole === "creditor" ? "debtor" : "creditor";
+    await this.notifyParty(agreement, otherRole, "agreement_action_required", { stage: "review_revised_schedule" }, auditId);
+
+    return this.getAgreement(input.agreementId, input.actingUserId);
   }
 
   async getAgreement(agreementId: string, actingUserId: string): Promise<AgreementWithDetail> {

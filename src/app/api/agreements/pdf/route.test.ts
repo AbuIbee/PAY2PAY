@@ -59,7 +59,7 @@ describe("GET /api/agreements/pdf", () => {
       firstPaymentMinorUnits: 5_000,
       installmentAmountMinorUnits: 5_000,
       frequency: "monthly",
-      firstPaymentDate: "2026-02-01",
+      firstPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
       feeAllocation: "split_evenly",
       earlyPayoffTerms: "none",
       hardshipRules: "none",

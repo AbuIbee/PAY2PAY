@@ -5,12 +5,12 @@ import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
-import { createAgreementVersionsHandler } from "./route";
+import { createAgreementReviseFirstPaymentDateHandler } from "./route";
 
 /**
- * PRSprint 11 (docs/prsprints/PRSPRINT_11_AGREEMENT_VERSIONING_AMENDMENTS_MUTUAL_APPROVAL.md):
- * route-level cross-tenant/IDOR coverage for GET /api/agreements/versions, mirroring
- * /api/agreements/detail/route.test.ts's identical pattern.
+ * Agreement workflow remediation (Problem 2) — route-level coverage for the resolution path a
+ * ScheduleRevisionRequiredError is supposed to lead to. Mirrors detail/route.test.ts's exact
+ * create*Handler + in-memory-service pattern.
  */
 function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
   return {
@@ -21,7 +21,7 @@ function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
     firstPaymentMinorUnits: 20_000,
     installmentAmountMinorUnits: 20_000,
     frequency: "monthly",
-    firstPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    firstPaymentDate: "2020-01-01",
     feeAllocation: "debtor_pays",
     earlyPayoffTerms: "No penalty for early payoff.",
     hardshipRules: "Borrower may request hardship relief; no interest or penalty added.",
@@ -32,48 +32,48 @@ function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
   };
 }
 
-function getWithCookie(agreementId: string | null, token?: string) {
-  const url = agreementId
-    ? `http://localhost/api/agreements/versions?agreementId=${agreementId}`
-    : "http://localhost/api/agreements/versions";
-  return new NextRequest(url, { method: "GET", headers: token ? { cookie: `p2p_session=${token}` } : {} });
+function postWithCookie(body: unknown, token?: string) {
+  return new NextRequest("http://localhost/api/agreements/revise-first-payment-date", {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "content-type": "application/json", ...(token ? { cookie: `p2p_session=${token}` } : {}) },
+  });
 }
 
-describe("GET /api/agreements/versions", () => {
+describe("POST /api/agreements/revise-first-payment-date", () => {
   let authCtx: ReturnType<typeof createTestAuthService>;
   let agreementCtx: ReturnType<typeof createTestAgreementService>;
   let agreementId: string;
   let creditorToken: string;
-  let debtorToken: string;
   let strangerToken: string;
+  const futureDate = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   beforeEach(async () => {
     authCtx = createTestAuthService();
     agreementCtx = createTestAgreementService();
 
     const creditor = await authCtx.authService.signup({
-      email: "versions-creditor@example.com",
+      email: "revise-creditor@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });
     const debtor = await authCtx.authService.signup({
-      email: "versions-debtor@example.com",
+      email: "revise-debtor@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });
     const stranger = await authCtx.authService.signup({
-      email: "versions-stranger@example.com",
+      email: "revise-stranger@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
       ipAddress: null,
       userAgent: null,
     });
     creditorToken = creditor.token;
-    debtorToken = debtor.token;
     strangerToken = stranger.token;
 
     const creditorProfileId = randomUUID();
@@ -88,41 +88,42 @@ describe("GET /api/agreements/versions", () => {
       ...baseTerms(),
     });
     agreementId = created.agreement.id;
+    await agreementCtx.agreementService.submitDraft(agreementId, creditor.user.id);
+    await agreementCtx.agreementService.acknowledgeDebt(agreementId, debtor.user.id);
+    await agreementCtx.agreementService.creditorDecide({ agreementId, actingUserId: creditor.user.id, decision: "accept" });
   });
 
   function handlerFor() {
     return withErrorHandling(
-      "agreement_versions",
-      createAgreementVersionsHandler(authCtx.authService, agreementCtx.agreementService),
+      "agreement_revise_first_payment_date",
+      createAgreementReviseFirstPaymentDateHandler(authCtx.authService, agreementCtx.agreementService),
     );
   }
 
-  it("lets the creditor party list the version history, oldest first", async () => {
-    const response = await handlerFor()(getWithCookie(agreementId, creditorToken));
+  it("lets a real party revise the stale schedule end to end (200), unblocking signing", async () => {
+    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: futureDate }, creditorToken));
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { versions: { versionNumber: number; isOriginal: boolean }[] };
-    expect(body.versions).toHaveLength(1);
-    expect(body.versions[0]!.versionNumber).toBe(1);
-    expect(body.versions[0]!.isOriginal).toBe(true);
-  });
-
-  it("lets the debtor party list the version history", async () => {
-    const response = await handlerFor()(getWithCookie(agreementId, debtorToken));
-    expect(response.status).toBe(200);
-  });
-
-  it("rejects a cross-tenant IDOR attempt: an authenticated stranger cannot list another agreement's version history", async () => {
-    const response = await handlerFor()(getWithCookie(agreementId, strangerToken));
-    expect(response.status).toBe(403);
+    const body = (await response.json()) as { status: string; firstPaymentDate: string };
+    expect(body.firstPaymentDate).toBe(futureDate);
   });
 
   it("rejects an unauthenticated request with 401", async () => {
-    const response = await handlerFor()(getWithCookie(agreementId));
+    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: futureDate }));
     expect(response.status).toBe(401);
   });
 
-  it("rejects a tampered/nonexistent agreement id with a non-200, without leaking existence of other agreements", async () => {
-    const response = await handlerFor()(getWithCookie(randomUUID(), creditorToken));
-    expect(response.status).not.toBe(200);
+  it("rejects a cross-tenant stranger attempting to revise someone else's agreement (403)", async () => {
+    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: futureDate }, strangerToken));
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects a malformed date before ever reaching AgreementService (400)", async () => {
+    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: "not-a-date" }, creditorToken));
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a new date that is itself still in the past (400)", async () => {
+    const response = await handlerFor()(postWithCookie({ agreementId, newFirstPaymentDate: "2020-06-01" }, creditorToken));
+    expect(response.status).toBe(400);
   });
 });

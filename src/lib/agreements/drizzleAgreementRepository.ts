@@ -20,6 +20,7 @@ function toRecord(row: Row): AgreementRecord {
     currency: row.currency,
     country: row.country,
     currentVersionId: row.currentVersionId,
+    relationshipId: row.relationshipId,
     createdByUserId: row.createdByUserId,
     createdAt: row.createdAt,
     closedAt: row.closedAt,

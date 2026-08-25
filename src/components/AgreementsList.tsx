@@ -15,6 +15,8 @@ interface AgreementSummary {
   currency: string;
   relationshipShape: "P2P" | "B2C" | "C2B" | "B2B";
   createdAt: string;
+  /** Agreement workflow remediation (Problem 3): the same AgreementProgressService.primaryAction label every agreement detail page shows — null if it couldn't be computed (degrades gracefully, never blocks the list). */
+  attentionLabel: string | null;
 }
 
 type LoadStatus = "loading" | "ready" | "unauthorized" | "error";
@@ -174,6 +176,11 @@ export function AgreementsList() {
                 <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--ink-soft)" }}>
                   {agreement.currency} · created {new Date(agreement.createdAt).toLocaleDateString()}
                 </p>
+                {agreement.attentionLabel && (
+                  <p style={{ margin: "0.35rem 0 0", fontSize: "0.8rem", fontWeight: 700, color: "var(--forest-800)" }}>
+                    {agreement.attentionLabel}
+                  </p>
+                )}
               </li>
             ))}
           </ul>

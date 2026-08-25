@@ -8,8 +8,10 @@ import {
   type AgreementTermsFormValues,
 } from "./AgreementTermsFields";
 import { StepUpChallenge } from "./StepUpChallenge";
+import { AgreementProgress } from "./AgreementProgress";
+import type { AgreementProgress as AgreementProgressData } from "@/lib/agreements/agreementProgressService";
 import type { SelectableProfile } from "./ProfileSwitcher";
-import { apiFetch, ApiError } from "@/lib/ui/apiFetch";
+import { apiFetch, ApiError, isScheduleRevisionRequired } from "@/lib/ui/apiFetch";
 import { useStepUpGuardedAction } from "@/lib/ui/useStepUpGuardedAction";
 import { formatMoney } from "@/lib/ui/money";
 import { formatDate, formatDateTime } from "@/lib/ui/date";
@@ -183,6 +185,7 @@ export function AgreementDetail() {
   const [settlements, setSettlements] = useState<SettlementItem[]>([]);
   const [disputes, setDisputes] = useState<DisputeItem[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [progress, setProgress] = useState<AgreementProgressData | null>(null);
 
   const load = useCallback(async () => {
     if (!agreementId) {
@@ -196,6 +199,12 @@ export function AgreementDetail() {
       ]);
       setData(detail);
       setActive(activeProfile);
+      // Agreement workflow remediation (Problem 3): UX-only — a failure here degrades to no progress
+      // panel rather than blocking the rest of the page, matching this file's own established
+      // tolerant-fetch pattern for evidence/witnesses/amendments/etc. below.
+      apiFetch<AgreementProgressData>(`/api/agreements/progress?id=${encodeURIComponent(agreementId)}`)
+        .then((body) => setProgress(Array.isArray(body?.steps) ? body : null))
+        .catch(() => setProgress(null));
       const [evidenceRes, witnessRes, amendmentRes, partialRes, settlementRes, disputeRes] = await Promise.all([
         apiFetch<{ evidence: EvidenceItem[] }>(`/api/agreements/evidence?agreementId=${agreementId}`).catch(() => ({ evidence: [] })),
         apiFetch<{ witnesses: WitnessItem[] }>(`/api/agreements/witnesses?agreementId=${agreementId}`).catch(() => ({ witnesses: [] })),
@@ -393,6 +402,8 @@ export function AgreementDetail() {
         )}
       </div>
 
+      {progress && <AgreementProgress data={progress} />}
+
       <div className="table-wrap">
         <table className="table">
           <thead>
@@ -527,10 +538,12 @@ export function AgreementDetail() {
 
       {data.status === "awaiting_signatures" && myRole && (
         <SignaturePanel
+          agreementId={data.id}
           myRole={myRole}
           creditorSignedAt={data.version.creditorSignedAt}
           debtorSignedAt={data.version.debtorSignedAt}
           signAction={signAction}
+          onRevised={() => void load()}
         />
       )}
 
@@ -586,19 +599,49 @@ function WitnessAttestPanel({ agreementId, onDone }: { agreementId: string; onDo
 }
 
 function SignaturePanel({
+  agreementId,
   myRole,
   creditorSignedAt,
   debtorSignedAt,
   signAction,
+  onRevised,
 }: {
+  agreementId: string;
   myRole: "creditor" | "debtor";
   creditorSignedAt: string | null;
   debtorSignedAt: string | null;
   signAction: ReturnType<typeof useStepUpGuardedAction<["totp" | "sms"], unknown>>;
+  onRevised: () => void;
 }) {
   const alreadySigned = myRole === "creditor" ? !!creditorSignedAt : !!debtorSignedAt;
   const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  // Agreement workflow remediation (Problem 2): set instead of `error` when signing fails because the
+  // proposed first payment date has already passed — see ScheduleRevisionRequiredError. Replaces the
+  // dead-end error text with the actual required resolution: propose a new date, right here.
+  const [needsScheduleRevision, setNeedsScheduleRevision] = useState(false);
+  const [newDate, setNewDate] = useState("");
+  const [revising, setRevising] = useState(false);
+  const [reviseError, setReviseError] = useState<string | null>(null);
+
+  async function handleRevise(event: React.FormEvent) {
+    event.preventDefault();
+    if (!newDate) return;
+    setRevising(true);
+    setReviseError(null);
+    try {
+      await apiFetch("/api/agreements/revise-first-payment-date", {
+        method: "POST",
+        body: JSON.stringify({ agreementId, newFirstPaymentDate: newDate }),
+      });
+      setNeedsScheduleRevision(false);
+      onRevised();
+    } catch (e) {
+      setReviseError(e instanceof ApiError ? e.message : "Could not update the schedule. Please try again.");
+    } finally {
+      setRevising(false);
+    }
+  }
 
   return (
     <div className="card">
@@ -608,34 +651,71 @@ function SignaturePanel({
       <p style={{ margin: 0 }}>Creditor signed: {creditorSignedAt ? formatDateTime(creditorSignedAt) : "not yet"}</p>
       <p style={{ margin: "0.25rem 0 0" }}>Debtor signed: {debtorSignedAt ? formatDateTime(debtorSignedAt) : "not yet"}</p>
       <p className="form-status" style={{ marginTop: "0.75rem" }}>
-        By signing, you consent to this agreement&apos;s terms as shown above. A fresh verification challenge is required.
+        By signing, you consent to this agreement&apos;s terms as shown above. A fresh verification challenge may be required.
       </p>
-      {error && (
-        <p className="field-error" role="alert">
-          {error}
-        </p>
-      )}
-      {!alreadySigned ? (
-        <button
-          type="button"
-          className="button button--primary"
-          disabled={status === "working"}
-          onClick={() => {
-            setStatus("working");
-            setError(null);
-            signAction
-              .run("totp")
-              .then(() => window.location.reload())
-              .catch((e: unknown) => {
-                setError(e instanceof ApiError ? e.message : "Signing failed. Please try again.");
-                setStatus("idle");
-              });
-          }}
-        >
-          {status === "working" ? "Signing…" : "Sign this agreement"}
-        </button>
+
+      {needsScheduleRevision ? (
+        <form onSubmit={(event) => void handleRevise(event)} style={{ marginTop: "0.75rem", display: "grid", gap: "0.6rem" }}>
+          <p className="field-error" role="alert" style={{ margin: 0 }}>
+            {error}
+          </p>
+          <div className="field">
+            <label htmlFor="revised-first-payment-date">New first payment date</label>
+            <input
+              id="revised-first-payment-date"
+              type="date"
+              required
+              value={newDate}
+              onChange={(event) => setNewDate(event.target.value)}
+            />
+          </div>
+          {reviseError && (
+            <p className="field-error" role="alert">
+              {reviseError}
+            </p>
+          )}
+          <div className="hero__actions">
+            <button type="submit" className="button button--primary" disabled={revising}>
+              {revising ? "Updating…" : "Propose new date"}
+            </button>
+          </div>
+        </form>
       ) : (
-        <p className="form-status">Waiting on the other party to sign.</p>
+        <>
+          {error && (
+            <p className="field-error" role="alert">
+              {error}
+            </p>
+          )}
+          {!alreadySigned ? (
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={status === "working"}
+              onClick={() => {
+                setStatus("working");
+                setError(null);
+                signAction
+                  .run("totp")
+                  .then(() => window.location.reload())
+                  .catch((e: unknown) => {
+                    if (isScheduleRevisionRequired(e)) {
+                      setError(e.message);
+                      setNeedsScheduleRevision(true);
+                      setStatus("idle");
+                      return;
+                    }
+                    setError(e instanceof ApiError ? e.message : "Signing failed. Please try again.");
+                    setStatus("idle");
+                  });
+              }}
+            >
+              {status === "working" ? "Signing…" : "Sign this agreement"}
+            </button>
+          ) : (
+            <p className="form-status">Waiting on the other party to sign.</p>
+          )}
+        </>
       )}
       {signAction.isChallengeOpen && (
         <StepUpChallenge

@@ -96,4 +96,9 @@ export class DrizzleAgreementVersionRepository implements AgreementVersionReposi
       .set({ documentHash: input.documentHash, signedAt: input.signedAt })
       .where(eq(agreementVersion.id, id));
   }
+
+  async clearSignatures(id: string): Promise<void> {
+    const db = getDb();
+    await db.update(agreementVersion).set({ creditorSignedAt: null, debtorSignedAt: null }).where(eq(agreementVersion.id, id));
+  }
 }

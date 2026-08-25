@@ -12,7 +12,7 @@ function baseTerms(overrides: Record<string, unknown> = {}) {
     firstPaymentMinorUnits: 20_000,
     installmentAmountMinorUnits: 20_000,
     frequency: "monthly" as const,
-    firstPaymentDate: "2026-02-01",
+    firstPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
     feeAllocation: "debtor_pays" as const,
     earlyPayoffTerms: "No penalty for early payoff.",
     hardshipRules: "Borrower may request hardship relief; no interest or penalty added.",
