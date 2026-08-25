@@ -196,6 +196,23 @@ export class NotificationService {
     relatedInvitationId?: string | null;
     payload: Record<string, unknown>;
     dedupeKey?: string;
+    /**
+     * Production follow-up (missing Agreement Invitation CTA): a one-shot CTA for this send only —
+     * never persisted onto the notification_event row (unlike relatedAgreementId/relatedInvitationId,
+     * which buildCtaUrl derives a link from at *any* delivery/retry time). Exists for exactly one
+     * caller today: AgreementInvitationService's pre-agreement, secure-token invitation (`/i/<token>`)
+     * has no durable id `buildCtaUrl` could ever resolve back into a link (relatedAgreementId is
+     * genuinely null — no agreement exists yet — and relatedInvitationId's own CTA route,
+     * `/connections/accept`, is the *relationship*-invitation flow, not this one) and — deliberately
+     * per this class's own security model — the raw token itself must never be persisted to
+     * notification_event.payload. A ctaOverride is therefore not reconstructable by
+     * retryDueNotifications (which only ever re-renders from the stored payload); a failed initial
+     * send falls back to no CTA on retry, same as this notification type's identical un-notified
+     * "direct" (not-yet-registered recipient) email path has always accepted. AgreementInvitationService
+     * already has a purpose-built, user-triggered recovery for a lost/failed send — `resendInvitation`
+     * — which mints a fresh token and re-sends outside this service entirely.
+     */
+    ctaOverride?: { ctaUrl: string; ctaText: string } | null;
   }): Promise<NotificationEventRecord[]> {
     const critical = isCriticalNotificationType(input.notificationType);
     const channels = await this.resolveChannels(input.recipientUserId, input.notificationType, critical);
@@ -222,7 +239,7 @@ export class NotificationService {
         relatedInvitationId: input.relatedInvitationId ?? null,
         payload: input.payload,
       });
-      records.push(await this.deliver(record, rendered));
+      records.push(await this.deliver(record, rendered, input.ctaOverride ?? null));
     }
     return records;
   }
@@ -458,6 +475,7 @@ export class NotificationService {
   private async deliver(
     record: NotificationEventRecord,
     rendered: { subject: string; emailBody: string; smsBody: string; inAppBody: string },
+    ctaOverride: { ctaUrl: string; ctaText: string } | null = null,
   ): Promise<NotificationEventRecord> {
     try {
       if (record.channel === "in_app") {
@@ -466,7 +484,7 @@ export class NotificationService {
       if (record.channel === "email") {
         const email = await this.deps.contacts.getEmail(record.recipientUserId);
         if (!email) return record; // no contact info on file — recorded, left pending, not a failure.
-        const cta = this.buildCtaUrl(record);
+        const cta = ctaOverride ?? this.buildCtaUrl(record);
         const result = await this.deps.emailSender.send({
           to: email,
           subject: rendered.subject,
@@ -488,7 +506,7 @@ export class NotificationService {
         // START reply) doesn't retroactively resurrect this specific already-suppressed attempt.
         return this.deps.events.markFailed(record.id, { failureReason: "recipient_opted_out", attemptCount: record.attemptCount, nextRetryAt: null });
       }
-      const cta = this.buildCtaUrl(record);
+      const cta = ctaOverride ?? this.buildCtaUrl(record);
       const smsBody = cta ? `${rendered.smsBody} ${cta.ctaUrl}` : rendered.smsBody;
       const result = await this.deps.smsSender.send({ to: phone, body: smsBody });
       // "sent" (provider accepted), not "delivered" — mirrors email's identical PRSprint 14

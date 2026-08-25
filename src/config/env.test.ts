@@ -130,12 +130,12 @@ describe("parseServerEnv", () => {
     expect(env.APP_URL).toBe("https://paid2you.com");
   });
 
-  it("Agreement Lifecycle V2 UAT fix: falls back to https://VERCEL_URL when APP_URL isn't explicitly set", () => {
+  it("production-only customer email URLs fix: no longer falls back to VERCEL_URL — an explicit APP_URL wins, everything else falls through to the localhost default", () => {
     const env = parseServerEnv({ ...validEnv, VERCEL_URL: "pay-2-abc123-pay2-pay.vercel.app" });
-    expect(env.APP_URL).toBe("https://pay-2-abc123-pay2-pay.vercel.app");
+    expect(env.APP_URL).toBe("http://localhost:3000");
   });
 
-  it("prefers an explicit APP_URL over VERCEL_URL when both are set", () => {
+  it("prefers an explicit APP_URL over VERCEL_URL when both are set (VERCEL_URL is otherwise ignored entirely)", () => {
     const env = parseServerEnv({ ...validEnv, APP_URL: "https://paid2you.com", VERCEL_URL: "pay-2-abc123-pay2-pay.vercel.app" });
     expect(env.APP_URL).toBe("https://paid2you.com");
   });
@@ -145,15 +145,37 @@ describe("parseServerEnv", () => {
     expect(env.APP_URL).toBe("http://localhost:3000");
   });
 
-  it("an unconfigured Preview deployment (APP_ENV defaults to development, VERCEL_URL present) resolves to the real deployment origin, never localhost", () => {
-    const env = parseServerEnv({ ...validEnv, APP_ENV: "development", VERCEL_URL: "pay-2-pay-git-some-branch-pay2-pay.vercel.app" });
-    expect(env.APP_URL).toBe("https://pay-2-pay-git-some-branch-pay2-pay.vercel.app");
-  });
-
-  it("does not reject a localhost APP_URL outside production (development/test/staging)", () => {
+  it("does not reject a localhost APP_URL outside production, when this environment cannot send real external email (no RESEND_API_KEY)", () => {
     for (const appEnv of ["development", "test", "staging"] as const) {
       expect(() => parseServerEnv({ ...validEnv, APP_ENV: appEnv, APP_URL: "http://localhost:3000" })).not.toThrow();
     }
+  });
+
+  it("production-only customer email URLs fix: rejects a localhost APP_URL when RESEND_API_KEY is configured, regardless of APP_ENV — this environment can send real external email", () => {
+    expect(() =>
+      parseServerEnv({ ...validEnv, APP_ENV: "development", APP_URL: "http://localhost:3000", RESEND_API_KEY: "re_test_key" }),
+    ).toThrow(EnvironmentValidationError);
+  });
+
+  it("production-only customer email URLs fix: rejects a Vercel deployment domain APP_URL when RESEND_API_KEY is configured — even in a Preview deployment", () => {
+    expect(() =>
+      parseServerEnv({
+        ...validEnv,
+        APP_ENV: "development",
+        APP_URL: "https://pay-2-pay-git-some-branch-pay2-pay.vercel.app",
+        RESEND_API_KEY: "re_test_key",
+      }),
+    ).toThrow(EnvironmentValidationError);
+  });
+
+  it("production-only customer email URLs fix: an explicit canonical APP_URL alongside RESEND_API_KEY is accepted", () => {
+    const env = parseServerEnv({ ...validEnv, APP_ENV: "development", APP_URL: "https://paid2you.com", RESEND_API_KEY: "re_test_key" });
+    expect(env.APP_URL).toBe("https://paid2you.com");
+  });
+
+  it("production-only customer email URLs fix: a Vercel/localhost APP_URL is fine when RESEND_API_KEY is unset — this environment cannot send real external email in the first place", () => {
+    const env = parseServerEnv({ ...validEnv, APP_URL: "https://pay-2-pay-git-some-branch-pay2-pay.vercel.app" });
+    expect(env.APP_URL).toBe("https://pay-2-pay-git-some-branch-pay2-pay.vercel.app");
   });
 
   it("includes the offending field path in the error message", () => {

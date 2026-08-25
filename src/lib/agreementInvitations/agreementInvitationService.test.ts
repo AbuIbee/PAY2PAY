@@ -114,6 +114,51 @@ describe("AgreementInvitationService", () => {
       });
       expect(agreementId).toBeTruthy();
     });
+
+    /**
+     * Production follow-up (missing Agreement Invitation CTA / DEFECT 1): when the recipient is
+     * already a registered platform user, invitation creation notifies them entirely through
+     * NotificationService.notify() rather than emailing directly — and until this fix, that call
+     * never supplied any CTA at all (buildCtaUrl has no route for a pre-agreement, secure-token
+     * invitation: relatedAgreementId is genuinely null pre-acceptance, and relatedInvitationId's own
+     * route is the unrelated relationship-invitation flow), so the email rendered with no return
+     * link. These tests prove the notify() call now carries the same secure `/i/<token>` link the
+     * not-yet-registered recipient path has always sent directly.
+     */
+    it("1/2/3/4. the invitation email to an existing platform user contains a 'Review agreement' CTA pointing at the exact secure /i/<token> route, on the canonical appUrl", async () => {
+      const recipientUserId = randomUUID();
+      const recipientProfile = { kind: "personal" as const, id: randomUUID() };
+      ctx.agreementCtx.profileOwners.set("personal", recipientProfile.id, recipientUserId);
+      ctx.users.register("recipient@example.com", recipientUserId);
+      ctx.userEmails.register(recipientUserId, "recipient@example.com");
+      ctx.notificationCtx.contacts.set(recipientUserId, "recipient@example.com");
+
+      const { rawToken } = await createInvitation();
+
+      const sent = ctx.notificationCtx.emailSender.sent.find((e) => e.to === "recipient@example.com");
+      expect(sent).toBeTruthy();
+      expect(sent?.ctaText).toBe("Review agreement");
+      expect(sent?.ctaUrl).toBe(`https://paid2you.example/i/${rawToken}`);
+      expect(new URL(sent!.ctaUrl!).hostname).toBe("paid2you.example");
+    });
+
+    it("resendInvitation to an existing platform user also carries the 'Review agreement' CTA with the freshly regenerated token", async () => {
+      const recipientUserId = randomUUID();
+      const recipientProfile = { kind: "personal" as const, id: randomUUID() };
+      ctx.agreementCtx.profileOwners.set("personal", recipientProfile.id, recipientUserId);
+      ctx.users.register("recipient@example.com", recipientUserId);
+      ctx.userEmails.register(recipientUserId, "recipient@example.com");
+      ctx.notificationCtx.contacts.set(recipientUserId, "recipient@example.com");
+
+      const { invitation } = await createInvitation();
+      ctx.notificationCtx.emailSender.sent.length = 0;
+
+      const { rawToken: resentToken } = await ctx.invitationService.resendInvitation(invitation.id, inviterUserId);
+
+      const sent = ctx.notificationCtx.emailSender.sent.find((e) => e.to === "recipient@example.com");
+      expect(sent?.ctaText).toBe("Review agreement");
+      expect(sent?.ctaUrl).toBe(`https://paid2you.example/i/${resentToken}`);
+    });
   });
 
   describe("Scenario C — counterproposal", () => {

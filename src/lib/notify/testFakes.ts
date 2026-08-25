@@ -256,14 +256,13 @@ class InMemoryAuditEventRepositoryForNotify implements AuditEventRepository {
 }
 
 /** PRSprint 16, requirement #17: `audit`/`auditRepo` let tests assert on the preference-change audit trail; both are optional to consume — most existing tests never touch them, so this is purely additive. */
-export function createTestNotificationService(options?: NotificationServiceOptions) {
+export function createTestNotificationService(options?: NotificationServiceOptions, appUrl: string = "https://app.test") {
   const events = new InMemoryNotificationEventRepository();
   const preferences = new InMemoryNotificationPreferenceRepository();
   const contacts = new InMemoryUserContactReader();
   const emailSender = new InMemoryEmailSender();
   const smsSender = new InMemorySmsSender();
   const smsOptOuts = new InMemorySmsOptOutRepository();
-  const appUrl = "https://app.test";
   const auditRepo = new InMemoryAuditEventRepositoryForNotify();
   const audit = new AuditService(auditRepo);
   const notificationService = new NotificationService({ events, preferences, emailSender, smsSender, contacts, smsOptOuts, appUrl, audit }, options);

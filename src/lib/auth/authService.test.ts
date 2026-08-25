@@ -322,6 +322,50 @@ describe("AuthService email verification", () => {
       AuthenticationError,
     );
   });
+
+  /**
+   * Production follow-up (production-only customer email URLs): both the original verification
+   * email and a resent one must point at whatever canonical appUrl this service was configured
+   * with — the same single, centralized source (getServerEnv().APP_URL in real wiring) every other
+   * customer email link reads. No separate/second URL-building path exists for either case.
+   */
+  it("6. the verification email link uses the configured canonical appUrl, not a Vercel/localhost URL", async () => {
+    const ctx = createTestAuthService(undefined, "https://paid2you.com");
+    await ctx.authService.signup({
+      email: "verify-hostname@example.com",
+      password: "correct horse battery staple",
+      dateOfBirth,
+      ipAddress: null,
+      userAgent: null,
+    });
+    const sent = ctx.emailSender.sent.find((e) => e.to === "verify-hostname@example.com");
+    const link = sent?.body.match(/https?:\/\/\S+/)?.[0];
+    expect(link).toBeTruthy();
+    expect(new URL(link!).hostname).toBe("paid2you.com");
+    expect(sent?.body).not.toContain("localhost");
+    expect(sent?.body).not.toContain(".vercel.app");
+  });
+
+  it("7. a resent verification email link also uses the configured canonical appUrl, not a Vercel/localhost URL", async () => {
+    const ctx = createTestAuthService(undefined, "https://paid2you.com");
+    const result = await ctx.authService.signup({
+      email: "verify-resend-hostname@example.com",
+      password: "correct horse battery staple",
+      dateOfBirth,
+      ipAddress: null,
+      userAgent: null,
+    });
+    ctx.emailSender.sent.length = 0;
+
+    await ctx.authService.resendVerificationEmail(result.user.id);
+
+    const sent = ctx.emailSender.sent.find((e) => e.to === "verify-resend-hostname@example.com");
+    const link = sent?.body.match(/https?:\/\/\S+/)?.[0];
+    expect(link).toBeTruthy();
+    expect(new URL(link!).hostname).toBe("paid2you.com");
+    expect(sent?.body).not.toContain("localhost");
+    expect(sent?.body).not.toContain(".vercel.app");
+  });
 });
 
 describe("AuthService.logout / validateSession", () => {

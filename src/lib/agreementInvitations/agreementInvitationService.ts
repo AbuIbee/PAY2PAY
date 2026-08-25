@@ -272,13 +272,24 @@ export class AgreementInvitationService {
     if (existingUserId) {
       // Existing platform user — matches RelationshipInvitationService's own precedent exactly:
       // notify() handles email/in_app dispatch itself, deliberately token-free (the token is never
-      // persisted to notification_event.payload).
+      // persisted to notification_event.payload — see ctaOverride's own doc comment on
+      // NotificationService.notify for why this is a transient, non-persisted parameter rather than a
+      // stored relatedX id: neither of buildCtaUrl's two existing routes applies to this pre-agreement,
+      // secure-token invitation).
+      //
+      // Production follow-up (missing CTA defect): this call previously omitted any CTA at all, so
+      // NotificationService.buildCtaUrl had nothing to build a link from (relatedAgreementId is
+      // genuinely null pre-acceptance; relatedInvitationId's own route is the unrelated relationship-
+      // invitation flow) — the email rendered with no return link. ctaOverride passes the same secure
+      // `/i/<token>` link the "not yet registered" branch below already sends directly, so both
+      // recipient types get an identical, working CTA from the one existing invitation-link/route.
       await this.deps.notifications.notify({
         recipientUserId: existingUserId,
         notificationType: "agreement_invitation",
         relatedAgreementId: null,
         payload: { counterpartyName: await this.senderDisplayName(input.inviterProfile) },
         dedupeKey: `agreement_invitation:${invitation.id}:${existingUserId}`,
+        ctaOverride: { ctaUrl: link, ctaText: "Review agreement" },
       });
     } else {
       // Not a recognized account — the one case notify()'s recipientUserId-required contract
@@ -290,7 +301,7 @@ export class AgreementInvitationService {
           subject: "You've received a payment plan proposal on PAY2PAY",
           body: `${senderName} has proposed a payment plan for you to review on PAY2PAY. Review it securely, no account required: ${link}\n\nThis link expires in 7 days.`,
           ctaUrl: link,
-          ctaText: "Review the proposal",
+          ctaText: "Review agreement",
         });
       }
       if (recipientPhone) {
@@ -511,7 +522,7 @@ export class AgreementInvitationService {
         subject: "Reminder: you have a payment plan proposal on PAY2PAY",
         body: `${senderName} sent you a reminder about a payment plan proposal on PAY2PAY: ${link}\n\nThis link expires in 7 days.`,
         ctaUrl: link,
-        ctaText: "Review the proposal",
+        ctaText: "Review agreement",
       });
     }
     return { invitation: updated, rawToken, link };

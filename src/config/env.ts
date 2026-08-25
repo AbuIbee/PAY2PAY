@@ -52,15 +52,28 @@ const serverEnvSchema = z.object({
   // matching AUDIT_HASH_SECRET/AUTH_PASSWORD_PEPPER's existing "throw a clear
   // error rather than silently degrade" precedent in this same file.
   //
-  // Agreement Lifecycle V2 UAT (invitation-email-points-to-localhost defect):
-  // an *unconfigured* per-branch Vercel Preview deployment (no explicit APP_URL
-  // override for that specific branch) has APP_ENV default to "development", so
-  // the superRefine below never fired, and this field's own localhost default
-  // silently won — every invitation/notification link from that preview pointed
-  // at http://localhost:3000, unreachable for a real recipient. Fixed in
-  // parseServerEnv below: when APP_URL isn't explicitly set, fall back to
-  // Vercel's own auto-injected VERCEL_URL (present on every Vercel deployment,
-  // preview or production) before ever reaching this field's localhost default.
+  // Production-only customer email URLs (fixed): a prior fix had
+  // parseServerEnv fall back to Vercel's auto-injected VERCEL_URL when APP_URL
+  // wasn't explicitly set, so an *unconfigured* Preview deployment wouldn't
+  // silently point every link at localhost. That solved the localhost defect
+  // but introduced a worse one: any Preview deployment that can also send real
+  // external email (RESEND_API_KEY is provisioned for Preview, not just
+  // Production, in this project) would embed *that ephemeral Preview
+  // deployment's own* vercel.app URL in a real, externally-delivered customer
+  // email — coupling a customer's invitation/verification link to whichever
+  // branch build happened to execute the send job. Product decision: a
+  // customer-facing email must always link to the canonical production origin
+  // regardless of which deployment sent it; Preview may still be used for
+  // in-browser application testing, which never depends on APP_URL at all.
+  // The VERCEL_URL fallback is removed below — APP_URL now only ever resolves
+  // to an explicit value or this field's own localhost default. The superRefine
+  // below fails loudly (same "refuses to serve any request" mechanism as the
+  // production-localhost case) whenever RESEND_API_KEY is configured — i.e.
+  // this environment is actually capable of sending real external email — but
+  // APP_URL is not an explicit, canonical (non-localhost, non-Vercel-domain)
+  // value. Any environment meant to send real customer email — Preview
+  // included — must have its own explicit APP_URL provisioned, pointing at the
+  // real production origin.
   APP_URL: z.string().url().default("http://localhost:3000"),
   // Sprint 6 (docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md): Supabase Storage
   // credentials for the private signed-agreement-PDF bucket. Optional at the environment-schema
@@ -149,12 +162,6 @@ const serverEnvSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
 }).superRefine((data, ctx) => {
-  // PRSprint 14 production defect fix: APP_URL's own default only makes sense in
-  // development/test — a production deployment that ends up on this default means the
-  // real value was never provisioned, which previously fell through silently (see
-  // APP_URL's own doc comment above). Cross-field, so it has to live in superRefine
-  // rather than on the field's own schema, which can't see APP_ENV.
-  if (data.APP_ENV !== "production") return;
   let hostname = "";
   try {
     hostname = new URL(data.APP_URL).hostname;
@@ -162,11 +169,32 @@ const serverEnvSchema = z.object({
     // Unparseable already fails APP_URL's own z.string().url() check — nothing to add here.
     return;
   }
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") {
+  const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+
+  // PRSprint 14 production defect fix: APP_URL's own default only makes sense in
+  // development/test — a production deployment that ends up on this default means the
+  // real value was never provisioned, which previously fell through silently (see
+  // APP_URL's own doc comment above). Cross-field, so it has to live in superRefine
+  // rather than on the field's own schema, which can't see APP_ENV.
+  if (data.APP_ENV === "production" && isLocalhost) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["APP_URL"],
       message: 'APP_URL resolves to localhost while APP_ENV is "production" — set APP_URL to the real production origin (e.g. https://paid2you.com) in this environment\'s configuration.',
+    });
+  }
+
+  // Production-only customer email URLs fix: independent of APP_ENV — this project also sends
+  // real external email from Preview deployments (RESEND_API_KEY is provisioned there too, not
+  // just Production). Any environment capable of that must have an explicit, canonical APP_URL;
+  // never a Vercel deployment domain, which would couple a real customer's email link to whichever
+  // ephemeral Preview build executed the send.
+  const isVercelDeploymentDomain = hostname.endsWith(".vercel.app");
+  if (data.RESEND_API_KEY && (isLocalhost || isVercelDeploymentDomain)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["APP_URL"],
+      message: `RESEND_API_KEY is configured (this environment sends real external email), but APP_URL resolves to "${hostname}", not an explicit canonical production origin — set APP_URL to the real public origin (e.g. https://paid2you.com) in this environment's configuration. Customer-facing emails must never link to a Vercel deployment URL.`,
     });
   }
 });
@@ -196,18 +224,19 @@ export class EnvironmentValidationError extends Error {
  * hand-added duplicate `DATABASE_URL` variable in the Vercel dashboard.
  * `DATABASE_URL` still wins when both are set.
  *
- * `APP_URL` gets the same "fill in from what the platform already gives us" treatment: if it isn't
- * explicitly set but `VERCEL_URL` is (Vercel auto-injects this — the unique hostname of the current
- * deployment — into every deployment, preview or production, with no manual configuration), links
- * resolve to that real, reachable deployment origin instead of silently falling through to this
- * field's own "http://localhost:3000" default. An explicit `APP_URL` (e.g. production's custom
- * domain) still always wins over both `VERCEL_URL` and the localhost default.
+ * `APP_URL` deliberately does *not* get the same treatment: it used to fall back to Vercel's
+ * auto-injected `VERCEL_URL` (the unique hostname of the current deployment) when unset, so an
+ * unconfigured Preview deployment wouldn't silently link every email at localhost. That fallback
+ * was removed (production-only customer email URLs fix) — it let a real, externally-delivered
+ * customer email embed whichever ephemeral Preview deployment happened to send it, instead of the
+ * canonical production origin. `APP_URL` now only ever resolves to an explicit value or this
+ * field's own localhost default; the schema's own superRefine fails loudly, for any environment
+ * capable of sending real external email, if that explicit value is missing.
  */
 export function parseServerEnv(raw: Record<string, string | undefined>): ServerEnv {
   const normalized = {
     ...raw,
     DATABASE_URL: raw.DATABASE_URL ?? raw.POSTGRES_URL,
-    APP_URL: raw.APP_URL ?? (raw.VERCEL_URL ? `https://${raw.VERCEL_URL}` : undefined),
   };
   const result = serverEnvSchema.safeParse(normalized);
   if (!result.success) {
