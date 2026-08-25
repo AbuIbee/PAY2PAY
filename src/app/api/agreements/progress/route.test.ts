@@ -4,7 +4,14 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
-import { AgreementProgressService, type PersonalProfileReader, type RelationshipPaymentMethodReader, type VerificationStateReader } from "@/lib/agreements/agreementProgressService";
+import {
+  AgreementProgressService,
+  type AgreementCancellationInfo,
+  type AgreementCancellationReader,
+  type PersonalProfileReader,
+  type RelationshipPaymentMethodReader,
+  type VerificationStateReader,
+} from "@/lib/agreements/agreementProgressService";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
 import type { VerificationState } from "@/lib/profiles/verificationService";
 import { createAgreementProgressHandler } from "./route";
@@ -23,6 +30,11 @@ class FakePersonalProfiles implements PersonalProfileReader {
 class FakePaymentMethods implements RelationshipPaymentMethodReader {
   async getRelationshipAccounts() {
     return [];
+  }
+}
+class FakeCancellation implements AgreementCancellationReader {
+  async getCancellationInfo(): Promise<AgreementCancellationInfo | null> {
+    return null;
   }
 }
 
@@ -68,6 +80,7 @@ describe("GET /api/agreements/progress", () => {
       verification: new FakeVerification(),
       personalProfiles,
       relationshipPaymentMethods: new FakePaymentMethods(),
+      cancellation: new FakeCancellation(),
     });
 
     const creditor = await authCtx.authService.signup({

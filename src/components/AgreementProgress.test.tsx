@@ -105,6 +105,39 @@ describe("AgreementProgress", () => {
     expect(screen.getAllByText(/waiting for the creditor to sign/i).length).toBeGreaterThanOrEqual(1);
   });
 
+  it("cancellation progress display fix: renders a cancelled agreement's terminal steps as 'Cancelled' (never Action required/Complete/Blocked), with no continuation CTA, on both mobile and desktop viewports (same data, same render)", () => {
+    const cancelledData = baseData({
+      status: "mutually_canceled",
+      steps: [
+        { key: "details_terms", label: "Agreement details & terms", status: "complete", description: "Agreement details and terms were recorded before cancellation.", cta: null },
+        { key: "acceptance", label: "Review & acceptance", status: "cancelled", description: "This agreement was cancelled. No further action is required.", cta: null },
+        { key: "payment_method", label: "Payment method", status: "optional", description: "Not required for this agreement.", cta: null },
+        { key: "identity_verification", label: "Identity verification", status: "cancelled", description: "This agreement was cancelled. No further action is required.", cta: null },
+        { key: "signatures", label: "Review & signatures", status: "cancelled", description: "This agreement was cancelled. No further action is required.", cta: null },
+        { key: "active", label: "Agreement active", status: "cancelled", description: "This agreement was cancelled. No further action is required.", cta: null },
+      ],
+      primaryAction: { label: "Agreement cancelled", description: "No further action is required for this agreement.", cta: null },
+      actionableForMeCount: 0,
+    });
+
+    for (const viewport of [{ width: 375 }, { width: 1280 }]) {
+      Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: viewport.width });
+      const { unmount } = render(<AgreementProgress data={cancelledData} />);
+
+      expect(screen.getAllByText("Cancelled").length).toBe(4); // acceptance, identity_verification, signatures, active
+      expect(screen.getByText("Agreement cancelled")).toBeInTheDocument();
+      expect(screen.getByText("No further action is required for this agreement.")).toBeInTheDocument();
+      expect(screen.queryByText(/^Next:/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /verify identity/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /review and sign/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /add payment method/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/action required/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^blocked$/i)).not.toBeInTheDocument();
+
+      unmount();
+    }
+  });
+
   it("renders a blocked step's exact reason, not a generic message", () => {
     render(
       <AgreementProgress

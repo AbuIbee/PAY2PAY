@@ -18,7 +18,8 @@ export type AgreementProgressStepStatus =
   | "waiting"
   | "blocked"
   | "optional"
-  | "not_started";
+  | "not_started"
+  | "cancelled";
 
 export interface AgreementProgressCta {
   label: string;
@@ -72,11 +73,27 @@ export interface RelationshipPaymentMethodReader {
   ): Promise<Array<{ usage: "funding" | "payout"; status: string; financialAccount: { status: string } }>>;
 }
 
+/**
+ * Cancellation progress display fix: what the agreement's status *was* immediately before
+ * AgreementService.cancelAgreement overwrote it to "mutually_canceled" — the only way to tell
+ * whether acceptance had genuinely completed before cancellation, since the current status alone no
+ * longer distinguishes that.
+ */
+export interface AgreementCancellationInfo {
+  previousStatus: AgreementStatus;
+}
+
+/** Narrow view onto the audit trail — see DrizzleAgreementCancellationReader's own doc comment for why this reads audit_event rather than a new column. */
+export interface AgreementCancellationReader {
+  getCancellationInfo(agreementId: string): Promise<AgreementCancellationInfo | null>;
+}
+
 export interface AgreementProgressServiceDeps {
   agreementService: AgreementService;
   verification: VerificationStateReader;
   personalProfiles: PersonalProfileReader;
   relationshipPaymentMethods: RelationshipPaymentMethodReader;
+  cancellation: AgreementCancellationReader;
 }
 
 const STATUS_LABELS: Record<AgreementStatus, string> = {
@@ -151,6 +168,16 @@ export class AgreementProgressService {
         ? { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId }
         : { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId };
 
+    // Cancellation progress display fix: cancellation is a terminal workflow state. Every step from
+    // the point of cancellation onward must read "Cancelled" — never action_required/blocked/complete,
+    // which would wrongly invite the user to keep verifying, signing, or activating a dead agreement.
+    // Handled as its own branch (rather than patched into each step method below) so this is the one
+    // place that ever needs to reason about "what happens after cancellation" — every consumer
+    // (Agreement Detail, the agreements list's attentionLabel, mobile) reads this same result.
+    if (agreement.status === "mutually_canceled") {
+      return this.buildCancelledProgress(agreementId, myRole, agreement.relationshipId, actingUserId);
+    }
+
     const steps: AgreementProgressStep[] = [];
 
     // Step 1 — details & terms: always complete once an agreement row exists (creation is atomic —
@@ -200,6 +227,71 @@ export class AgreementProgressService {
     const primaryAction = this.computePrimaryAction(steps, agreement.status, myRole);
 
     return { agreementId, myRole, status: agreement.status, steps, primaryAction, actionableForMeCount };
+  }
+
+  /**
+   * Cancellation progress display fix: builds the terminal progress result for a cancelled
+   * agreement. Steps 1 (details) and 3 (payment method) are unaffected by cancellation and keep
+   * their normal, truthful status. Step 2 (acceptance) shows "Complete" only if the agreement had
+   * genuinely reached awaiting_signatures before being cancelled (both debtor acknowledgment and
+   * creditor acceptance actually happened) — otherwise "Cancelled", never a retroactive "Complete"
+   * for a phase that never finished. Steps 4-6 (identity verification, signatures, active) are
+   * always "Cancelled": once cancelled, there is no further prerequisite to complete or gate.
+   */
+  private async buildCancelledProgress(
+    agreementId: string,
+    myRole: PartyRole,
+    relationshipId: string | null,
+    actingUserId: string,
+  ): Promise<AgreementProgress> {
+    const cancellationInfo = await this.deps.cancellation.getCancellationInfo(agreementId);
+    const acceptanceHadCompleted = !!cancellationInfo && !["draft", "awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance"].includes(cancellationInfo.previousStatus);
+
+    const steps: AgreementProgressStep[] = [
+      {
+        key: "details_terms",
+        label: "Agreement details & terms",
+        status: "complete",
+        description: "Agreement details and terms were recorded before cancellation.",
+        cta: null,
+      },
+      acceptanceHadCompleted
+        ? {
+            key: "acceptance",
+            label: "Review & acceptance",
+            status: "complete",
+            description: "Both parties had reviewed and accepted these terms before this agreement was cancelled.",
+            cta: null,
+          }
+        : this.cancelledStep("acceptance", "Review & acceptance"),
+      await this.paymentMethodStep(relationshipId, myRole, actingUserId),
+      this.cancelledStep("identity_verification", "Identity verification"),
+      this.cancelledStep("signatures", "Review & signatures"),
+      this.cancelledStep("active", "Agreement active"),
+    ];
+
+    return {
+      agreementId,
+      myRole,
+      status: "mutually_canceled",
+      steps,
+      primaryAction: {
+        label: "Agreement cancelled",
+        description: "No further action is required for this agreement.",
+        cta: null,
+      },
+      actionableForMeCount: 0,
+    };
+  }
+
+  private cancelledStep(key: AgreementProgressStepKey, label: string): AgreementProgressStep {
+    return {
+      key,
+      label,
+      status: "cancelled",
+      description: "This agreement was cancelled. No further action is required.",
+      cta: null,
+    };
   }
 
   private acceptanceStep(status: AgreementStatus, myRole: PartyRole): AgreementProgressStep {
@@ -471,7 +563,9 @@ export class AgreementProgressService {
         cta: null,
       };
     }
-    if (status === "disputed" || status === "paused_by_amendment" || status === "mutually_canceled" || status === "closed") {
+    // "mutually_canceled" is deliberately not handled here — getProgress returns via
+    // buildCancelledProgress before this method is ever reached for that status.
+    if (status === "disputed" || status === "paused_by_amendment" || status === "closed") {
       return {
         key: "active",
         label: "Agreement active",

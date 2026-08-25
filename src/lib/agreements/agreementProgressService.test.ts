@@ -4,10 +4,13 @@ import type { DraftTermsInput } from "./agreementService";
 import { createTestAgreementService } from "./testFakes";
 import {
   AgreementProgressService,
+  type AgreementCancellationInfo,
+  type AgreementCancellationReader,
   type PersonalProfileReader,
   type RelationshipPaymentMethodReader,
   type VerificationStateReader,
 } from "./agreementProgressService";
+import type { AgreementStatus } from "./agreementService";
 import type { ProfileKind, VerificationState } from "@/lib/profiles/verificationService";
 
 function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
@@ -60,6 +63,19 @@ class FakeRelationshipPaymentMethodReader implements RelationshipPaymentMethodRe
   }
 }
 
+/** Reads the same in-memory audit trail AgreementService.cancelAgreement actually writes to (ctx.auditRepo.events) — real integration coverage, not a hand-fed stub. */
+class FakeAgreementCancellationReader implements AgreementCancellationReader {
+  constructor(private readonly auditRepo: { events: Array<{ agreementId: string | null; action: string; newValue: unknown }> }) {}
+  async getCancellationInfo(agreementId: string): Promise<AgreementCancellationInfo | null> {
+    const events = this.auditRepo.events.filter((e) => e.agreementId === agreementId && e.action === "agreement_cancelled");
+    const last = events.at(-1);
+    if (!last) return null;
+    const value = last.newValue as { previousStatus?: unknown } | null;
+    const previousStatus = typeof value?.previousStatus === "string" ? (value.previousStatus as AgreementStatus) : null;
+    return previousStatus ? { previousStatus } : null;
+  }
+}
+
 describe("AgreementProgressService", () => {
   let ctx: ReturnType<typeof createTestAgreementService>;
   let verification: FakeVerificationStateReader;
@@ -77,6 +93,7 @@ describe("AgreementProgressService", () => {
       verification,
       personalProfiles,
       relationshipPaymentMethods,
+      cancellation: new FakeAgreementCancellationReader(ctx.auditRepo),
     });
   });
 
@@ -362,6 +379,108 @@ describe("AgreementProgressService", () => {
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       expect(progress.steps.find((s) => s.key === "active")?.status).toBe("waiting");
+    });
+  });
+
+  describe("cancellation progress display fix — cancellation is a terminal workflow state", () => {
+    it("1. cancelled before identity verification (during awaiting_debtor_acknowledgment): identity verification, signatures, and active all read Cancelled", async () => {
+      const { agreementId, creditorUserId } = await createAgreement();
+      await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+      await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "Changed my mind.");
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      expect(progress.steps.find((s) => s.key === "identity_verification")?.status).toBe("cancelled");
+      expect(progress.steps.find((s) => s.key === "signatures")?.status).toBe("cancelled");
+      expect(progress.steps.find((s) => s.key === "active")?.status).toBe("cancelled");
+    });
+
+    it("2. a cancelled agreement's identity_verification step has no 'Verify identity' CTA, even for an unverified user", async () => {
+      const { agreementId, creditorUserId, creditorProfileId } = await createAgreement();
+      verification.set("personal", creditorProfileId, "UNVERIFIED");
+      await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+      await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test");
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      const step = progress.steps.find((s) => s.key === "identity_verification");
+      expect(step?.status).toBe("cancelled");
+      expect(step?.cta).toBeNull();
+    });
+
+    it("3. a cancelled agreement's signatures step has no signing CTA, even mid-signature", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      await ctx.agreementService.signAgreement(agreementId, creditorUserId); // counterparty (debtor originates) signs first
+      await ctx.agreementService.cancelAgreement(agreementId, debtorUserId, "test");
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      const step = progress.steps.find((s) => s.key === "signatures");
+      expect(step?.status).toBe("cancelled");
+      expect(step?.cta).toBeNull();
+    });
+
+    it("4. a cancelled agreement's active step has no activation CTA", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test");
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      const step = progress.steps.find((s) => s.key === "active");
+      expect(step?.status).toBe("cancelled");
+      expect(step?.cta).toBeNull();
+    });
+
+    it("5. produces no misleading nextAction/primaryAction — no continuation CTA, a terminal label/description, and zero actionableForMeCount", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test");
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      expect(progress.primaryAction).toEqual({
+        label: "Agreement cancelled",
+        description: "No further action is required for this agreement.",
+        cta: null,
+      });
+      expect(progress.actionableForMeCount).toBe(0);
+      expect(progress.steps.some((s) => s.status === "action_required")).toBe(false);
+      expect(progress.steps.some((s) => s.status === "blocked")).toBe(false);
+    });
+
+    it("6. historical steps genuinely completed before cancellation remain accurately Complete — acceptance had actually finished (cancelled at awaiting_signatures)", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test");
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      expect(progress.steps.find((s) => s.key === "details_terms")?.status).toBe("complete");
+      expect(progress.steps.find((s) => s.key === "acceptance")?.status).toBe("complete");
+    });
+
+    it("6b. does not retroactively claim acceptance completed if it never did (cancelled during awaiting_debtor_acknowledgment)", async () => {
+      const { agreementId, creditorUserId } = await createAgreement();
+      await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+      await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test");
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      expect(progress.steps.find((s) => s.key === "acceptance")?.status).toBe("cancelled");
+    });
+
+    it("7. an optional step (no linked relationship) remains accurately Optional even after cancellation", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test");
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      expect(progress.steps.find((s) => s.key === "payment_method")?.status).toBe("optional");
+    });
+
+    it("the agreements-list attention label (primaryAction.label, the exact field GET /api/agreements reuses) never suggests action is needed for a cancelled agreement", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test");
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      expect(progress.primaryAction.label).toBe("Agreement cancelled");
+      expect(progress.primaryAction.label).not.toMatch(/verify|sign|activate|payment method/i);
     });
   });
 

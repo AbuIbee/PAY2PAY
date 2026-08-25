@@ -11,6 +11,7 @@ const STATUS_META: Record<AgreementProgressStepStatus, { icon: string; text: str
   blocked: { icon: "⛔", text: "Blocked", tone: "danger" },
   optional: { icon: "–", text: "Optional", tone: "neutral" },
   not_started: { icon: "○", text: "Not started", tone: "neutral" },
+  cancelled: { icon: "✕", text: "Cancelled", tone: "neutral" },
 };
 
 /**
@@ -72,7 +73,9 @@ export function AgreementProgress({ data }: { data: AgreementProgressData }) {
       </ol>
 
       <div style={{ marginTop: "1.25rem", paddingTop: "1rem", borderTop: "1px solid var(--border)" }}>
-        <p style={{ margin: "0 0 0.6rem", fontWeight: 700 }}>Next: {data.primaryAction.label}</p>
+        <p style={{ margin: "0 0 0.6rem", fontWeight: 700 }}>
+          {data.status === "mutually_canceled" ? data.primaryAction.label : `Next: ${data.primaryAction.label}`}
+        </p>
         <p style={{ margin: "0 0 0.75rem", color: "var(--ink-soft)", fontSize: "0.9rem" }}>{data.primaryAction.description}</p>
         {data.primaryAction.cta && (
           <Link href={data.primaryAction.cta.href} className="button button--primary">

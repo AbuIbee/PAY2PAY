@@ -306,7 +306,7 @@ export function readSetCookie(response: Response, name: string): string | undefi
   return undefined;
 }
 
-export function createTestAuthService(sessionTtlMs: number = TEST_SESSION_TTL_MS) {
+export function createTestAuthService(sessionTtlMs: number = TEST_SESSION_TTL_MS, appUrl: string = TEST_APP_URL) {
   const users = new InMemoryUserAccountRepository();
   const sessions = new InMemorySessionRepository();
   const personalProfiles = new InMemoryPersonalProfileRepository();
@@ -323,7 +323,7 @@ export function createTestAuthService(sessionTtlMs: number = TEST_SESSION_TTL_MS
     passwordResetTokens,
     audit,
     emailSender,
-    { pepper: TEST_PEPPER, sessionTtlMs, appUrl: TEST_APP_URL },
+    { pepper: TEST_PEPPER, sessionTtlMs, appUrl },
   );
   return {
     authService,

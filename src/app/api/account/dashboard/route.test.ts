@@ -41,10 +41,19 @@ describe("GET /api/account/dashboard", () => {
   it("returns account data for an authenticated user", async () => {
     const response = await handlerFor()(getWithCookie(token));
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { email: string; mfaEnrolled: boolean; publicReference: string };
+    const body = (await response.json()) as { email: string; mfaEnrolled: boolean; publicReference: string; emailVerified: boolean };
     expect(body.email).toBe(email);
     expect(body.mfaEnrolled).toBe(false);
     expect(body.publicReference).toMatch(/^P2P-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$/);
+    expect(body.emailVerified).toBe(false); // fresh signup, not yet verified
+  });
+
+  it("Simple Resend Verification Email (Agreement Lifecycle V2 UAT): reports emailVerified: true once the user has verified", async () => {
+    const session = await authCtx.authService.validateSession(token);
+    await authCtx.users.markEmailVerified(session!.user.id);
+    const response = await handlerFor()(getWithCookie(token));
+    const body = (await response.json()) as { emailVerified: boolean };
+    expect(body.emailVerified).toBe(true);
   });
 
   // Sprint 2 required test: "Unauthorized user cannot access protected dashboard data."

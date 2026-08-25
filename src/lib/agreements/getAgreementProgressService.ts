@@ -3,6 +3,7 @@ import { getAgreementService } from "./getAgreementService";
 import { DrizzlePersonalProfileRepository } from "@/lib/auth/drizzlePersonalProfileRepository";
 import { getVerificationService } from "@/lib/profiles/getVerificationService";
 import { getRelationshipFinancialAccountService } from "@/lib/relationships/getRelationshipFinancialAccountService";
+import { DrizzleAgreementCancellationReader } from "./drizzleAgreementCancellationReader";
 import { AgreementProgressService } from "./agreementProgressService";
 
 let cached: AgreementProgressService | null = null;
@@ -15,6 +16,7 @@ export function getAgreementProgressService(): AgreementProgressService {
       verification: getVerificationService(),
       personalProfiles: new DrizzlePersonalProfileRepository(),
       relationshipPaymentMethods: getRelationshipFinancialAccountService(),
+      cancellation: new DrizzleAgreementCancellationReader(),
     });
   }
   return cached;
