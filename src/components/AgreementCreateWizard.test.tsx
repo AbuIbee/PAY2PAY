@@ -82,6 +82,37 @@ describe("AgreementCreateWizard", () => {
     expect(screen.getByText(/no eligible connections/i)).toBeInTheDocument();
   });
 
+  it("Next: Terms regression (production follow-up): a listed connection that turns out to be participant-incomplete is dropped from the picker instead of leaving Next: Terms permanently disabled with no way forward", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        "/api/profiles": { body: { profiles: [{ kind: "personal", personalProfileId: "p1", displayName: "Jane Doe" }] } },
+        "/api/relationships?": { body: { relationships: [{ id: "rel-broken", status: "financial_accounts_ready", currentAgreementId: null }] } },
+        "/api/relationships/detail": {
+          body: {
+            relationship: { id: "rel-broken" },
+            // Only one participant ever came back — the exact production data shape found on a
+            // relationship that reached this status without a real accept() ever running.
+            participants: [{ id: "part-1", relationshipId: "rel-broken", individualProfileId: "p1", organizationId: null, role: "creditor", representedByUserId: "user-1" }],
+          },
+        },
+      }),
+    );
+
+    render(<AgreementCreateWizard />);
+
+    const select = await screen.findByLabelText(/connection/i);
+    await user.selectOptions(select, "rel-broken");
+
+    expect(await screen.findByText(/doesn.t have two confirmed participants yet/i)).toBeInTheDocument();
+    // The broken connection is gone — nothing left to (mis)select, so "No eligible connections"
+    // is now what the user sees, instead of a stuck picker with a permanently-disabled button.
+    expect(await screen.findByText(/no eligible connections/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/connection/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /next: terms/i })).toBeDisabled();
+  });
+
   it("derives both parties' roles from the selected connection and creates + links a draft agreement", async () => {
     const user = userEvent.setup();
     vi.stubGlobal(
