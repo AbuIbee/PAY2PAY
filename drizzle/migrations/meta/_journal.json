@@ -253,6 +253,13 @@
       "when": 1787604615091,
       "tag": "0035_small_vapor",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1787705421091,
+      "tag": "0036_high_serpent_society",
+      "breakpoints": true
     }
   ]
 }

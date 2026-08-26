@@ -127,6 +127,32 @@ export function isCriticalNotificationType(type: NotificationEventType): boolean
 }
 
 /**
+ * Production follow-up (Notification cleanup + archive): distinct from `critical` — critical governs
+ * "can this ever be silently disabled," this governs "does the recipient personally need to act for
+ * the workflow to move forward." Drives the Notification Center's Current-view priority ordering
+ * (action required > unread > recent informational) and what "Archive all read/completed" is allowed
+ * to sweep up (only ever non-action-required notifications). A documented interpretive judgment call,
+ * mirroring `CRITICAL_NOTIFICATION_TYPES`'s own precedent: every type whose whole purpose is "you must
+ * accept/decline/counter/sign/acknowledge something now" is here; a type that only ever *reports* an
+ * outcome the recipient already knows is coming (a decision they'll learn either way, a status change
+ * they can't act on) is not, even if it's important enough to be critical.
+ */
+export const ACTION_REQUIRED_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = new Set<NotificationEventType>([
+  "agreement_invitation",
+  "relationship_invitation",
+  "amendment",
+  "hardship",
+  "partial_payment",
+  "settlement",
+  "agreement_action_required",
+  "agreement_counterparty_signed",
+]);
+
+export function isActionRequiredNotificationType(type: NotificationEventType): boolean {
+  return ACTION_REQUIRED_NOTIFICATION_TYPES.has(type);
+}
+
+/**
  * Which channels a type fans out to by default, before per-user preference filtering (critical types
  * skip preference filtering entirely — see `notificationService.ts`). Every critical type includes
  * `sms` — the one channel most likely to reach someone immediately — in addition to `email`/`in_app`;

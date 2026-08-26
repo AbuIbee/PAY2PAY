@@ -145,6 +145,12 @@ export const notificationEvent = pgTable(
     // needed. Distinct from `deliveredAt` (a delivery-pipeline concept, Sprint 17) — this is purely
     // "has the recipient seen this in the UI."
     readAt: timestamp("read_at", { withTimezone: true }),
+    // Production follow-up (Notification archive): null means "in the Current feed". Set (by the
+    // recipient, individually or via "Archive all read/completed") to move a notification into the
+    // Archived view without deleting it — every other column (createdAt, channel/status,
+    // failureReason, etc.) stays exactly as-is, so delivery-history/tracking is fully retained.
+    // Additive, nullable — existing rows are simply unarchived, no backfill needed.
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
   },
   (table) => [uniqueIndex("notification_event_dedupe_key_unique").on(table.dedupeKey)],
 ).enableRLS();

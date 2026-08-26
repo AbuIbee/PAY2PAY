@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, isNotNull, lte } from "drizzle-orm";
+import { and, desc, eq, isNotNull, like, lte, or } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { notificationEvent } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -28,6 +28,7 @@ function toRecord(row: Row): NotificationEventRecord {
     providerMessageId: row.providerMessageId,
     createdAt: row.createdAt,
     readAt: row.readAt,
+    archivedAt: row.archivedAt,
   };
 }
 
@@ -143,6 +144,22 @@ export class DrizzleNotificationEventRepository implements NotificationEventRepo
       .where(and(eq(notificationEvent.id, id), eq(notificationEvent.recipientUserId, recipientUserId)))
       .returning();
     return row ? toRecord(row) : null;
+  }
+
+  /** See NotificationEventRepository.archiveGroup's own doc comment for the matching rule (bare id, or a shared dedupeKey/dedupeKey-prefix). */
+  async archiveGroup(recipientUserId: string, groupId: string, archivedAt: Date): Promise<number> {
+    const db = getDb();
+    const rows = await db
+      .update(notificationEvent)
+      .set({ archivedAt })
+      .where(
+        and(
+          eq(notificationEvent.recipientUserId, recipientUserId),
+          or(eq(notificationEvent.id, groupId), eq(notificationEvent.dedupeKey, groupId), like(notificationEvent.dedupeKey, `${groupId}:%`)),
+        ),
+      )
+      .returning();
+    return rows.length;
   }
 
   async listRecentByChannel(channel: NotificationChannel, limit: number): Promise<NotificationEventRecord[]> {

@@ -14,15 +14,22 @@ export const dynamic = "force-dynamic";
  * as a request parameter, so a user can never list another user's notifications ("authorization").
  *
  * PRSprint 16 (docs/prsprints/PRSPRINT_16_NOTIFICATION_PREFERENCES_DELIVERY_HISTORY.md), requirement
- * #18/#21: returns `listGroupedForUser` (one entry per logical notification, with a `channels` array)
- * instead of the raw one-row-per-channel `notification_event` rows `listForUser` returns — a critical
- * type still fans out to 2-3 rows internally (email/sms/in_app), which previously rendered as 2-3
- * near-identical cards for what a user experiences as a single notification.
+ * #18/#21: returns one entry per logical notification (with a `channels` array) instead of the raw
+ * one-row-per-channel `notification_event` rows `listForUser` returns — a critical type still fans
+ * out to 2-3 rows internally (email/sms/in_app), which previously rendered as 2-3 near-identical
+ * cards for what a user experiences as a single notification.
+ *
+ * Production follow-up (Notification cleanup + archive): `?view=archived` returns the Archived tab
+ * instead of the default Current tab. Any other/missing value is treated as "current" — an invalid
+ * `view` degrading to the safe default rather than a 400 keeps this endpoint tolerant of a stale
+ * client/bookmarked URL.
  */
 export function createNotificationsListHandler(authService: AuthService, notificationService: NotificationService) {
   return async function handleGet(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
-    const notifications = await notificationService.listGroupedForUser(userId);
+    const view = new URL(request.url).searchParams.get("view");
+    const notifications =
+      view === "archived" ? await notificationService.listArchivedGroupedForUser(userId) : await notificationService.listCurrentGroupedForUser(userId);
     return NextResponse.json({ notifications }, { status: 200 });
   };
 }
