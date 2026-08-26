@@ -137,7 +137,7 @@ describe("Dashboard summary — Personal/Business consistency", () => {
 
     expect(await screen.findByText("Money I owe")).toBeInTheDocument();
     expect(screen.getByText("Money owed to me")).toBeInTheDocument();
-    expect(screen.getByText("Agreements")).toBeInTheDocument();
+    expect(screen.getByText("Payment Arrangements")).toBeInTheDocument();
     expect(screen.getByText("Upcoming payments")).toBeInTheDocument();
     expect(screen.getByText("Action required")).toBeInTheDocument();
   });
@@ -156,7 +156,7 @@ describe("Dashboard summary — Personal/Business consistency", () => {
       Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: viewport.width });
       expect(screen.getByText("Money I owe")).toBeInTheDocument();
       expect(screen.getByText("Money owed to me")).toBeInTheDocument();
-      expect(screen.getByText("Agreements")).toBeInTheDocument();
+      expect(screen.getByText("Payment Arrangements")).toBeInTheDocument();
       expect(screen.getByText("Upcoming payments")).toBeInTheDocument();
       expect(screen.getByText("Action required")).toBeInTheDocument();
     }

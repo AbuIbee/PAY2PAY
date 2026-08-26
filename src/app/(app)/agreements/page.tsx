@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AgreementsList } from "@/components/AgreementsList";
 
-export const metadata: Metadata = { title: "Agreements" };
+export const metadata: Metadata = { title: "Payment Arrangements" };
 
 export default function AgreementsPage() {
   return (
     <div className="app-page">
       <div className="app-page__header">
         <div>
-          <h1>Agreements</h1>
+          <h1>Payment Arrangements</h1>
           <p className="app-page__lede">
             Repayment agreements you&apos;ve created, signed, or are waiting on — organized by status.
           </p>
