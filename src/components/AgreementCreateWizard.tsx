@@ -83,6 +83,10 @@ export function AgreementCreateWizard() {
   const [myRole, setMyRole] = useState<"creditor" | "debtor" | null>(null);
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">("loading");
   const [partyError, setPartyError] = useState<string | null>(null);
+  // Next: Terms navigation fix: the brief async window while handleSelectRelationship resolves a
+  // chosen connection's participants — distinguishes "still loading" from "nothing selected yet" so
+  // the message next to Next: Terms is always accurate, never a guess.
+  const [resolvingParty, setResolvingParty] = useState(false);
 
   const [terms, setTerms] = useState<AgreementTermsFormValues>(BLANK_AGREEMENT_TERMS);
   const [submitting, setSubmitting] = useState(false);
@@ -141,6 +145,7 @@ export function AgreementCreateWizard() {
     if (!relationshipId || !actingProfile) return;
     const me = profileRef(actingProfile);
     if (!me) return;
+    setResolvingParty(true);
     try {
       const body = await apiFetch<{ participants: RelationshipParticipant[] }>(
         `/api/relationships/detail?id=${encodeURIComponent(relationshipId)}`,
@@ -170,7 +175,25 @@ export function AgreementCreateWizard() {
       });
     } catch {
       setPartyError("Could not load this connection's participants. Please try again.");
+    } finally {
+      setResolvingParty(false);
     }
+  }
+
+  /**
+   * New Agreement -> Step 1: Parties navigation fix: "Next: Terms" already uses the exact same
+   * `setStep("terms")` transition the "2. Terms" tab does — the reported "does nothing" defect was
+   * the button being silently disabled (correctly, since there's no party to carry into Terms yet)
+   * with no adjacent explanation. This is the single source of truth for that explanation, covering
+   * every legitimate reason Step 1 isn't done yet, so the button is never a silent dead end.
+   */
+  function nextStepBlockReason(): string | null {
+    if (counterparty) return null;
+    if (partyError) return null; // already shown as its own, more specific error above.
+    if (resolvingParty) return "Loading this connection's details…";
+    if (relationships.length === 0) return "Select an eligible connection above to continue — none are available yet.";
+    if (!selectedRelationshipId) return "Select a connection above to continue.";
+    return "Select a connection to continue.";
   }
 
   async function handleSubmit() {
@@ -295,8 +318,19 @@ export function AgreementCreateWizard() {
             </div>
           )}
 
+          {nextStepBlockReason() && (
+            <p className="form-status" role="status" style={{ margin: 0 }}>
+              {nextStepBlockReason()}
+            </p>
+          )}
+
           <div className="dialog__actions" style={{ justifyContent: "flex-start" }}>
-            <button type="button" className="button button--primary" disabled={!counterparty} onClick={() => setStep("terms")}>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={!counterparty || resolvingParty}
+              onClick={() => setStep("terms")}
+            >
               Next: Terms
             </button>
           </div>

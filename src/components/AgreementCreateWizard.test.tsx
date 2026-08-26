@@ -113,6 +113,79 @@ describe("AgreementCreateWizard", () => {
     expect(screen.getByRole("button", { name: /next: terms/i })).toBeDisabled();
   });
 
+  describe("New Agreement -> Step 1: Parties navigation fix: 'Next: Terms' never silently does nothing", () => {
+    it("in the 'No eligible connections' state, Next: Terms is disabled with an explanation directly beside it, not just the empty-state box above", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/profiles": { body: { profiles: [{ kind: "personal", personalProfileId: "p1", displayName: "Jane Doe" }] } },
+          "/api/relationships?": { body: { relationships: [] } },
+        }),
+      );
+
+      render(<AgreementCreateWizard />);
+
+      await screen.findByText(/no eligible connections/i);
+      const button = screen.getByRole("button", { name: /next: terms/i });
+      expect(button).toBeDisabled();
+      expect(screen.getByText(/select an eligible connection above to continue — none are available yet/i)).toBeInTheDocument();
+    });
+
+    it("when eligible connections exist but none is selected yet, Next: Terms is disabled and explains that a connection must be selected", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/profiles": { body: { profiles: [{ kind: "personal", personalProfileId: "p1", displayName: "Jane Doe" }] } },
+          "/api/relationships?": { body: { relationships: [{ id: "rel-1", status: "financial_accounts_ready", currentAgreementId: null }] } },
+        }),
+      );
+
+      render(<AgreementCreateWizard />);
+
+      await screen.findByLabelText(/connection/i);
+      const button = screen.getByRole("button", { name: /next: terms/i });
+      expect(button).toBeDisabled();
+      expect(screen.getByText(/select a connection above to continue\./i)).toBeInTheDocument();
+    });
+
+    it("clicking the '2. Terms' tab and clicking 'Next: Terms' both land on the same Step 2 (Terms) view, preserving whatever party was already selected", async () => {
+      const user = userEvent.setup();
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/profiles": { body: { profiles: [{ kind: "personal", personalProfileId: "p1", displayName: "Jane Doe" }] } },
+          "/api/relationships?": { body: { relationships: [{ id: "rel-1", status: "financial_accounts_ready", currentAgreementId: null }] } },
+          "/api/relationships/detail": {
+            body: {
+              relationship: { id: "rel-1" },
+              participants: [
+                { id: "part-1", relationshipId: "rel-1", individualProfileId: "p1", organizationId: null, role: "creditor", representedByUserId: "user-1" },
+                { id: "part-2", relationshipId: "rel-1", individualProfileId: "p2", organizationId: null, role: "debtor", representedByUserId: "user-2" },
+              ],
+            },
+          },
+        }),
+      );
+
+      render(<AgreementCreateWizard />);
+      const select = await screen.findByLabelText(/connection/i);
+      await user.selectOptions(select, "rel-1");
+      await screen.findByText(/you are/i);
+
+      // Via the "2. Terms" tab.
+      await user.click(screen.getByRole("tab", { name: "2. Terms" }));
+      expect(await screen.findByLabelText(/^category$/i)).toBeInTheDocument();
+
+      // Back to Parties, then via the "Next: Terms" button — same destination, same preserved selection.
+      await user.click(screen.getByRole("tab", { name: "1. Parties" }));
+      expect(await screen.findByText(/receiving repayment \(creditor\)/i)).toBeInTheDocument(); // selection survived the round trip
+      const nextButton = screen.getByRole("button", { name: /next: terms/i });
+      expect(nextButton).not.toBeDisabled();
+      await user.click(nextButton);
+      expect(await screen.findByLabelText(/^category$/i)).toBeInTheDocument();
+    });
+  });
+
   it("derives both parties' roles from the selected connection and creates + links a draft agreement", async () => {
     const user = userEvent.setup();
     vi.stubGlobal(
