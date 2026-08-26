@@ -139,20 +139,25 @@ export function NotificationCenter() {
   }
 
   const viewToggle = (
-    <div className="hero__actions" style={{ marginBottom: "1rem", justifyContent: "space-between" }}>
-      <div role="tablist" aria-label="Notification view" style={{ display: "flex", gap: "0.5rem" }}>
-        <button type="button" role="tab" aria-selected={view === "current"} className="button button--ghost" onClick={() => switchView("current")}>
-          Current
-        </button>
-        <button type="button" role="tab" aria-selected={view === "archived"} className="button button--ghost" onClick={() => switchView("archived")}>
-          Archived
-        </button>
+    <div style={{ marginBottom: "1rem" }}>
+      <div className="hero__actions" style={{ justifyContent: "space-between" }}>
+        <div role="tablist" aria-label="Notification view" style={{ display: "flex", gap: "0.5rem" }}>
+          <button type="button" role="tab" aria-selected={view === "current"} className="button button--ghost" onClick={() => switchView("current")}>
+            Current
+          </button>
+          <button type="button" role="tab" aria-selected={view === "archived"} className="button button--ghost" onClick={() => switchView("archived")}>
+            Archived
+          </button>
+        </div>
+        {hasArchivable && (
+          <button type="button" className="button button--ghost" onClick={() => void handleArchiveAll()} disabled={archivingAll}>
+            {archivingAll ? "Archiving…" : "Archive all read/completed"}
+          </button>
+        )}
       </div>
-      {hasArchivable && (
-        <button type="button" className="button button--ghost" onClick={() => void handleArchiveAll()} disabled={archivingAll}>
-          {archivingAll ? "Archiving…" : "Archive all read/completed"}
-        </button>
-      )}
+      <p style={{ margin: "0.5rem 0 0", fontSize: "0.8rem", color: "var(--ink-soft)" }}>
+        Read notifications are automatically moved to Archived 7 days after being marked as read.
+      </p>
     </div>
   );
 

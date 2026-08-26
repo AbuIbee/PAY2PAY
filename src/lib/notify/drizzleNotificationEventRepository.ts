@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, isNotNull, like, lte, or } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, like, lte, or } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { notificationEvent } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -167,6 +167,22 @@ export class DrizzleNotificationEventRepository implements NotificationEventRepo
       .where(and(eq(notificationEvent.recipientUserId, recipientUserId), or(...conditions)))
       .returning();
     return rows.length;
+  }
+
+  async listReadyForAutoArchive(readBefore: Date): Promise<{ id: string; recipientUserId: string; dedupeKey: string | null }[]> {
+    const db = getDb();
+    const rows = await db
+      .select({ id: notificationEvent.id, recipientUserId: notificationEvent.recipientUserId, dedupeKey: notificationEvent.dedupeKey })
+      .from(notificationEvent)
+      .where(
+        and(
+          eq(notificationEvent.channel, "in_app"),
+          isNull(notificationEvent.archivedAt),
+          isNotNull(notificationEvent.readAt),
+          lte(notificationEvent.readAt, readBefore),
+        ),
+      );
+    return rows;
   }
 
   async listRecentByChannel(channel: NotificationChannel, limit: number): Promise<NotificationEventRecord[]> {

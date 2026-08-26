@@ -131,6 +131,13 @@ export class InMemoryNotificationEventRepository implements NotificationEventRep
       .slice(0, limit);
   }
 
+  /** Mirrors DrizzleNotificationEventRepository.listReadyForAutoArchive's exact candidate filter. */
+  async listReadyForAutoArchive(readBefore: Date): Promise<{ id: string; recipientUserId: string; dedupeKey: string | null }[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.channel === "in_app" && r.archivedAt === null && r.readAt !== null && r.readAt <= readBefore)
+      .map((r) => ({ id: r.id, recipientUserId: r.recipientUserId, dedupeKey: r.dedupeKey }));
+  }
+
   private mustFind(id: string): NotificationEventRecord {
     const record = this.byId.get(id);
     if (!record) throw new Error("notification_event not found");

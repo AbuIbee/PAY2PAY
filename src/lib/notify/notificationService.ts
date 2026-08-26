@@ -80,6 +80,16 @@ export interface NotificationEventRepository {
    * archived groupId, never an error).
    */
   archiveGroup(recipientUserId: string, groupId: string, archivedAt: Date): Promise<number>;
+  /**
+   * Agreement page ordering + notification retention (mandatory command): the raw candidates for the
+   * 7-day auto-archive sweep — every not-yet-archived `in_app` row read at or before `readBefore`.
+   * Deliberately scoped to `channel = "in_app"` only: `readAt` is only ever meaningfully set on a
+   * group's in_app row (see `NotificationService.listGroupedForUser`'s own doc comment), so this is
+   * the complete candidate set, one row per logical notification group. The service derives each
+   * row's groupId from `dedupeKey`/`id` the same way `listGroupedForUser` does, then archives the
+   * whole group via the existing `archiveGroup`.
+   */
+  listReadyForAutoArchive(readBefore: Date): Promise<{ id: string; recipientUserId: string; dedupeKey: string | null }[]>;
 }
 
 /** Real implementation: DrizzleNotificationPreferenceRepository. */
@@ -165,6 +175,8 @@ export interface NotificationServiceOptions {
 
 const DEFAULT_RETRY_DELAY_MS = 15 * 60 * 1000;
 const DEFAULT_MAX_ATTEMPTS = 3;
+/** Agreement page ordering + notification retention (mandatory command): a read notification auto-archives 7 days after `read_at`, never from its creation date. */
+const AUTO_ARCHIVE_AFTER_READ_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Sprint 13's minimal internal notification primitive, extended per
@@ -355,7 +367,7 @@ export class NotificationService {
     const rows = await this.deps.events.listForUser(recipientUserId);
     const groups = new Map<string, GroupedNotification>();
     for (const row of rows) {
-      const groupKey = row.dedupeKey && row.dedupeKey.endsWith(`:${row.channel}`) ? row.dedupeKey.slice(0, -(row.channel.length + 1)) : row.id;
+      const groupKey = this.groupKeyFor(row.id, row.dedupeKey, row.channel);
       let group = groups.get(groupKey);
       if (!group) {
         group = {
@@ -406,32 +418,57 @@ export class NotificationService {
   }
 
   /**
-   * Production follow-up (Notification cleanup + archive): the Notification Center's "Current" tab.
-   * Excludes every archived group, then reorders `listGroupedForUser`'s own recency sort by priority
-   * — action required first, then unread, then most-recent-first within each tier — so old,
-   * already-read informational notifications (an agreement's now-superseded earlier lifecycle events,
-   * once a newer one for the same agreement exists and both are read) sink beneath what the recipient
-   * still needs to see, without ever hiding or auto-archiving anything server-side.
+   * Agreement page ordering + notification retention (mandatory command): the caller-supplied
+   * dedupeKey with its trailing `:${channel}` stripped, shared by `listGroupedForUser` and the
+   * auto-archive sweep below — the one place this derivation is ever written, so both can never
+   * drift into computing a different groupId for the same underlying rows.
    */
-  async listCurrentGroupedForUser(recipientUserId: string): Promise<GroupedNotification[]> {
-    const all = await this.listGroupedForUser(recipientUserId);
-    return all
-      .filter((g) => g.archivedAt === null)
-      .sort((a, b) => {
-        if (a.actionRequired !== b.actionRequired) return a.actionRequired ? -1 : 1;
-        const aUnread = a.inAppId !== null && a.readAt === null;
-        const bUnread = b.inAppId !== null && b.readAt === null;
-        if (aUnread !== bUnread) return aUnread ? -1 : 1;
-        return b.createdAt.getTime() - a.createdAt.getTime();
-      });
+  private groupKeyFor(id: string, dedupeKey: string | null, channel: NotificationChannel): string {
+    return dedupeKey && dedupeKey.endsWith(`:${channel}`) ? dedupeKey.slice(0, -(channel.length + 1)) : id;
   }
 
-  /** Production follow-up (Notification archive): the Notification Center's "Archived" tab — most recently archived first. */
-  async listArchivedGroupedForUser(recipientUserId: string): Promise<GroupedNotification[]> {
+  /**
+   * Agreement page ordering + notification retention (mandatory command): true once a read
+   * notification has been read for at least 7 days — computed from `readAt`, never from `createdAt`.
+   * Never true for an unread notification (readAt === null) — "do not fabricate a read timestamp."
+   */
+  private isAutoArchiveEligible(readAt: Date | null, now: Date): boolean {
+    return readAt !== null && now.getTime() - readAt.getTime() >= AUTO_ARCHIVE_AFTER_READ_MS;
+  }
+
+  /**
+   * Production follow-up (Notification cleanup + archive), superseded by the agreement page
+   * ordering + notification retention mandatory command: the Notification Center's "Current" tab.
+   * Sorts strictly newest-to-oldest by the notification's own `createdAt` — no priority reordering
+   * (this file previously bubbled action-required/unread groups above older-but-more-urgent ones;
+   * that behavior is explicitly superseded by the newer requirement that a newer notification must
+   * never render below an older one in the same view). Excludes every manually-archived group *and*
+   * every read notification whose `readAt` is 7+ days old — the latter check is evaluated here, at
+   * read time, so Current is always correct immediately, independent of whether the durability sweep
+   * (`autoArchiveEligibleReadNotifications`, cron-driven) has run yet.
+   */
+  async listCurrentGroupedForUser(recipientUserId: string, now: Date = new Date()): Promise<GroupedNotification[]> {
     const all = await this.listGroupedForUser(recipientUserId);
     return all
-      .filter((g): g is GroupedNotification & { archivedAt: Date } => g.archivedAt !== null)
-      .sort((a, b) => b.archivedAt.getTime() - a.archivedAt.getTime());
+      .filter((g) => g.archivedAt === null && !this.isAutoArchiveEligible(g.readAt, now))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  /**
+   * Production follow-up (Notification archive), extended by the agreement page ordering +
+   * notification retention mandatory command: the Notification Center's "Archived" tab. Includes
+   * every manually-archived group *and* every read-7+-days-ago group (auto-archive-eligible, whether
+   * or not the durability sweep has physically set `archivedAt` on it yet — see
+   * `listCurrentGroupedForUser`'s doc comment for why both list methods evaluate this independently).
+   * Sorted newest-to-oldest by the notification's own `createdAt`, matching Current — not by
+   * `archivedAt` (when it happened to be filed away), so the two views are consistently ordered by
+   * the same real-world timestamp.
+   */
+  async listArchivedGroupedForUser(recipientUserId: string, now: Date = new Date()): Promise<GroupedNotification[]> {
+    const all = await this.listGroupedForUser(recipientUserId);
+    return all
+      .filter((g) => g.archivedAt !== null || this.isAutoArchiveEligible(g.readAt, now))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   /** Production follow-up (Notification archive): archives one logical notification (every channel row) on the recipient's own say-so. Returns false for an unknown/foreign/already-archived groupId — never throws, so a stale UI click just no-ops. */
@@ -454,6 +491,34 @@ export class NotificationService {
     const archivedAt = new Date();
     for (const group of sweepable) {
       const count = await this.deps.events.archiveGroup(recipientUserId, group.groupId, archivedAt);
+      if (count > 0) archived += 1;
+    }
+    return { archived };
+  }
+
+  /**
+   * Agreement page ordering + notification retention (mandatory command): the durability half of
+   * the 7-day read-to-archive rule — `listCurrentGroupedForUser`/`listArchivedGroupedForUser` already
+   * make the *view* correct on every read regardless of this ever running, but this is what makes the
+   * archived state real (`archived_at` actually set), not just a query-time-computed appearance, and
+   * is what a Vercel Cron Job (vercel.json, `/api/scheduler/archive-read-notifications`) calls
+   * periodically so it "functions reliably even if the user does not keep the Notifications page
+   * open." Reuses `archiveGroup` for the actual write — every channel row in a group is archived
+   * atomically, exactly like a manual archive — rather than a second, parallel bulk-update code path.
+   * Never touches a row with no `readAt` ("do not fabricate a read timestamp").
+   */
+  async autoArchiveEligibleReadNotifications(now: Date = new Date()): Promise<{ archived: number }> {
+    const threshold = new Date(now.getTime() - AUTO_ARCHIVE_AFTER_READ_MS);
+    const candidates = await this.deps.events.listReadyForAutoArchive(threshold);
+    let archived = 0;
+    const archivedAt = new Date();
+    const seen = new Set<string>();
+    for (const row of candidates) {
+      const groupId = this.groupKeyFor(row.id, row.dedupeKey, "in_app");
+      const seenKey = `${row.recipientUserId}:${groupId}`;
+      if (seen.has(seenKey)) continue;
+      seen.add(seenKey);
+      const count = await this.deps.events.archiveGroup(row.recipientUserId, groupId, archivedAt);
       if (count > 0) archived += 1;
     }
     return { archived };
