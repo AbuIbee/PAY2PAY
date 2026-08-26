@@ -2,13 +2,11 @@ import "server-only";
 import { getAgreementService } from "@/lib/agreements/getAgreementService";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
-import { DrizzlePersonalProfileRepository } from "@/lib/auth/drizzlePersonalProfileRepository";
 import { getMfaService } from "@/lib/auth/getMfaService";
 import { DrizzleProfileDisplayReader } from "@/lib/documents/drizzleProfileDisplayReader";
 import { getDocumentStorage } from "@/lib/documents/getDocumentStorage";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
-import { getVerificationService } from "@/lib/profiles/getVerificationService";
 import { getStaffService } from "@/lib/staff/getStaffService";
 import { DrizzleAgreementPdfRepository } from "./drizzleAgreementPdfRepository";
 import { DrizzleSignatureEventRepository } from "./drizzleSignatureEventRepository";
@@ -22,9 +20,7 @@ export function getSignatureService(): SignatureService {
     cached = new SignatureService({
       agreementService: getAgreementService(),
       mfa: getMfaService(),
-      verification: getVerificationService(),
       staffService: getStaffService(),
-      personalProfiles: new DrizzlePersonalProfileRepository(),
       profileOwners: new DrizzleProfileOwnerReader(),
       signatureEvents: new DrizzleSignatureEventRepository(),
       agreementPdfs: new DrizzleAgreementPdfRepository(),

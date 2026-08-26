@@ -19,13 +19,12 @@ function baseData(overrides: Partial<AgreementProgressData> = {}): AgreementProg
         cta: { label: "Add payment method", href: "/payment-methods" },
       },
       {
-        key: "identity_verification",
-        label: "Identity verification",
+        key: "signatures",
+        label: "Review & signatures",
         status: "action_required",
-        description: "Your identity must complete full verification before signing this agreement.",
-        cta: { label: "Verify identity", href: "/account/verification" },
+        description: "Review the agreement and sign to continue.",
+        cta: null,
       },
-      { key: "signatures", label: "Review & signatures", status: "not_started", description: "Both parties must accept these terms before signing.", cta: null },
       { key: "active", label: "Agreement active", status: "not_started", description: "Not yet reached.", cta: null },
     ],
     primaryAction: { label: "Add payment method", description: "Add a funding account before making payments on this agreement.", cta: { label: "Add payment method", href: "/payment-methods" } },
@@ -45,17 +44,18 @@ describe("AgreementProgress", () => {
     expect(screen.getByText("Agreement progress")).toBeInTheDocument();
     expect(screen.getAllByText("Complete").length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText("Action required").length).toBe(2);
-    expect(screen.getAllByText("Not started").length).toBe(2);
+    expect(screen.getAllByText("Not started").length).toBe(1);
   });
 
-  it("shows a direct, correctly-labeled CTA for each actionable requirement", () => {
+  it("shows a direct, correctly-labeled CTA for each actionable requirement that has one", () => {
     render(<AgreementProgress data={baseData()} />);
     // "Add payment method" appears twice by design — the step's own CTA and (since it's also the
     // primary action here) the primary-action CTA — both must point to the same, correct href.
     for (const link of screen.getAllByRole("link", { name: "Add payment method" })) {
       expect(link).toHaveAttribute("href", "/payment-methods");
     }
-    expect(screen.getByRole("link", { name: "Verify identity" })).toHaveAttribute("href", "/account/verification");
+    // The other actionable step (signatures) has no CTA of its own — never renders a link for it.
+    expect(screen.queryByRole("link", { name: /review & sign/i })).not.toBeInTheDocument();
   });
 
   it("never shows a CTA for a step with no action to take", () => {
@@ -112,7 +112,6 @@ describe("AgreementProgress", () => {
         { key: "details_terms", label: "Agreement details & terms", status: "complete", description: "Agreement details and terms were recorded before cancellation.", cta: null },
         { key: "acceptance", label: "Review & acceptance", status: "cancelled", description: "This agreement was cancelled. No further action is required.", cta: null },
         { key: "payment_method", label: "Payment method", status: "optional", description: "Not required for this agreement.", cta: null },
-        { key: "identity_verification", label: "Identity verification", status: "cancelled", description: "This agreement was cancelled. No further action is required.", cta: null },
         { key: "signatures", label: "Review & signatures", status: "cancelled", description: "This agreement was cancelled. No further action is required.", cta: null },
         { key: "active", label: "Agreement active", status: "cancelled", description: "This agreement was cancelled. No further action is required.", cta: null },
       ],
@@ -124,7 +123,7 @@ describe("AgreementProgress", () => {
       Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: viewport.width });
       const { unmount } = render(<AgreementProgress data={cancelledData} />);
 
-      expect(screen.getAllByText("Cancelled").length).toBe(4); // acceptance, identity_verification, signatures, active
+      expect(screen.getAllByText("Cancelled").length).toBe(3); // acceptance, signatures, active
       expect(screen.getByText("Agreement cancelled")).toBeInTheDocument();
       expect(screen.getByText("No further action is required for this agreement.")).toBeInTheDocument();
       expect(screen.queryByText(/^Next:/)).not.toBeInTheDocument();

@@ -6,12 +6,9 @@ import {
   AgreementProgressService,
   type AgreementCancellationInfo,
   type AgreementCancellationReader,
-  type PersonalProfileReader,
   type RelationshipPaymentMethodReader,
-  type VerificationStateReader,
 } from "./agreementProgressService";
 import type { AgreementStatus } from "./agreementService";
-import type { ProfileKind, VerificationState } from "@/lib/profiles/verificationService";
 
 function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
   const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -32,26 +29,6 @@ function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
     disputeProcedure: "Disputes are handled per platform policy.",
     ...overrides,
   };
-}
-
-class FakeVerificationStateReader implements VerificationStateReader {
-  states = new Map<string, VerificationState>();
-  private key(kind: ProfileKind, id: string) {
-    return `${kind}:${id}`;
-  }
-  set(kind: ProfileKind, id: string, state: VerificationState) {
-    this.states.set(this.key(kind, id), state);
-  }
-  async getVerificationState(kind: ProfileKind, id: string): Promise<VerificationState> {
-    return this.states.get(this.key(kind, id)) ?? "UNVERIFIED";
-  }
-}
-
-class FakePersonalProfileReader implements PersonalProfileReader {
-  byUserId = new Map<string, { id: string }>();
-  async findByUserId(userId: string) {
-    return this.byUserId.get(userId) ?? null;
-  }
 }
 
 class FakeRelationshipPaymentMethodReader implements RelationshipPaymentMethodReader {
@@ -78,26 +55,19 @@ class FakeAgreementCancellationReader implements AgreementCancellationReader {
 
 describe("AgreementProgressService", () => {
   let ctx: ReturnType<typeof createTestAgreementService>;
-  let verification: FakeVerificationStateReader;
-  let personalProfiles: FakePersonalProfileReader;
   let relationshipPaymentMethods: FakeRelationshipPaymentMethodReader;
   let progressService: AgreementProgressService;
 
   beforeEach(() => {
     ctx = createTestAgreementService();
-    verification = new FakeVerificationStateReader();
-    personalProfiles = new FakePersonalProfileReader();
     relationshipPaymentMethods = new FakeRelationshipPaymentMethodReader();
     progressService = new AgreementProgressService({
       agreementService: ctx.agreementService,
-      verification,
-      personalProfiles,
       relationshipPaymentMethods,
       cancellation: new FakeAgreementCancellationReader(ctx.auditRepo),
     });
   });
 
-  /** Creates a P2P agreement and fully verifies both personal profiles by default (tests override as needed). */
   async function createAgreement(overrides: Partial<DraftTermsInput> = {}) {
     const creditorUserId = randomUUID();
     const debtorUserId = randomUUID();
@@ -105,10 +75,6 @@ describe("AgreementProgressService", () => {
     const debtorProfileId = randomUUID();
     ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
     ctx.profileOwners.set("personal", debtorProfileId, debtorUserId);
-    personalProfiles.byUserId.set(creditorUserId, { id: creditorProfileId });
-    personalProfiles.byUserId.set(debtorUserId, { id: debtorProfileId });
-    verification.set("personal", creditorProfileId, "FULL_VERIFIED");
-    verification.set("personal", debtorProfileId, "FULL_VERIFIED");
 
     // Agreement Lifecycle V2: the debtor originates so the creditor is the counterparty and may
     // legitimately sign first in the tests below (signAgreement now requires the counterparty to
@@ -228,62 +194,11 @@ describe("AgreementProgressService", () => {
     });
   });
 
-  describe("identity verification — mirrors SignatureService.sign's exact gates (Problem 1's root cause)", () => {
-    it("complete when fully verified", async () => {
+  describe("Production follow-up (Remove Step 4 — Identity Verification): identity verification is no longer a progress step at all", () => {
+    it("the steps array has exactly 5 steps, in order, with no identity_verification key", async () => {
       const { agreementId, creditorUserId } = await createAgreement();
       const progress = await progressService.getProgress(agreementId, creditorUserId);
-      expect(progress.steps.find((s) => s.key === "identity_verification")?.status).toBe("complete");
-    });
-
-    it("action_required (not a dead-end) for UNVERIFIED/BASIC, with a CTA straight to /account/verification", async () => {
-      const { agreementId, creditorUserId, creditorProfileId } = await createAgreement();
-      verification.set("personal", creditorProfileId, "BASIC");
-      const progress = await progressService.getProgress(agreementId, creditorUserId);
-      const step = progress.steps.find((s) => s.key === "identity_verification");
-      expect(step?.status).toBe("action_required");
-      expect(step?.cta).toEqual({ label: "Verify identity", href: "/account/verification" });
-    });
-
-    it("blocked (not action_required) while a submitted verification request is pending review — this is the exact live-UAT defect: the user already acted, they just can't self-resolve further", async () => {
-      const { agreementId, creditorUserId, creditorProfileId } = await createAgreement();
-      verification.set("personal", creditorProfileId, "FULL_PENDING");
-      const progress = await progressService.getProgress(agreementId, creditorUserId);
-      const step = progress.steps.find((s) => s.key === "identity_verification");
-      expect(step?.status).toBe("blocked");
-      expect(step?.description).toMatch(/being reviewed/i);
-    });
-
-    it("action_required for a rejected verification, inviting resubmission", async () => {
-      const { agreementId, creditorUserId, creditorProfileId } = await createAgreement();
-      verification.set("personal", creditorProfileId, "FULL_REJECTED");
-      const progress = await progressService.getProgress(agreementId, creditorUserId);
-      const step = progress.steps.find((s) => s.key === "identity_verification");
-      expect(step?.status).toBe("action_required");
-      expect(step?.description).toMatch(/rejected/i);
-    });
-
-    it("also requires the business party's own verification for a business-profile signer", async () => {
-      const creditorUserId = randomUUID();
-      const debtorUserId = randomUUID();
-      const creditorBusinessId = randomUUID();
-      const debtorProfileId = randomUUID();
-      ctx.profileOwners.set("business", creditorBusinessId, creditorUserId);
-      ctx.profileOwners.set("personal", debtorProfileId, debtorUserId);
-      personalProfiles.byUserId.set(creditorUserId, { id: randomUUID() });
-      verification.set("personal", personalProfiles.byUserId.get(creditorUserId)!.id, "FULL_VERIFIED");
-      verification.set("business", creditorBusinessId, "BASIC"); // business itself not yet verified
-
-      const created = await ctx.agreementService.createDraft({
-        creatorUserId: creditorUserId,
-        creditor: { kind: "business", id: creditorBusinessId },
-        debtor: { kind: "personal", id: debtorProfileId },
-        ...baseTerms(),
-      });
-
-      const progress = await progressService.getProgress(created.agreement.id, creditorUserId);
-      const step = progress.steps.find((s) => s.key === "identity_verification");
-      expect(step?.status).toBe("action_required");
-      expect(step?.description).toMatch(/this business/i);
+      expect(progress.steps.map((s) => s.key)).toEqual(["details_terms", "acceptance", "payment_method", "signatures", "active"]);
     });
   });
 
@@ -292,17 +207,6 @@ describe("AgreementProgressService", () => {
       const { agreementId, creditorUserId } = await createAgreement();
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       expect(progress.steps.find((s) => s.key === "signatures")?.status).toBe("not_started");
-    });
-
-    it("blocked, naming the exact prerequisite, when identity verification isn't complete — item 16", async () => {
-      const { agreementId, creditorUserId, debtorUserId, creditorProfileId } = await createAgreement();
-      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
-      verification.set("personal", creditorProfileId, "BASIC");
-
-      const progress = await progressService.getProgress(agreementId, creditorUserId);
-      const step = progress.steps.find((s) => s.key === "signatures");
-      expect(step?.status).toBe("blocked");
-      expect(step?.cta).toEqual({ label: "Verify identity", href: "/account/verification" });
     });
 
     it("blocked when the schedule's first payment date has already passed (Problem 2)", async () => {
@@ -315,7 +219,7 @@ describe("AgreementProgressService", () => {
       expect(step?.description).toMatch(/2020-01-01/);
     });
 
-    it("action_required once verification is complete and the date is valid", async () => {
+    it("action_required once awaiting signatures and the date is valid", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
       const progress = await progressService.getProgress(agreementId, creditorUserId);
@@ -383,27 +287,14 @@ describe("AgreementProgressService", () => {
   });
 
   describe("cancellation progress display fix — cancellation is a terminal workflow state", () => {
-    it("1. cancelled before identity verification (during awaiting_debtor_acknowledgment): identity verification, signatures, and active all read Cancelled", async () => {
+    it("1. cancelled during awaiting_debtor_acknowledgment: signatures and active both read Cancelled", async () => {
       const { agreementId, creditorUserId } = await createAgreement();
       await ctx.agreementService.submitDraft(agreementId, creditorUserId);
       await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "Changed my mind.");
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
-      expect(progress.steps.find((s) => s.key === "identity_verification")?.status).toBe("cancelled");
       expect(progress.steps.find((s) => s.key === "signatures")?.status).toBe("cancelled");
       expect(progress.steps.find((s) => s.key === "active")?.status).toBe("cancelled");
-    });
-
-    it("2. a cancelled agreement's identity_verification step has no 'Verify identity' CTA, even for an unverified user", async () => {
-      const { agreementId, creditorUserId, creditorProfileId } = await createAgreement();
-      verification.set("personal", creditorProfileId, "UNVERIFIED");
-      await ctx.agreementService.submitDraft(agreementId, creditorUserId);
-      await ctx.agreementService.cancelAgreement(agreementId, creditorUserId, "test");
-
-      const progress = await progressService.getProgress(agreementId, creditorUserId);
-      const step = progress.steps.find((s) => s.key === "identity_verification");
-      expect(step?.status).toBe("cancelled");
-      expect(step?.cta).toBeNull();
     });
 
     it("3. a cancelled agreement's signatures step has no signing CTA, even mid-signature", async () => {
@@ -486,17 +377,16 @@ describe("AgreementProgressService", () => {
 
   describe("multiple missing requirements — 'do not simply send the user to the first problem and conceal the others'", () => {
     it("reports every actionable step, not just the first one found", async () => {
-      const { agreementId, creditorUserId, debtorUserId, creditorProfileId } = await createAgreement();
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
-      verification.set("personal", creditorProfileId, "BASIC");
       const relationshipId = randomUUID();
       ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
       relationshipPaymentMethods.byRelationship.set(relationshipId, []);
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       const actionRequired = progress.steps.filter((s) => s.status === "action_required");
-      // payment_method (creditor needs payout) and identity_verification both actionable at once.
-      expect(actionRequired.map((s) => s.key).sort()).toEqual(["identity_verification", "payment_method"]);
+      // payment_method (creditor needs payout) and signatures both actionable at once.
+      expect(actionRequired.map((s) => s.key).sort()).toEqual(["payment_method", "signatures"]);
       expect(progress.actionableForMeCount).toBe(2);
     });
   });
@@ -510,11 +400,10 @@ describe("AgreementProgressService", () => {
     });
 
     it("surfaces the blocking prerequisite when nothing is actionable but something is blocked", async () => {
-      const { agreementId, creditorUserId, debtorUserId, creditorProfileId } = await createAgreement();
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement({ firstPaymentDate: "2020-01-01" });
       await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
-      verification.set("personal", creditorProfileId, "FULL_PENDING");
       const progress = await progressService.getProgress(agreementId, creditorUserId);
-      expect(progress.primaryAction.description).toMatch(/reviewed/i);
+      expect(progress.primaryAction.description).toMatch(/2020-01-01/);
     });
 
     it("reports 'waiting for other party' once I've done everything I can", async () => {

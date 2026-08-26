@@ -298,7 +298,6 @@ describe("AgreementDetail", () => {
               { key: "details_terms", label: "Agreement details & terms", status: "complete", description: "x", cta: null },
               { key: "acceptance", label: "Review & acceptance", status: "complete", description: "x", cta: null },
               { key: "payment_method", label: "Payment method", status: "optional", description: "Not required for this agreement.", cta: null },
-              { key: "identity_verification", label: "Identity verification", status: "complete", description: "x", cta: null },
               { key: "signatures", label: "Review & signatures", status: "action_required", description: "Review the agreement and sign to continue.", cta: null },
               { key: "active", label: "Agreement active", status: "not_started", description: "x", cta: null },
             ],
@@ -312,7 +311,7 @@ describe("AgreementDetail", () => {
     render(<AgreementDetail />);
 
     expect(await screen.findByText("Agreement progress")).toBeInTheDocument();
-    expect(screen.getByText("Step 5 — Review & signatures")).toBeInTheDocument();
+    expect(screen.getByText("Step 4 — Review & signatures")).toBeInTheDocument();
   });
 
   it("PRSprint 25: rejecting an agreement requires confirmation — declining the dialog never calls the API", async () => {

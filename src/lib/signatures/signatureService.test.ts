@@ -234,32 +234,29 @@ describe("SignatureService", () => {
     });
   });
 
-  describe("signing blocked when signer profile is not FULL_VERIFIED", () => {
-    it("rejects signing when the signer's own personal profile is not fully verified", async () => {
+  describe("Production follow-up (Remove Step 4 — Identity Verification): signing no longer requires identity verification", () => {
+    it("allows signing when the signer's own personal profile has never been verified", async () => {
       const setup = await setupPersonalAwaitingSignatures();
       const sessionId = randomUUID();
       await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, setup.creditorUserId, sessionId);
-      // Deliberately no markFullyVerified call.
+      // Deliberately no markFullyVerified call — identity verification is no longer part of this gate.
 
-      await expect(
-        ctx.signatureService.sign({
-          agreementId: setup.agreementId,
-          actingUserId: setup.creditorUserId,
-          actingSessionId: sessionId,
-          authMethod: "totp",
-          consentVersion: CONSENT,
-          timezone: TZ,
-          deviceInfo: null,
-          ipAddress: "203.0.113.10",
-        }),
-      ).rejects.toThrow(ValidationError);
+      const result = await ctx.signatureService.sign({
+        agreementId: setup.agreementId,
+        actingUserId: setup.creditorUserId,
+        actingSessionId: sessionId,
+        authMethod: "totp",
+        consentVersion: CONSENT,
+        timezone: TZ,
+        deviceInfo: null,
+        ipAddress: "203.0.113.10",
+      });
 
-      expect(await ctx.signatureEvents.listForVersion(setup.versionId)).toHaveLength(0);
+      expect(result.signatureEvent.signerUserId).toBe(setup.creditorUserId);
+      expect(await ctx.signatureEvents.listForVersion(setup.versionId)).toHaveLength(1);
     });
-  });
 
-  describe("signing blocked when business profile is not FULL_VERIFIED (business signer)", () => {
-    it("rejects a business-owner signer when the business profile itself is not fully verified", async () => {
+    it("allows a business-owner signer to sign when the business profile itself has never been verified", async () => {
       const ownerUserId = randomUUID();
       const debtorUserId = randomUUID();
       const businessId = randomUUID();
@@ -283,23 +280,21 @@ describe("SignatureService", () => {
       });
 
       const sessionId = randomUUID();
-      const ownerPersonalProfileId = await seedPersonalParty(ctx, ownerUserId);
       await grantStepUp({ mfaCredentials: ctx.mfaCredentials, stepUps: ctx.stepUps }, ownerUserId, sessionId);
-      await markFullyVerified(ctx, "personal", ownerPersonalProfileId);
-      // Deliberately: the business profile itself is never marked FULL_VERIFIED.
+      // Deliberately: neither the owner's personal profile nor the business profile is ever marked
+      // FULL_VERIFIED — identity verification is no longer part of this gate.
 
-      await expect(
-        ctx.signatureService.sign({
-          agreementId: created.agreement.id,
-          actingUserId: ownerUserId,
-          actingSessionId: sessionId,
-          authMethod: "totp",
-          consentVersion: CONSENT,
-          timezone: TZ,
-          deviceInfo: null,
-          ipAddress: "203.0.113.10",
-        }),
-      ).rejects.toThrow(ValidationError);
+      const result = await ctx.signatureService.sign({
+        agreementId: created.agreement.id,
+        actingUserId: ownerUserId,
+        actingSessionId: sessionId,
+        authMethod: "totp",
+        consentVersion: CONSENT,
+        timezone: TZ,
+        deviceInfo: null,
+        ipAddress: "203.0.113.10",
+      });
+      expect(result.signatureEvent.signingAuthority).toBe("account_owner");
     });
   });
 

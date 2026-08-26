@@ -74,9 +74,9 @@ const TOUR_STEPS: TourStep[] = [
   },
   {
     area: "Verification",
-    whatFor: "PAY2PAY's identity verification tier — required before you can sign an agreement or send/receive a payment.",
+    whatFor: "PAY2PAY's identity verification tier — required before you can send or receive a payment.",
     whatYouCanDo: "Request full verification and check its current status.",
-    whatsNext: "Full verification is reviewed by the team, not automatic — once approved, agreements can be signed and payments can flow.",
+    whatsNext: "Full verification is reviewed by the team, not automatic — once approved, payments can flow.",
   },
   {
     area: "Staff & Organization",

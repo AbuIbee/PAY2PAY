@@ -1,11 +1,13 @@
 import "server-only";
-import { and, desc, eq, isNotNull, lte } from "drizzle-orm";
+import { and, desc, eq, isNotNull, like, lte, or } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { notificationEvent } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
 import type { NotificationChannel, NotificationEventRecord, NotificationEventRepository, NotificationStatus } from "./notificationService";
 
 type Row = typeof notificationEvent.$inferSelect;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function toRecord(row: Row): NotificationEventRecord {
   return {
@@ -28,6 +30,7 @@ function toRecord(row: Row): NotificationEventRecord {
     providerMessageId: row.providerMessageId,
     createdAt: row.createdAt,
     readAt: row.readAt,
+    archivedAt: row.archivedAt,
   };
 }
 
@@ -143,6 +146,27 @@ export class DrizzleNotificationEventRepository implements NotificationEventRepo
       .where(and(eq(notificationEvent.id, id), eq(notificationEvent.recipientUserId, recipientUserId)))
       .returning();
     return row ? toRecord(row) : null;
+  }
+
+  /**
+   * See NotificationEventRepository.archiveGroup's own doc comment for the matching rule (bare id, or
+   * a shared dedupeKey/dedupeKey-prefix). `id` is a real `uuid` column — comparing it against an
+   * arbitrary non-UUID `groupId` (the normal case: a dedupeKey-derived string like
+   * "agreement_invitation:<uuid>:<uuid>", not a UUID itself) makes Postgres reject the whole query
+   * with `invalid input syntax for type uuid` rather than just evaluating to false, so the `id`
+   * equality clause is only ever included when `groupId` actually looks like one (live-verified
+   * production defect, fixed here).
+   */
+  async archiveGroup(recipientUserId: string, groupId: string, archivedAt: Date): Promise<number> {
+    const db = getDb();
+    const conditions = [eq(notificationEvent.dedupeKey, groupId), like(notificationEvent.dedupeKey, `${groupId}:%`)];
+    if (UUID_PATTERN.test(groupId)) conditions.push(eq(notificationEvent.id, groupId));
+    const rows = await db
+      .update(notificationEvent)
+      .set({ archivedAt })
+      .where(and(eq(notificationEvent.recipientUserId, recipientUserId), or(...conditions)))
+      .returning();
+    return rows.length;
   }
 
   async listRecentByChannel(channel: NotificationChannel, limit: number): Promise<NotificationEventRecord[]> {

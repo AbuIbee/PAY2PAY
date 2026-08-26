@@ -5,8 +5,8 @@ import { P2PDemo } from "./P2PDemo";
 
 /**
  * Demo navigation & dedicated demo experiences (Product Owner request): P2P Demo — proves the exact
- * required journey (invitation -> acceptance -> agreement -> verification -> signing -> payment
- * method -> $250 partial payment -> $750 remaining -> subsequent payments -> paid in full), the
+ * required journey (invitation -> acceptance -> agreement -> signing -> payment method -> $250
+ * partial payment -> $750 remaining -> subsequent payments -> paid in full), the
  * exact required safety banner text, and — most importantly — that this page makes zero network
  * calls (fixture data only, no real invitations/agreements/payments/customer data), mirroring
  * DemoWalkthrough.test.tsx's identical "never calls fetch" contract.
@@ -33,11 +33,11 @@ describe("P2PDemo", () => {
     expect(screen.getByText("DEMO — No real money or customer data is being used.")).toBeInTheDocument();
   });
 
-  it("walks the full required P2P journey in order: invitation, acceptance, agreement, verification, signing, payment method, $250 partial payment, $750 remaining, subsequent payments, paid in full", async () => {
+  it("walks the full required P2P journey in order: invitation, acceptance, agreement, signing, payment method, $250 partial payment, $750 remaining, subsequent payments, paid in full", async () => {
     const user = userEvent.setup();
     render(<P2PDemo />);
 
-    expect(screen.getByText("Step 1 of 10")).toBeInTheDocument();
+    expect(screen.getByText("Step 1 of 9")).toBeInTheDocument();
     expect(screen.getByText("The situation")).toBeInTheDocument();
     expect(screen.getAllByText(/person a owes person b \$1,000/i).length).toBeGreaterThan(0);
 
@@ -49,9 +49,6 @@ describe("P2PDemo", () => {
 
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     expect(screen.getByText("Repayment agreement")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /^next$/i }));
-    expect(screen.getByText("Identity verification")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     expect(screen.getByText("Signing")).toBeInTheDocument();
@@ -68,7 +65,7 @@ describe("P2PDemo", () => {
 
     await user.click(screen.getByRole("button", { name: /^next$/i }));
     expect(screen.getByRole("heading", { name: "Paid in full" })).toBeInTheDocument();
-    expect(screen.getByText("Step 10 of 10")).toBeInTheDocument();
+    expect(screen.getByText("Step 9 of 9")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^next$/i })).not.toBeInTheDocument();
   });
 

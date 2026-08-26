@@ -43,6 +43,7 @@ export class InMemoryNotificationEventRepository implements NotificationEventRep
       providerMessageId: null,
       createdAt: new Date(),
       readAt: null,
+      archivedAt: null,
       ...input,
     };
     this.byId.set(record.id, record);
@@ -108,6 +109,19 @@ export class InMemoryNotificationEventRepository implements NotificationEventRep
     if (!record || record.recipientUserId !== recipientUserId) return null;
     record.readAt = readAt;
     return record;
+  }
+
+  /** Mirrors DrizzleNotificationEventRepository.archiveGroup's own matching rule (bare id, or a shared dedupeKey/dedupeKey-prefix). */
+  async archiveGroup(recipientUserId: string, groupId: string, archivedAt: Date): Promise<number> {
+    let count = 0;
+    for (const record of this.byId.values()) {
+      if (record.recipientUserId !== recipientUserId) continue;
+      const matches = record.id === groupId || record.dedupeKey === groupId || (record.dedupeKey?.startsWith(`${groupId}:`) ?? false);
+      if (!matches) continue;
+      record.archivedAt = archivedAt;
+      count += 1;
+    }
+    return count;
   }
 
   async listRecentByChannel(channel: NotificationChannel, limit: number): Promise<NotificationEventRecord[]> {

@@ -662,6 +662,152 @@ describe("NotificationService", () => {
       });
     });
 
+    describe("Production follow-up (Notification cleanup + archive)", () => {
+      describe("listCurrentGroupedForUser / listArchivedGroupedForUser / archiveNotification", () => {
+        it("a freshly-created notification appears in Current, not Archived", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "cur-1" });
+
+          expect(await notificationService.listCurrentGroupedForUser("user-1")).toHaveLength(1);
+          expect(await notificationService.listArchivedGroupedForUser("user-1")).toHaveLength(0);
+        });
+
+        it("archiveNotification moves every channel row for the group into Archived atomically", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          contacts.setPhone("user-1", "+15551234567");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_failed", payload: {}, dedupeKey: "arch-1" }); // email+sms+in_app
+
+          const archived = await notificationService.archiveNotification("user-1", "arch-1");
+          expect(archived).toBe(true);
+
+          const current = await notificationService.listCurrentGroupedForUser("user-1");
+          expect(current).toHaveLength(0);
+          const archivedGroups = await notificationService.listArchivedGroupedForUser("user-1");
+          expect(archivedGroups).toHaveLength(1);
+          expect(archivedGroups[0]?.archivedAt).not.toBeNull();
+          // Every channel came along, not just one row.
+          expect(archivedGroups[0]?.channels.map((c) => c.channel).sort()).toEqual(["email", "in_app", "sms"]);
+        });
+
+        it("archiving a stale/unknown groupId is a safe no-op (false, not an error)", async () => {
+          const { notificationService } = createTestNotificationService();
+          expect(await notificationService.archiveNotification("user-1", "does-not-exist")).toBe(false);
+        });
+
+        it("never archives another user's notification", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "cross-1" });
+
+          expect(await notificationService.archiveNotification("user-2", "cross-1")).toBe(false);
+          expect(await notificationService.listCurrentGroupedForUser("user-1")).toHaveLength(1);
+        });
+
+        it("archived notifications retain their original createdAt and delivery-status information", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: { amountMinorUnits: 5000, currency: "USD" }, dedupeKey: "retain-1" });
+          const [before] = await notificationService.listCurrentGroupedForUser("user-1");
+
+          await notificationService.archiveNotification("user-1", "retain-1");
+          const [after] = await notificationService.listArchivedGroupedForUser("user-1");
+
+          expect(after?.createdAt).toEqual(before?.createdAt);
+          expect(after?.channels.find((c) => c.channel === "email")?.status).toBe("sent");
+          expect(after?.payload).toEqual(before?.payload);
+        });
+      });
+
+      describe("Current-view priority: action required > unread > recent informational", () => {
+        it("an action-required notification sorts above an unread, more recent informational one", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "amendment", payload: {}, dedupeKey: "prio-action" }); // action-required
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "prio-unread" }); // unread, informational, created after
+
+          const current = await notificationService.listCurrentGroupedForUser("user-1");
+          expect(current.map((g) => g.groupId)).toEqual(["prio-action", "prio-unread"]);
+        });
+
+        it("an unread informational notification sorts above an older, already-read one", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "prio-read" });
+          const [readGroup] = await notificationService.listCurrentGroupedForUser("user-1");
+          await notificationService.markRead("user-1", readGroup!.inAppId!);
+
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {}, dedupeKey: "prio-unread-2" });
+
+          const current = await notificationService.listCurrentGroupedForUser("user-1");
+          expect(current.map((g) => g.groupId)).toEqual(["prio-unread-2", "prio-read"]);
+        });
+
+        it("the exact scenario: 4 notifications for the same agreement — the newest sorts above 3 older, already-read informational ones", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          const steps = [
+            { type: "agreement_decided" as const, key: "step-1" },
+            { type: "agreement_invitation_response" as const, key: "step-2" },
+            { type: "agreement_counterparty_signed" as const, key: "step-3" }, // action-required — recipient must sign next
+            { type: "agreement_signed" as const, key: "step-4" },
+          ];
+          for (const step of steps) {
+            await notificationService.notify({ recipientUserId: "user-1", notificationType: step.type, payload: {}, dedupeKey: step.key });
+          }
+          // Read everything except the newest (step-4) and the action-required one (step-3, which stays actionable regardless of read state).
+          for (const key of ["step-1", "step-2"]) {
+            const [group] = (await notificationService.listCurrentGroupedForUser("user-1")).filter((g) => g.groupId === key);
+            await notificationService.markRead("user-1", group!.inAppId!);
+          }
+
+          const current = await notificationService.listCurrentGroupedForUser("user-1");
+          // step-3 (action required) first, then step-4 (newest, unread informational), then the two older read ones.
+          expect(current[0]?.groupId).toBe("step-3");
+          expect(current[1]?.groupId).toBe("step-4");
+          expect(current.map((g) => g.groupId).slice(2).sort()).toEqual(["step-1", "step-2"]);
+        });
+      });
+
+      describe("archiveAllReadOrCompleted", () => {
+        it("sweeps only read, non-action-required notifications — leaves unread and action-required ones in Current", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "sweep-read" });
+          const [readGroup] = await notificationService.listCurrentGroupedForUser("user-1");
+          await notificationService.markRead("user-1", readGroup!.inAppId!);
+
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {}, dedupeKey: "sweep-unread" });
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "amendment", payload: {}, dedupeKey: "sweep-action" });
+
+          const result = await notificationService.archiveAllReadOrCompleted("user-1");
+          expect(result).toEqual({ archived: 1 });
+
+          const current = await notificationService.listCurrentGroupedForUser("user-1");
+          expect(current.map((g) => g.groupId).sort()).toEqual(["sweep-action", "sweep-unread"]);
+          const archived = await notificationService.listArchivedGroupedForUser("user-1");
+          expect(archived.map((g) => g.groupId)).toEqual(["sweep-read"]);
+        });
+
+        it("is a safe no-op (archived: 0) when nothing qualifies", async () => {
+          const { notificationService } = createTestNotificationService();
+          expect(await notificationService.archiveAllReadOrCompleted("user-1")).toEqual({ archived: 0 });
+        });
+
+        it("running it twice in a row the second time archives nothing new", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "sweep-twice" });
+          const [group] = await notificationService.listCurrentGroupedForUser("user-1");
+          await notificationService.markRead("user-1", group!.inAppId!);
+
+          expect(await notificationService.archiveAllReadOrCompleted("user-1")).toEqual({ archived: 1 });
+          expect(await notificationService.archiveAllReadOrCompleted("user-1")).toEqual({ archived: 0 });
+        });
+      });
+    });
+
     describe("getSmsEligibility", () => {
       it("reports phoneVerified: false and no opt-out concept when no verified phone exists", async () => {
         const { notificationService } = createTestNotificationService();

@@ -7,7 +7,7 @@ import { EmailDeliveryError } from "./emailDeliveryError";
 import type { EmailSender } from "./emailSender";
 import { SmsDeliveryError } from "./smsDeliveryError";
 import type { SmsSender } from "./smsSender";
-import { DEFAULT_CHANNELS, isCriticalNotificationType, type NotificationEventType } from "./eventTypes";
+import { DEFAULT_CHANNELS, isActionRequiredNotificationType, isCriticalNotificationType, type NotificationEventType } from "./eventTypes";
 import { NOTIFICATION_TEMPLATES } from "./templates";
 
 export type NotificationChannel = "email" | "sms" | "in_app";
@@ -37,6 +37,8 @@ export interface NotificationEventRecord {
   createdAt: Date;
   /** Sprint 18B: null means unread — the Notification Center's read/unread state. */
   readAt: Date | null;
+  /** Production follow-up (Notification archive): null means "in the Current feed" — see the schema column's own doc comment. */
+  archivedAt: Date | null;
 }
 
 /** Real implementation: DrizzleNotificationEventRepository. */
@@ -67,6 +69,17 @@ export interface NotificationEventRepository {
   markRead(id: string, recipientUserId: string, readAt: Date): Promise<NotificationEventRecord | null>;
   /** PRSprint 14: admin-facing operational visibility (src/lib/admin/emailDeliveryAdminService.ts) — every channel, most-recent-first, capped by `limit`. Not scoped to one recipient (that's `listForUser`'s job); scoped instead by the admin capability gate in front of it. */
   listRecentByChannel(channel: NotificationChannel, limit: number): Promise<NotificationEventRecord[]>;
+  /**
+   * Production follow-up (Notification archive): archives every row belonging to one logical
+   * notification (every channel — email/sms/in_app — sharing `groupId`, the same dedupeKey-derived
+   * key `NotificationService`'s own grouping logic computes), not just one row, so a group is always
+   * atomically either fully archived or not. `groupId` is either a shared dedupeKey prefix (the normal
+   * case — every real notify() call site supplies one) or a bare row id (the defensive fallback for a
+   * row with no dedupeKey). Scoping to recipientUserId is the authorization boundary — mirrors
+   * `markRead`. Returns the number of rows archived (0 if nothing matched — a stale/foreign/already-
+   * archived groupId, never an error).
+   */
+  archiveGroup(recipientUserId: string, groupId: string, archivedAt: Date): Promise<number>;
 }
 
 /** Real implementation: DrizzleNotificationPreferenceRepository. */
@@ -133,6 +146,14 @@ export interface GroupedNotification {
   /** The in_app row's own id — what a "mark read" action targets. Null when no in_app row exists for this group. */
   inAppId: string | null;
   channels: GroupedChannelStatus[];
+  /**
+   * Production follow-up (Notification archive): null in the Current view (listCurrentGroupedForUser
+   * never returns an archived group at all); set — every channel row's archivedAt, which are always
+   * archived together atomically — in the Archived view.
+   */
+  archivedAt: Date | null;
+  /** isActionRequiredNotificationType(notificationType) — exposed pre-computed so the UI never needs its own copy of this classification. */
+  actionRequired: boolean;
 }
 
 export interface NotificationServiceOptions {
@@ -349,6 +370,8 @@ export class NotificationService {
           readAt: null,
           inAppId: null,
           channels: [],
+          archivedAt: null,
+          actionRequired: isActionRequiredNotificationType(row.notificationType as NotificationEventType),
         };
         groups.set(groupKey, group);
       }
@@ -357,6 +380,9 @@ export class NotificationService {
         group.readAt = row.readAt;
         group.inAppId = row.id;
       }
+      // Archiving is always atomic across every channel row in a group (see archiveGroup's own doc
+      // comment) — any one row carrying archivedAt is enough to know the whole group is archived.
+      if (row.archivedAt) group.archivedAt = row.archivedAt;
       if (row.createdAt < group.createdAt) group.createdAt = row.createdAt;
     }
 
@@ -377,6 +403,60 @@ export class NotificationService {
     }
 
     return [...groups.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  /**
+   * Production follow-up (Notification cleanup + archive): the Notification Center's "Current" tab.
+   * Excludes every archived group, then reorders `listGroupedForUser`'s own recency sort by priority
+   * — action required first, then unread, then most-recent-first within each tier — so old,
+   * already-read informational notifications (an agreement's now-superseded earlier lifecycle events,
+   * once a newer one for the same agreement exists and both are read) sink beneath what the recipient
+   * still needs to see, without ever hiding or auto-archiving anything server-side.
+   */
+  async listCurrentGroupedForUser(recipientUserId: string): Promise<GroupedNotification[]> {
+    const all = await this.listGroupedForUser(recipientUserId);
+    return all
+      .filter((g) => g.archivedAt === null)
+      .sort((a, b) => {
+        if (a.actionRequired !== b.actionRequired) return a.actionRequired ? -1 : 1;
+        const aUnread = a.inAppId !== null && a.readAt === null;
+        const bUnread = b.inAppId !== null && b.readAt === null;
+        if (aUnread !== bUnread) return aUnread ? -1 : 1;
+        return b.createdAt.getTime() - a.createdAt.getTime();
+      });
+  }
+
+  /** Production follow-up (Notification archive): the Notification Center's "Archived" tab — most recently archived first. */
+  async listArchivedGroupedForUser(recipientUserId: string): Promise<GroupedNotification[]> {
+    const all = await this.listGroupedForUser(recipientUserId);
+    return all
+      .filter((g): g is GroupedNotification & { archivedAt: Date } => g.archivedAt !== null)
+      .sort((a, b) => b.archivedAt.getTime() - a.archivedAt.getTime());
+  }
+
+  /** Production follow-up (Notification archive): archives one logical notification (every channel row) on the recipient's own say-so. Returns false for an unknown/foreign/already-archived groupId — never throws, so a stale UI click just no-ops. */
+  async archiveNotification(recipientUserId: string, groupId: string): Promise<boolean> {
+    const archived = await this.deps.events.archiveGroup(recipientUserId, groupId, new Date());
+    return archived > 0;
+  }
+
+  /**
+   * Production follow-up (Notification archive): "Archive all read/completed" — sweeps every Current
+   * group that is *not* action-required and has already been read (or has no in_app row to read in
+   * the first place, so there is nothing left to notice). Action-required groups are never swept,
+   * even if read, matching the requirement that Archived must never absorb something still awaiting
+   * the recipient's response.
+   */
+  async archiveAllReadOrCompleted(recipientUserId: string): Promise<{ archived: number }> {
+    const current = await this.listCurrentGroupedForUser(recipientUserId);
+    const sweepable = current.filter((g) => !g.actionRequired && (g.inAppId === null || g.readAt !== null));
+    let archived = 0;
+    const archivedAt = new Date();
+    for (const group of sweepable) {
+      const count = await this.deps.events.archiveGroup(recipientUserId, group.groupId, archivedAt);
+      if (count > 0) archived += 1;
+    }
+    return { archived };
   }
 
   /** PRSprint 16, requirement #5/#6: what the UI needs to explain SMS eligibility honestly, without exposing infrastructure terms — see `SmsEligibility`'s own doc comment. */

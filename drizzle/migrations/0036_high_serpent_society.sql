@@ -1,0 +1,1 @@
+ALTER TABLE "notification_event" ADD COLUMN "archived_at" timestamp with time zone;
