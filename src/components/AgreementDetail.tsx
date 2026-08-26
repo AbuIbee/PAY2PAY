@@ -75,6 +75,7 @@ interface NextPaymentData {
   nextInstallment: { id: string; sequenceNumber: number; dueDate: string; amountMinorUnits: number } | null;
   remainingBalanceMinorUnits: number | null;
   fundingAccountLabel: string | null;
+  recipientDisplayName: string | null;
 }
 
 interface WitnessViewData {
@@ -497,6 +498,7 @@ export function AgreementDetail() {
             nextInstallment={nextPayment.nextInstallment}
             remainingBalanceMinorUnits={nextPayment.remainingBalanceMinorUnits}
             fundingAccountLabel={nextPayment.fundingAccountLabel}
+            recipientDisplayName={nextPayment.recipientDisplayName}
             onSubmitted={() => void load()}
           />
         )}
@@ -1014,12 +1016,19 @@ function SignaturePanel({
  * POST /api/ach/payments/manual returns (scheduled/submitted/processing/...); the actual clearing
  * happens later via the provider webhook (see PaymentWebhookService), so `onSubmitted` reloads the
  * agreement to reflect the real, current status rather than an optimistic one.
+ *
+ * Fix the "Make payment" button (mandatory command): a first click never submits the payment. The
+ * phases are: "review" (this panel's own default state — everything below is already the review:
+ * recipient, amount, due date, balance, funding source, rail, fee) -> clicking "Review payment"
+ * enters "confirming" (an explicit, final confirmation summary + a distinct "Confirm payment"
+ * button, with a "Cancel" escape hatch) -> only "Confirm payment" calls the real payment API.
  */
 function MakePaymentPanel({
   agreementId,
   currency,
   payer,
   recipient,
+  recipientDisplayName,
   nextInstallment,
   remainingBalanceMinorUnits,
   fundingAccountLabel,
@@ -1029,17 +1038,19 @@ function MakePaymentPanel({
   currency: string;
   payer: { kind: "personal" | "business"; id: string };
   recipient: { kind: "personal" | "business"; id: string };
+  recipientDisplayName: string | null;
   nextInstallment: { id: string; sequenceNumber: number; dueDate: string; amountMinorUnits: number };
   remainingBalanceMinorUnits: number | null;
   fundingAccountLabel: string | null;
   onSubmitted: () => void;
 }) {
-  const [status, setStatus] = useState<"idle" | "submitting" | "submitted" | "error">("idle");
+  const [phase, setPhase] = useState<"review" | "confirming" | "submitting" | "submitted" | "error">("review");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ id: string; status: string } | null>(null);
+  const recipientLabel = recipientDisplayName ?? "the other party";
 
-  async function handlePay() {
-    setStatus("submitting");
+  async function handleConfirm() {
+    setPhase("submitting");
     setError(null);
     try {
       const body = await apiFetch<{ id: string; status: string }>("/api/ach/payments/manual", {
@@ -1055,11 +1066,11 @@ function MakePaymentPanel({
         }),
       });
       setResult(body);
-      setStatus("submitted");
+      setPhase("submitted");
       onSubmitted();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not submit this payment. Please try again.");
-      setStatus("error");
+      setPhase("error");
     }
   }
 
@@ -1068,12 +1079,15 @@ function MakePaymentPanel({
       <div className="card__header">
         <h3 id="make-payment-heading">Make a payment</h3>
       </div>
+      <p style={{ margin: 0 }}>Pay to: {recipientLabel}</p>
       <p style={{ margin: 0 }}>Amount due: {formatMoney(nextInstallment.amountMinorUnits, currency)}</p>
       <p style={{ margin: 0 }}>Due date: {formatDate(nextInstallment.dueDate)}</p>
       {remainingBalanceMinorUnits != null && (
         <p style={{ margin: 0 }}>Remaining balance: {formatMoney(remainingBalanceMinorUnits, currency)}</p>
       )}
       <p style={{ margin: 0 }}>Funding source: {fundingAccountLabel ?? "Not set up"}</p>
+      <p style={{ margin: 0 }}>Payment method: ACH bank transfer</p>
+      <p style={{ margin: 0 }}>Fee: None — you&apos;ll be charged exactly the amount above</p>
       <p style={{ margin: "0.5rem 0 0", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
         Payments are not collected automatically — you&apos;ll need to submit each payment yourself when it&apos;s due.
       </p>
@@ -1082,19 +1096,39 @@ function MakePaymentPanel({
           {error}
         </p>
       )}
-      {result ? (
+      {phase === "submitted" && result ? (
         <p className="form-status" role="status" style={{ marginTop: "0.75rem" }}>
           Payment submitted — status: {result.status.replaceAll("_", " ")}. This page updates once your bank finishes processing it.
         </p>
+      ) : phase === "confirming" || phase === "submitting" ? (
+        <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.5rem" }}>
+          <p className="form-status" role="status" style={{ margin: 0 }}>
+            Confirm payment of {formatMoney(nextInstallment.amountMinorUnits, currency)} to {recipientLabel} from{" "}
+            {fundingAccountLabel} via ACH bank transfer. This cannot be undone once your bank processes it.
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={phase === "submitting"}
+              onClick={() => void handleConfirm()}
+            >
+              {phase === "submitting" ? "Submitting…" : "Confirm payment"}
+            </button>
+            <button type="button" className="button button--ghost" disabled={phase === "submitting"} onClick={() => setPhase("review")}>
+              Cancel
+            </button>
+          </div>
+        </div>
       ) : (
         <button
           type="button"
           className="button button--primary"
           style={{ marginTop: "0.75rem" }}
-          disabled={status === "submitting" || !fundingAccountLabel}
-          onClick={() => void handlePay()}
+          disabled={!fundingAccountLabel}
+          onClick={() => setPhase("confirming")}
         >
-          {status === "submitting" ? "Submitting…" : `Pay ${formatMoney(nextInstallment.amountMinorUnits, currency)}`}
+          Review payment
         </button>
       )}
     </div>

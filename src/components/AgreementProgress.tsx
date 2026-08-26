@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import type { AgreementProgress as AgreementProgressData, AgreementProgressStepStatus } from "@/lib/agreements/agreementProgressService";
+import { usePathname } from "next/navigation";
+import type { AgreementProgressCta, AgreementProgress as AgreementProgressData, AgreementProgressStepStatus } from "@/lib/agreements/agreementProgressService";
 
 const STATUS_META: Record<AgreementProgressStepStatus, { icon: string; text: string; tone: "success" | "info" | "warning" | "danger" | "neutral" }> = {
   complete: { icon: "✓", text: "Complete", tone: "success" },
@@ -15,6 +16,33 @@ const STATUS_META: Record<AgreementProgressStepStatus, { icon: string; text: str
 };
 
 /**
+ * Fix the "Make payment" button (mandatory command): a CTA whose href is `<this same page>#anchor`
+ * (every in-page CTA this component renders, e.g. "Make payment" -> `#make-payment`) is unreliable as
+ * a plain `next/link` click — Next.js's client-side router can treat a same-pathname, hash-only
+ * transition as a no-op and skip the browser's native hash-scroll behavior entirely, which reads as
+ * "the button does nothing" (confirmed reachable on mobile). Scrolling the target into view directly
+ * via the DOM sidesteps the router altogether and works identically on desktop and mobile. Falls back
+ * to a normal navigation (also handling a genuinely different page) when either the hash is absent or
+ * scrolling to it isn't possible (no matching pathname, or — defensively — no matching element).
+ */
+function ProgressCtaLink({ cta, className, pathname }: { cta: AgreementProgressCta; className: string; pathname: string | null }) {
+  const [beforeHash, hash] = cta.href.split("#");
+  const path = beforeHash?.split("?")[0]; // usePathname() never includes the query string.
+  function handleClick(event: React.MouseEvent<HTMLAnchorElement>) {
+    if (!hash || path !== pathname) return; // different page (or no anchor) — let the normal <Link> navigation happen.
+    const target = document.getElementById(hash);
+    if (!target) return; // defensive: fall back to normal navigation if the anchor truly isn't on the page.
+    event.preventDefault();
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  return (
+    <Link href={cta.href} className={className} onClick={handleClick}>
+      {cta.label}
+    </Link>
+  );
+}
+
+/**
  * Agreement workflow remediation (Problem 3): the persistent, mobile-friendly "Agreement Progress"
  * checklist required on every relevant agreement screen. Pure rendering of server-derived state
  * (AgreementProgressService is the sole authority — see that class's own doc comment); this component
@@ -24,6 +52,7 @@ const STATUS_META: Record<AgreementProgressStepStatus, { icon: string; text: str
  * icon + text label + chip together, never by color alone.
  */
 export function AgreementProgress({ data }: { data: AgreementProgressData }) {
+  const pathname = usePathname();
   return (
     <div className="card" aria-labelledby="agreement-progress-heading">
       <div className="card__header">
@@ -62,9 +91,7 @@ export function AgreementProgress({ data }: { data: AgreementProgressData }) {
               <p style={{ margin: "0 0 0 1.6rem", color: "var(--ink-soft)", fontSize: "0.9rem" }}>{step.description}</p>
               {step.cta && (
                 <div style={{ margin: "0.15rem 0 0 1.6rem" }}>
-                  <Link href={step.cta.href} className="button button--ghost">
-                    {step.cta.label}
-                  </Link>
+                  <ProgressCtaLink cta={step.cta} className="button button--ghost" pathname={pathname} />
                 </div>
               )}
             </li>
@@ -78,9 +105,7 @@ export function AgreementProgress({ data }: { data: AgreementProgressData }) {
         </p>
         <p style={{ margin: "0 0 0.75rem", color: "var(--ink-soft)", fontSize: "0.9rem" }}>{data.primaryAction.description}</p>
         {data.primaryAction.cta && (
-          <Link href={data.primaryAction.cta.href} className="button button--primary">
-            {data.primaryAction.cta.label}
-          </Link>
+          <ProgressCtaLink cta={data.primaryAction.cta} className="button button--primary" pathname={pathname} />
         )}
       </div>
     </div>
