@@ -8,25 +8,11 @@ import {
   AgreementProgressService,
   type AgreementCancellationInfo,
   type AgreementCancellationReader,
-  type PersonalProfileReader,
   type RelationshipPaymentMethodReader,
-  type VerificationStateReader,
 } from "@/lib/agreements/agreementProgressService";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
-import type { VerificationState } from "@/lib/profiles/verificationService";
 import { createAgreementProgressHandler } from "./route";
 
-class FakeVerification implements VerificationStateReader {
-  async getVerificationState(): Promise<VerificationState> {
-    return "FULL_VERIFIED";
-  }
-}
-class FakePersonalProfiles implements PersonalProfileReader {
-  byUserId = new Map<string, { id: string }>();
-  async findByUserId(userId: string) {
-    return this.byUserId.get(userId) ?? null;
-  }
-}
 class FakePaymentMethods implements RelationshipPaymentMethodReader {
   async getRelationshipAccounts() {
     return [];
@@ -74,11 +60,8 @@ describe("GET /api/agreements/progress", () => {
   beforeEach(async () => {
     authCtx = createTestAuthService();
     agreementCtx = createTestAgreementService();
-    const personalProfiles = new FakePersonalProfiles();
     progressService = new AgreementProgressService({
       agreementService: agreementCtx.agreementService,
-      verification: new FakeVerification(),
-      personalProfiles,
       relationshipPaymentMethods: new FakePaymentMethods(),
       cancellation: new FakeCancellation(),
     });
@@ -111,8 +94,6 @@ describe("GET /api/agreements/progress", () => {
     const debtorProfileId = randomUUID();
     agreementCtx.profileOwners.set("personal", creditorProfileId, creditor.user.id);
     agreementCtx.profileOwners.set("personal", debtorProfileId, debtor.user.id);
-    personalProfiles.byUserId.set(creditor.user.id, { id: creditorProfileId });
-    personalProfiles.byUserId.set(debtor.user.id, { id: debtorProfileId });
 
     const created = await agreementCtx.agreementService.createDraft({
       creatorUserId: creditor.user.id,

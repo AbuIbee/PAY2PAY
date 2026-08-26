@@ -5,8 +5,7 @@ import { createTestMfaService } from "@/lib/auth/mfaTestFakes";
 import { grantStepUp } from "@/lib/staff/testFakes";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { InMemoryDocumentStorage, InMemoryProfileDisplayReader } from "@/lib/documents/testFakes";
-import { InMemoryIdentityVerificationRecordRepository, createTestAdminRoleServiceForProfiles } from "@/lib/profiles/testFakes";
-import { VerificationService } from "@/lib/profiles/verificationService";
+import { InMemoryIdentityVerificationRecordRepository } from "@/lib/profiles/testFakes";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
 import { SignatureService } from "./signatureService";
 import type { AgreementPdfRecord, AgreementPdfRepository, SignatureEventRecord, SignatureEventRepository } from "./signatureService";
@@ -72,15 +71,11 @@ export function createTestSignatureService(notifications?: import("@/lib/notify/
   // AgreementService resolve through the same singletons.
   const agreementCtx = createTestAgreementService(signatureEvents.events);
   const { mfaService, credentials: mfaCredentials, stepUps } = createTestMfaService();
+  // Production follow-up (Remove Step 4 — Identity Verification): SignatureService no longer reads
+  // verification state before signing, but verificationRecords/personalProfiles are kept here —
+  // markFullyVerified/seedPersonalParty (used by other, unrelated test files for general party
+  // setup) still operate on them directly.
   const verificationRecords = new InMemoryIdentityVerificationRecordRepository();
-  const verificationAuditRepo = new InMemoryAuditEventRepositoryForSignatures();
-  const verificationService = new VerificationService(
-    verificationRecords,
-    { isEmailVerified: async () => true },
-    agreementCtx.profileOwners,
-    new AuditService(verificationAuditRepo),
-    createTestAdminRoleServiceForProfiles(),
-  );
   const personalProfiles = new InMemoryPersonalProfileRepository();
   const agreementPdfs = new InMemoryAgreementPdfRepository();
   const profileDisplay = new InMemoryProfileDisplayReader();
@@ -91,9 +86,7 @@ export function createTestSignatureService(notifications?: import("@/lib/notify/
   const signatureService = new SignatureService({
     agreementService: agreementCtx.agreementService,
     mfa: mfaService,
-    verification: verificationService,
     staffService: agreementCtx.staffCtx.staffService,
-    personalProfiles,
     profileOwners: agreementCtx.profileOwners,
     signatureEvents,
     agreementPdfs,

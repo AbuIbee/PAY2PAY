@@ -54,15 +54,6 @@ const STEPS: Step[] = [
     ],
   },
   {
-    title: "Identity verification",
-    body: "Before the agreement can be signed, both Person A and Person B complete identity verification — a required step for every signature and payment on PAY2PAY.",
-    stats: [
-      { label: "Person A", value: "Verified" },
-      { label: "Person B", value: "Verified" },
-      { label: "Agreement status", value: "Ready to sign" },
-    ],
-  },
-  {
     title: "Signing",
     body: "Person A signs. Person B signs. The terms are now locked and cannot be changed unilaterally.",
     stats: [

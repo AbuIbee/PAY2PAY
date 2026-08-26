@@ -2,7 +2,6 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { AuditService } from "@/lib/audit/auditService";
 import type { MfaMethod, MfaService } from "@/lib/auth/mfaService";
-import type { PersonalProfileRepository } from "@/lib/auth/authService";
 import { generateAgreementPdf, hashPdfContent } from "@/lib/documents/agreementPdf";
 import type { DocumentStorage } from "@/lib/documents/documentStorage";
 import type { ProfileDisplayReader } from "@/lib/documents/profileDisplayReader";
@@ -10,7 +9,6 @@ import { ConfigurationError, ForbiddenError, StepUpRequiredError, ValidationErro
 import { logger } from "@/lib/logger";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
-import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { StaffService } from "@/lib/staff/staffService";
 import type { AgreementService, AgreementWithDetail, PartyRole, ProfileRef } from "@/lib/agreements/agreementService";
 import { computeVersionHash } from "@/lib/agreements/documentHash";
@@ -65,9 +63,7 @@ export interface AgreementPdfRepository {
 export interface SignatureServiceDeps {
   agreementService: AgreementService;
   mfa: MfaService;
-  verification: VerificationService;
   staffService: StaffService;
-  personalProfiles: PersonalProfileRepository;
   profileOwners: ProfileOwnerReader;
   signatureEvents: SignatureEventRepository;
   agreementPdfs: AgreementPdfRepository;
@@ -105,11 +101,18 @@ const SIGNED_PDF_URL_TTL_SECONDS = 300;
 /**
  * Sprint 6 (docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md) electronic-signature
  * evidence capture and immutable PDF generation. Deliberately does not re-implement Sprint 5's
- * signing state machine — this service gates access to it (step-up, full verification, business
- * signing authority) and captures evidence around it, then delegates the actual state transition to
+ * signing state machine — this service gates access to it (step-up, business signing authority)
+ * and captures evidence around it, then delegates the actual state transition to
  * AgreementService.signAgreement, unchanged. If any gate below fails, signAgreement is never
- * called and no signature_event is recorded — a failed or missing step-up, or an unverified
- * profile, blocks the signature entirely, per this sprint's explicit requirement.
+ * called and no signature_event is recorded.
+ *
+ * Production follow-up (Remove Step 4 — Identity Verification): identity verification is no
+ * longer part of the agreement signing gate — signing only requires a fresh step-up challenge and,
+ * for a business signer, valid signing authority (account owner or an authorized staff
+ * representative). This does not touch payment-provider KYC/identity functionality
+ * (VerificationService, the identity-verification record repository, the admin verification
+ * queue) — none of that was removed, this service simply no longer consults it before allowing a
+ * signature.
  */
 export class SignatureService {
   constructor(private readonly deps: SignatureServiceDeps) {}
@@ -133,26 +136,9 @@ export class SignatureService {
       );
     }
 
-    const signerPersonalProfile = await this.deps.personalProfiles.findByUserId(input.actingUserId);
-    if (!signerPersonalProfile) {
-      throw new ConfigurationError("No personal profile found for this account.");
-    }
-    const signerVerified = await this.deps.verification.isFullyVerified("personal", signerPersonalProfile.id);
-    if (!signerVerified) {
-      throw new ValidationError(
-        "Please complete identity verification before signing this agreement. You can still use the rest of PAY2PAY in the meantime.",
-      );
-    }
-
     let signingAuthority: SigningAuthority | null = null;
     let signerTitle: string | null = null;
     if (party.kind === "business") {
-      const businessVerified = await this.deps.verification.isFullyVerified("business", party.id);
-      if (!businessVerified) {
-        throw new ValidationError(
-          "This business profile must complete verification before it can sign agreements.",
-        );
-      }
       const ownerUserId = await this.deps.profileOwners.getOwnerUserId("business", party.id);
       if (ownerUserId === input.actingUserId) {
         signingAuthority = "account_owner";

@@ -1,13 +1,11 @@
 import "server-only";
-import type { AgreementService, AgreementStatus, PartyRole, ProfileRef } from "./agreementService";
+import type { AgreementService, AgreementStatus, PartyRole } from "./agreementService";
 import { isPastDate } from "./schedule";
-import type { ProfileKind, VerificationState } from "@/lib/profiles/verificationService";
 
 export type AgreementProgressStepKey =
   | "details_terms"
   | "acceptance"
   | "payment_method"
-  | "identity_verification"
   | "signatures"
   | "active";
 
@@ -50,21 +48,6 @@ export interface AgreementProgress {
   actionableForMeCount: number;
 }
 
-/**
- * Narrow view onto PersonalProfileRepository — this module only ever needs the acting user's own
- * personal-profile id (SignatureService's own identical dependency, for the identical reason: every
- * signer's own personal identity must be FULL_VERIFIED regardless of which party kind they're
- * signing for — see signatureService.ts's `sign` method).
- */
-export interface PersonalProfileReader {
-  findByUserId(userId: string): Promise<{ id: string } | null>;
-}
-
-/** Narrow view onto VerificationService — mirrors this codebase's interface-segregation precedent (e.g. AgreementBalanceComputer). */
-export interface VerificationStateReader {
-  getVerificationState(profileKind: ProfileKind, profileId: string): Promise<VerificationState>;
-}
-
 /** Narrow view onto RelationshipFinancialAccountService.getRelationshipAccounts — see that method's own doc comment for authorization (participant-only). */
 export interface RelationshipPaymentMethodReader {
   getRelationshipAccounts(
@@ -90,8 +73,6 @@ export interface AgreementCancellationReader {
 
 export interface AgreementProgressServiceDeps {
   agreementService: AgreementService;
-  verification: VerificationStateReader;
-  personalProfiles: PersonalProfileReader;
   relationshipPaymentMethods: RelationshipPaymentMethodReader;
   cancellation: AgreementCancellationReader;
 }
@@ -113,47 +94,32 @@ const STATUS_LABELS: Record<AgreementStatus, string> = {
   closed: "Closed",
 };
 
-function verificationStepStatus(state: VerificationState): "complete" | "action_required" | "blocked" {
-  if (state === "FULL_VERIFIED") return "complete";
-  if (state === "FULL_PENDING") return "blocked";
-  return "action_required"; // UNVERIFIED, BASIC, FULL_REJECTED — all correctable by the user right now
-}
-
-function verificationDescription(state: VerificationState, isBusiness: boolean): string {
-  const subject = isBusiness ? "This business" : "Your identity";
-  switch (state) {
-    case "FULL_VERIFIED":
-      return `${subject} verification is complete.`;
-    case "FULL_PENDING":
-      return `${subject} verification request is being reviewed by our team. This isn't automatic — you'll be notified once a decision is made.`;
-    case "FULL_REJECTED":
-      return `${subject} verification was rejected. You can submit a new request.`;
-    default:
-      return `${subject} must complete full verification before signing this agreement.`;
-  }
-}
-
 /**
- * Agreement workflow remediation (Problem 3 — no guided workflow; also the authoritative source for
- * Problem 1's actionable verification messaging): the single, server-authoritative place that derives
- * "where is this agreement, what's done, what's missing, whose turn is it, what do they click next."
- * This is UX guidance only — every actual gate it reports on (verification, step-up, signature
- * authorization, activation) is independently enforced by AgreementService/SignatureService/
- * VerificationService regardless of what this service says; a client can never use this to sign,
- * verify, or activate anything (see this file's own README-equivalent in the completion report).
+ * Agreement workflow remediation (Problem 3 — no guided workflow): the single, server-authoritative
+ * place that derives "where is this agreement, what's done, what's missing, whose turn is it, what
+ * do they click next." This is UX guidance only — every actual gate it reports on (step-up,
+ * signature authorization, activation) is independently enforced by AgreementService/
+ * SignatureService regardless of what this service says; a client can never use this to sign or
+ * activate anything (see this file's own README-equivalent in the completion report).
  *
  * Read-only and defensive: any single dependency read failing (e.g. the acting party's relationship
  * isn't resolvable) degrades that one step to a safe, non-blocking default rather than failing the
  * whole page — the underlying AgreementService.getAgreement call is the only read whose failure is
  * allowed to propagate (no agreement, no page).
  *
- * Deliberately does NOT model MFA step-up as its own progress step: unlike identity verification
- * (which can sit PENDING for days awaiting review), step-up is a same-second, session-scoped
- * challenge already handled perfectly inline at the moment of signing by
+ * Deliberately does NOT model MFA step-up as its own progress step: it is a same-second,
+ * session-scoped challenge already handled perfectly inline at the moment of signing by
  * useStepUpGuardedAction/StepUpChallenge — surfacing it here as a persistent "step" would just be
  * stale the instant it's read, and would duplicate a flow that already satisfies every "launch the
  * challenge directly from the signing workflow, preserve context, return to the same agreement"
  * requirement without any changes needed.
+ *
+ * Production follow-up (Remove Step 4 — Identity Verification): identity verification is no
+ * longer part of the agreement workflow at all — there is no step for it, and `signaturesStep`
+ * below has no verification-related gate. This mirrors SignatureService.sign, which no longer
+ * checks verification state before allowing a signature. Payment-provider KYC/identity
+ * functionality itself (VerificationService, the identity-verification record repository, the
+ * admin verification queue) is untouched — this service simply no longer surfaces or depends on it.
  */
 export class AgreementProgressService {
   constructor(private readonly deps: AgreementProgressServiceDeps) {}
@@ -163,10 +129,6 @@ export class AgreementProgressService {
     const myRole = await this.deps.agreementService.resolvePartyRole(agreementId, actingUserId);
     const otherRole: PartyRole = myRole === "creditor" ? "debtor" : "creditor";
     const { agreement, version } = detail;
-    const myParty: ProfileRef =
-      myRole === "creditor"
-        ? { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId }
-        : { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId };
 
     // Cancellation progress display fix: cancellation is a terminal workflow state. Every step from
     // the point of cancellation onward must read "Cancelled" — never action_required/blocked/complete,
@@ -197,15 +159,10 @@ export class AgreementProgressService {
     // AgreementCompletionService activates purely on a cleared payment, never on account assignment).
     steps.push(await this.paymentMethodStep(agreement.relationshipId, myRole, actingUserId));
 
-    // Step 4 — identity verification: mirrors SignatureService.sign's exact gates, in order, so this
-    // step can never disagree with what actually blocks signing.
-    const verificationStep = await this.identityVerificationStep(actingUserId, myParty);
-    steps.push(verificationStep);
-
-    // Step 5 — signatures: dependency-aware on verification and on the schedule not being stale —
-    // never invites a signature attempt that would just fail server-side. Also Originator/Counterparty
-    // aware (Agreement Lifecycle V2): the counterparty must sign first, so an originator with nothing
-    // else blocking them still shows "waiting", never a same-moment "action_required" for both parties.
+    // Step 4 — signatures: dependency-aware only on the schedule not being stale — never invites a
+    // signature attempt that would just fail server-side. Also Originator/Counterparty aware
+    // (Agreement Lifecycle V2): the counterparty must sign first, so an originator with nothing else
+    // blocking them still shows "waiting", never a same-moment "action_required" for both parties.
     const originatorRole = await this.deps.agreementService.resolvePartyRole(agreementId, agreement.createdByUserId);
     steps.push(
       this.signaturesStep({
@@ -216,11 +173,10 @@ export class AgreementProgressService {
         creditorSignedAt: version.creditorSignedAt,
         debtorSignedAt: version.debtorSignedAt,
         firstPaymentDate: version.terms.firstPaymentDate,
-        verificationComplete: verificationStep.status === "complete",
       }),
     );
 
-    // Step 6 — active.
+    // Step 5 — active.
     steps.push(this.activeStep(agreement.status));
 
     const actionableForMeCount = steps.filter((s) => s.status === "action_required").length;
@@ -235,8 +191,8 @@ export class AgreementProgressService {
    * their normal, truthful status. Step 2 (acceptance) shows "Complete" only if the agreement had
    * genuinely reached awaiting_signatures before being cancelled (both debtor acknowledgment and
    * creditor acceptance actually happened) — otherwise "Cancelled", never a retroactive "Complete"
-   * for a phase that never finished. Steps 4-6 (identity verification, signatures, active) are
-   * always "Cancelled": once cancelled, there is no further prerequisite to complete or gate.
+   * for a phase that never finished. Steps 4-5 (signatures, active) are always "Cancelled": once
+   * cancelled, there is no further prerequisite to complete or gate.
    */
   private async buildCancelledProgress(
     agreementId: string,
@@ -265,7 +221,6 @@ export class AgreementProgressService {
           }
         : this.cancelledStep("acceptance", "Review & acceptance"),
       await this.paymentMethodStep(relationshipId, myRole, actingUserId),
-      this.cancelledStep("identity_verification", "Identity verification"),
       this.cancelledStep("signatures", "Review & signatures"),
       this.cancelledStep("active", "Agreement active"),
     ];
@@ -400,66 +355,6 @@ export class AgreementProgressService {
     }
   }
 
-  private async identityVerificationStep(actingUserId: string, myParty: ProfileRef): Promise<AgreementProgressStep> {
-    const personalProfile = await this.deps.personalProfiles.findByUserId(actingUserId);
-    if (!personalProfile) {
-      return {
-        key: "identity_verification",
-        label: "Identity verification",
-        status: "blocked",
-        description: "No personal profile was found for this account.",
-        cta: null,
-      };
-    }
-    const personalState = await this.deps.verification.getVerificationState("personal", personalProfile.id);
-    const personalStatus = verificationStepStatus(personalState);
-
-    if (myParty.kind === "business") {
-      const businessState = await this.deps.verification.getVerificationState("business", myParty.id);
-      const businessStatus = verificationStepStatus(businessState);
-      // Worst-of-both — signing requires BOTH gates to pass (signatureService.sign checks them
-      // independently, either one failing blocks signing).
-      if (personalStatus !== "complete" || businessStatus !== "complete") {
-        const failing = personalStatus !== "complete" ? { state: personalState, isBusiness: false } : { state: businessState, isBusiness: true };
-        const status = personalStatus === "action_required" || businessStatus === "action_required" ? "action_required" : "blocked";
-        return {
-          key: "identity_verification",
-          label: "Identity verification",
-          status,
-          description: verificationDescription(failing.state, failing.isBusiness),
-          cta: status === "action_required" ? { label: "Verify identity", href: "/account/verification" } : { label: "Check verification status", href: "/account/verification" },
-        };
-      }
-      return {
-        key: "identity_verification",
-        label: "Identity verification",
-        status: "complete",
-        description: "Your identity and this business are both fully verified.",
-        cta: null,
-      };
-    }
-
-    if (personalStatus === "complete") {
-      return {
-        key: "identity_verification",
-        label: "Identity verification",
-        status: "complete",
-        description: "Your identity is fully verified.",
-        cta: null,
-      };
-    }
-    return {
-      key: "identity_verification",
-      label: "Identity verification",
-      status: personalStatus,
-      description: verificationDescription(personalState, false),
-      cta:
-        personalStatus === "action_required"
-          ? { label: "Verify identity", href: "/account/verification" }
-          : { label: "Check verification status", href: "/account/verification" },
-    };
-  }
-
   private signaturesStep(input: {
     status: AgreementStatus;
     myRole: PartyRole;
@@ -468,7 +363,6 @@ export class AgreementProgressService {
     creditorSignedAt: Date | string | null;
     debtorSignedAt: Date | string | null;
     firstPaymentDate: string;
-    verificationComplete: boolean;
   }): AgreementProgressStep {
     const preSignatures: AgreementStatus[] = ["draft", "awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance"];
     if (preSignatures.includes(input.status)) {
@@ -508,15 +402,6 @@ export class AgreementProgressService {
         status: "blocked",
         description: `The proposed first payment date (${input.firstPaymentDate}) has already passed. This agreement's schedule must be revised before either party can sign.`,
         cta: null,
-      };
-    }
-    if (!input.verificationComplete) {
-      return {
-        key: "signatures",
-        label: "Review & signatures",
-        status: "blocked",
-        description: "Signing requires identity verification. Complete that step to continue.",
-        cta: { label: "Verify identity", href: "/account/verification" },
       };
     }
     if (input.isOriginator) {

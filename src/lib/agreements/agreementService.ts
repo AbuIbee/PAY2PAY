@@ -358,8 +358,8 @@ export function buildTerms(input: DraftTermsInput): { terms: AgreementTerms; sch
  *
  * Signing here is a minimal, version-scoped signing-intent primitive (agreement_version.
  * creditor_signed_at/debtor_signed_at) — not Sprint 6's full electronic-signature evidence bundle
- * (IP, device, consent, auth method, step-up, isFullyVerified gate). Sprint 6 layers that evidence
- * capture on top of / supersedes this signing path; it is not re-implemented here.
+ * (IP, device, consent, auth method, step-up gate). Sprint 6 layers that evidence capture on top of
+ * / supersedes this signing path; it is not re-implemented here.
  */
 export class AgreementService {
   constructor(private readonly deps: AgreementServiceDeps) {}
@@ -832,8 +832,8 @@ export class AgreementService {
    * Sprint 6 (docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md): public wrapper around the
    * existing private authorizeEitherParty, so SignatureService can determine (and confirm
    * authorization for) which role an acting user occupies before running its own step-up/
-   * verification/signing-authority gates — without re-implementing this authorization logic.
-   * Purely additive; does not change any existing Sprint 5 behavior.
+   * signing-authority gates — without re-implementing this authorization logic. Purely additive;
+   * does not change any existing Sprint 5 behavior.
    */
   async resolvePartyRole(agreementId: string, actingUserId: string): Promise<PartyRole> {
     const agreement = await this.requireAgreement(agreementId);

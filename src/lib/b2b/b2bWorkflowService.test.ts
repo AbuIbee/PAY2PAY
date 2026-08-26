@@ -182,9 +182,7 @@ describe("B2BWorkflowService", () => {
       const signatureService = new SignatureService({
         agreementService: ctx.agreementCtx.agreementService,
         mfa: mfaService,
-        verification: ctx.verificationService, // same VerificationService instance the B2B gate uses
         staffService: ctx.agreementCtx.staffCtx.staffService,
-        personalProfiles,
         profileOwners: ctx.agreementCtx.profileOwners,
         signatureEvents,
         agreementPdfs: new InMemoryAgreementPdfRepository(),
