@@ -204,6 +204,8 @@ export function createTestPaymentService(options?: {
   installmentHook?: ManualPaymentInstallmentHook;
   /** PRSprint 20: optional — see AtomicManualPaymentPoster's own doc comment. */
   atomicManualPayments?: AtomicManualPaymentPoster;
+  /** Restore agreement payment functionality: optional, so every pre-existing call site is unaffected — see PaymentService's own doc comment on this dependency. */
+  notifications?: NotificationService;
 }) {
   const verificationCtx = createTestVerificationService();
   const provider = new SandboxPaymentProvider(TEST_WEBHOOK_SECRET);
@@ -223,6 +225,7 @@ export function createTestPaymentService(options?: {
     completion: options?.completion,
     installmentHook: options?.installmentHook,
     atomicManualPayments: options?.atomicManualPayments,
+    notifications: options?.notifications,
   });
 
   return { verificationCtx, provider, payments, auditRepo, agreements, paymentService };

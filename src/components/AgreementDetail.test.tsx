@@ -314,6 +314,164 @@ describe("AgreementDetail", () => {
     expect(screen.getByText("Step 4 — Review & signatures")).toBeInTheDocument();
   });
 
+  const READY_PROGRESS_STEPS = [
+    { key: "details_terms", label: "Agreement details & terms", status: "complete", description: "x", cta: null },
+    { key: "acceptance", label: "Review & acceptance", status: "complete", description: "x", cta: null },
+    { key: "payment_method", label: "Payment method", status: "complete", statusText: "Payment method — Complete", description: "Payment accounts are ready for this agreement.", cta: null },
+    { key: "signatures", label: "Review & signatures", status: "complete", description: "x", cta: null },
+    {
+      key: "active",
+      label: "Agreement active",
+      status: "waiting",
+      statusText: "Next payment scheduled",
+      description: "Payment of $100.00 is due 2026-09-01.",
+      cta: { label: "Make payment", href: "/agreements/detail?id=agreement-1#make-payment" },
+    },
+  ];
+
+  describe("Restore agreement payment functionality: Make Payment section", () => {
+    it("shows the debtor an obvious payment action with amount/due date/remaining balance/funding source before submission, and shows the real returned status afterward — never an optimistic success", async () => {
+      const user = userEvent.setup();
+      const fetchMock = vi.fn().mockImplementation(
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+          "/api/agreements/progress": {
+            body: {
+              agreementId: "agreement-1",
+              myRole: "debtor",
+              status: "active",
+              steps: READY_PROGRESS_STEPS,
+              primaryAction: { label: "Next payment scheduled", description: "Payment of $100.00 is due 2026-09-01.", cta: null },
+              actionableForMeCount: 0,
+            },
+          },
+          "/api/agreements/payment-setup/next-payment": {
+            body: {
+              nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 },
+              remainingBalanceMinorUnits: 90000,
+              fundingAccountLabel: "Test Bank ····4242",
+            },
+          },
+          "/api/ach/payments/manual": { body: { id: "payment-1", status: "scheduled" } },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<AgreementDetail />);
+
+      expect(await screen.findByRole("heading", { name: "Make a payment" })).toBeInTheDocument();
+      expect(screen.getByText("Amount due: $100.00")).toBeInTheDocument();
+      expect(screen.getByText(/Remaining balance: \$900\.00/)).toBeInTheDocument();
+      expect(screen.getByText(/Funding source: Test Bank ····4242/)).toBeInTheDocument();
+      // No false claim of automation — this system is manual/debtor-initiated (no due-date cron exists).
+      expect(screen.getByText(/not collected automatically/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Pay $100.00" }));
+
+      const manualCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/ach/payments/manual"));
+      if (!manualCall) throw new Error("expected a manual payment call");
+      const [, init] = manualCall;
+      const sentBody = JSON.parse((init as RequestInit).body as string);
+      expect(sentBody).toMatchObject({
+        agreementId: "agreement-1",
+        payer: { profileKind: "personal", profileId: "profile-debtor" },
+        recipient: { profileKind: "personal", profileId: "profile-creditor" },
+        amountMinorUnits: 10000,
+        currency: "USD",
+        installmentScheduleItemId: "installment-1",
+      });
+
+      // Never an optimistic "Payment complete" — shows only the real provider-consistent status returned.
+      expect(await screen.findByText(/Payment submitted — status: scheduled/)).toBeInTheDocument();
+      expect(screen.queryByText(/payment complete/i)).not.toBeInTheDocument();
+    });
+
+    it("never shows the Make Payment section to the creditor", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+          "/api/agreements/progress": {
+            body: {
+              agreementId: "agreement-1",
+              myRole: "creditor",
+              status: "active",
+              steps: READY_PROGRESS_STEPS,
+              primaryAction: { label: "Next payment scheduled", description: "x", cta: null },
+              actionableForMeCount: 0,
+            },
+          },
+          "/api/agreements/payment-setup/next-payment": {
+            body: { nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 }, remainingBalanceMinorUnits: 90000, fundingAccountLabel: null },
+          },
+        }),
+      );
+
+      render(<AgreementDetail />);
+      await screen.findByText("Agreement progress");
+      expect(screen.queryByRole("heading", { name: "Make a payment" })).not.toBeInTheDocument();
+    });
+
+    it("does not show Make Payment while payment setup is still incomplete", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "first_payment_pending" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+          "/api/agreements/progress": {
+            body: {
+              agreementId: "agreement-1",
+              myRole: "debtor",
+              status: "first_payment_pending",
+              steps: [
+                ...READY_PROGRESS_STEPS.slice(0, 2),
+                {
+                  key: "payment_method",
+                  label: "Payment method",
+                  status: "action_required",
+                  statusText: "Payment setup required",
+                  description: "Add a payment method so payments can be made under this agreement.",
+                  cta: { label: "Set up payment method", href: "/payment-methods" },
+                },
+                READY_PROGRESS_STEPS[3],
+                READY_PROGRESS_STEPS[4],
+              ],
+              primaryAction: { label: "Set up payment method", description: "x", cta: { label: "Set up payment method", href: "/payment-methods" } },
+              actionableForMeCount: 1,
+            },
+          },
+          "/api/agreements/payment-setup/next-payment": {
+            body: { nextInstallment: null, remainingBalanceMinorUnits: null, fundingAccountLabel: null },
+          },
+        }),
+      );
+
+      render(<AgreementDetail />);
+      await screen.findByText("Agreement progress");
+      expect(screen.queryByRole("heading", { name: "Make a payment" })).not.toBeInTheDocument();
+    });
+  });
+
   it("PRSprint 25: rejecting an agreement requires confirmation — declining the dialog never calls the API", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn().mockImplementation(mockFetchByUrl({

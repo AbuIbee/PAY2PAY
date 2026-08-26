@@ -6,8 +6,12 @@ import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/test
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import {
   AgreementProgressService,
+  type AgreementBalanceReader,
   type AgreementCancellationInfo,
   type AgreementCancellationReader,
+  type AgreementInstallmentStatusReader,
+  type AgreementMandateReader,
+  type AgreementPaymentAttemptsReader,
   type RelationshipPaymentMethodReader,
 } from "@/lib/agreements/agreementProgressService";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
@@ -21,6 +25,26 @@ class FakePaymentMethods implements RelationshipPaymentMethodReader {
 class FakeCancellation implements AgreementCancellationReader {
   async getCancellationInfo(): Promise<AgreementCancellationInfo | null> {
     return null;
+  }
+}
+class FakeMandates implements AgreementMandateReader {
+  async isActiveForAgreement() {
+    return false;
+  }
+}
+class FakeInstallments implements AgreementInstallmentStatusReader {
+  async listForAgreement() {
+    return [];
+  }
+}
+class FakePaymentAttempts implements AgreementPaymentAttemptsReader {
+  async listByAgreementId() {
+    return [];
+  }
+}
+class FakeBalance implements AgreementBalanceReader {
+  async getAgreementBalance(): Promise<never> {
+    throw new Error("no balance in this test");
   }
 }
 
@@ -64,6 +88,10 @@ describe("GET /api/agreements/progress", () => {
       agreementService: agreementCtx.agreementService,
       relationshipPaymentMethods: new FakePaymentMethods(),
       cancellation: new FakeCancellation(),
+      mandates: new FakeMandates(),
+      installments: new FakeInstallments(),
+      paymentAttempts: new FakePaymentAttempts(),
+      balance: new FakeBalance(),
     });
 
     const creditor = await authCtx.authService.signup({

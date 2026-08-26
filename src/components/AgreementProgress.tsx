@@ -57,7 +57,7 @@ export function AgreementProgress({ data }: { data: AgreementProgressData }) {
                 <strong>
                   Step {index + 1} — {step.label}
                 </strong>
-                <span className={`chip chip--${meta.tone}`}>{meta.text}</span>
+                <span className={`chip chip--${meta.tone}`}>{step.statusText ?? meta.text}</span>
               </div>
               <p style={{ margin: "0 0 0 1.6rem", color: "var(--ink-soft)", fontSize: "0.9rem" }}>{step.description}</p>
               {step.cta && (

@@ -3,6 +3,8 @@ import type { AuditService } from "@/lib/audit/auditService";
 import { ConfigurationError, DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { getDailyAmountLimitMinorUnits, getDailyAttemptCountLimit, getMaxPaymentMinorUnits, getReviewThresholdMinorUnits, getRollingWindowMs, summarizeRecentActivity } from "./transactionLimits";
+import { logger } from "@/lib/logger";
+import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { PaymentProvider, ProfileRef } from "./paymentProvider";
@@ -256,6 +258,14 @@ export class PaymentService {
       installmentHook?: ManualPaymentInstallmentHook;
       /** PRSprint 20: optional — see AtomicManualPaymentPoster's own doc comment for why production always wires the real one, and most unit tests don't need to. */
       atomicManualPayments?: AtomicManualPaymentPoster;
+      /**
+       * Restore agreement payment functionality: `payment_scheduled`/`payment_processing` were
+       * defined NotificationEventType values with real templates but were never fired anywhere —
+       * mirrors PaymentWebhookService's identical optional `notifications`/`profileOwners` pattern
+       * for `payment_cleared`/`payment_disputed`. Optional so existing tests that don't care about
+       * notifications don't need to wire a fake.
+       */
+      notifications?: NotificationService;
     },
   ) {}
 
@@ -453,6 +463,9 @@ export class PaymentService {
         // event (recorded separately, right after this) is where those are captured when present.
         await this.recordAudit(record, "payment_flagged_for_review", input.actingUserId, null, null);
       }
+      if (initialStatus === "scheduled") {
+        await this.notifyLifecycle("payment_scheduled", record, { scheduledFor: record.createdAt.toISOString().slice(0, 10) });
+      }
       return { record, alreadyResolved: false };
     } catch (error) {
       const raced = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
@@ -478,6 +491,9 @@ export class PaymentService {
         providerPaymentId: result.providerPaymentId,
       });
       await this.recordAudit(updated, "payment_created", input.actingUserId, input.ipAddress, input.deviceInfo);
+      if (resolvedStatus === "processing") {
+        await this.notifyLifecycle("payment_processing", updated, {});
+      }
       return updated;
     } catch (error) {
       const failed = await this.deps.payments.updateStatus(record.id, "failed", {
@@ -485,6 +501,46 @@ export class PaymentService {
       });
       await this.recordAudit(failed, "payment_creation_failed", input.actingUserId, input.ipAddress, input.deviceInfo);
       throw new ValidationError("Payment could not be created with the payment provider.");
+    }
+  }
+
+  /**
+   * Restore agreement payment functionality: mirrors PaymentWebhookService.notifyPaymentStatus's
+   * identical shape (same dedupeKey format, same "notify both payer and recipient, never fail the
+   * caller" contract) — the dedupeKey's `${notificationType}:${payment.id}` prefix means a repeated
+   * schedule/submit attempt for the same payment attempt (e.g. a retried request) never creates a
+   * second Current notification for the same unresolved event.
+   */
+  private async notifyLifecycle(
+    notificationType: "payment_scheduled" | "payment_processing",
+    payment: PaymentAttemptRecord,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.deps.notifications) return;
+    try {
+      const [payerUserId, recipientUserId] = await Promise.all([
+        this.deps.profileOwners.getOwnerUserId(payment.payerProfileKind, payment.payerProfileId),
+        this.deps.profileOwners.getOwnerUserId(payment.recipientProfileKind, payment.recipientProfileId),
+      ]);
+      const recipients = [payerUserId, recipientUserId].filter((id): id is string => id !== null);
+      await Promise.all(
+        recipients.map((userId) =>
+          this.deps.notifications!.notify({
+            recipientUserId: userId,
+            notificationType,
+            relatedPaymentAttemptId: payment.id,
+            relatedAgreementId: payment.agreementId,
+            payload: { amountMinorUnits: payment.amountMinorUnits, currency: payment.currency, ...payload },
+            dedupeKey: `${notificationType}:${payment.id}:${userId}`,
+          }),
+        ),
+      );
+    } catch (error) {
+      logger.error("payment_lifecycle_notification_failed", {
+        paymentAttemptId: payment.id,
+        notificationType,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

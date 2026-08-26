@@ -4,8 +4,14 @@ import type { DraftTermsInput } from "./agreementService";
 import { createTestAgreementService } from "./testFakes";
 import {
   AgreementProgressService,
+  type AgreementBalanceReader,
   type AgreementCancellationInfo,
   type AgreementCancellationReader,
+  type AgreementInstallmentStatusReader,
+  type AgreementMandateReader,
+  type AgreementPaymentAttemptRecord,
+  type AgreementPaymentAttemptsReader,
+  type InstallmentWithStatus,
   type RelationshipPaymentMethodReader,
 } from "./agreementProgressService";
 import type { AgreementStatus } from "./agreementService";
@@ -40,6 +46,63 @@ class FakeRelationshipPaymentMethodReader implements RelationshipPaymentMethodRe
   }
 }
 
+class FakeAgreementMandateReader implements AgreementMandateReader {
+  active = new Set<string>();
+  async isActiveForAgreement(agreementId: string): Promise<boolean> {
+    return this.active.has(agreementId);
+  }
+}
+
+/**
+ * Restore agreement payment functionality: derives installment rows from the SAME in-memory
+ * schedule repository AgreementService itself writes to at draft creation (ctx.scheduleItems) —
+ * matching the production invariant that a schedule already exists as soon as an agreement is
+ * created — rather than requiring every test that reaches Step 5's installment logic to hand-seed a
+ * schedule from scratch. `markPaid` lets a test simulate a cleared installment without needing the
+ * full ledger/payment stack.
+ */
+class FakeAgreementInstallmentStatusReader implements AgreementInstallmentStatusReader {
+  constructor(private readonly ctx: ReturnType<typeof createTestAgreementService>) {}
+  private paidSequenceNumbers = new Map<string, Set<number>>();
+
+  markPaid(agreementId: string, sequenceNumber: number) {
+    const set = this.paidSequenceNumbers.get(agreementId) ?? new Set<number>();
+    set.add(sequenceNumber);
+    this.paidSequenceNumbers.set(agreementId, set);
+  }
+
+  async listForAgreement(agreementId: string): Promise<InstallmentWithStatus[]> {
+    const agreement = this.ctx.agreements.byId.get(agreementId);
+    if (!agreement?.currentVersionId) return [];
+    const items = await this.ctx.scheduleItems.listForVersion(agreement.currentVersionId);
+    const paid = this.paidSequenceNumbers.get(agreementId);
+    return items.map((item) => ({
+      id: `${agreementId}:${item.sequenceNumber}`,
+      sequenceNumber: item.sequenceNumber,
+      dueDate: item.dueDate,
+      amountMinorUnits: item.amountMinorUnits,
+      status: paid?.has(item.sequenceNumber) ? "paid" : "scheduled",
+    }));
+  }
+}
+
+class FakeAgreementPaymentAttemptsReader implements AgreementPaymentAttemptsReader {
+  byAgreement = new Map<string, AgreementPaymentAttemptRecord[]>();
+  async listByAgreementId(agreementId: string): Promise<AgreementPaymentAttemptRecord[]> {
+    return this.byAgreement.get(agreementId) ?? [];
+  }
+}
+
+/** Defaults to "not computable" (matches a genuine gap, e.g. no signed version yet) so tests that don't care about the remaining-balance suffix aren't forced to seed one. */
+class FakeAgreementBalanceReader implements AgreementBalanceReader {
+  byAgreement = new Map<string, { remainingBalanceMinorUnits: number; currency: string; settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid" }>();
+  async getAgreementBalance(agreementId: string) {
+    const balance = this.byAgreement.get(agreementId);
+    if (!balance) throw new Error("no balance seeded for this agreement");
+    return balance;
+  }
+}
+
 /** Reads the same in-memory audit trail AgreementService.cancelAgreement actually writes to (ctx.auditRepo.events) — real integration coverage, not a hand-fed stub. */
 class FakeAgreementCancellationReader implements AgreementCancellationReader {
   constructor(private readonly auditRepo: { events: Array<{ agreementId: string | null; action: string; newValue: unknown }> }) {}
@@ -56,15 +119,27 @@ class FakeAgreementCancellationReader implements AgreementCancellationReader {
 describe("AgreementProgressService", () => {
   let ctx: ReturnType<typeof createTestAgreementService>;
   let relationshipPaymentMethods: FakeRelationshipPaymentMethodReader;
+  let mandates: FakeAgreementMandateReader;
+  let installments: FakeAgreementInstallmentStatusReader;
+  let paymentAttempts: FakeAgreementPaymentAttemptsReader;
+  let balance: FakeAgreementBalanceReader;
   let progressService: AgreementProgressService;
 
   beforeEach(() => {
     ctx = createTestAgreementService();
     relationshipPaymentMethods = new FakeRelationshipPaymentMethodReader();
+    mandates = new FakeAgreementMandateReader();
+    installments = new FakeAgreementInstallmentStatusReader(ctx);
+    paymentAttempts = new FakeAgreementPaymentAttemptsReader();
+    balance = new FakeAgreementBalanceReader();
     progressService = new AgreementProgressService({
       agreementService: ctx.agreementService,
       relationshipPaymentMethods,
       cancellation: new FakeAgreementCancellationReader(ctx.auditRepo),
+      mandates,
+      installments,
+      paymentAttempts,
+      balance,
     });
   });
 
@@ -165,10 +240,11 @@ describe("AgreementProgressService", () => {
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       const step = progress.steps.find((s) => s.key === "payment_method");
       expect(step?.status).toBe("action_required");
-      expect(step?.cta).toEqual({ label: "Add payment method", href: "/payment-methods" });
+      expect(step?.statusText).toBe("Payout setup required");
+      expect(step?.cta).toEqual({ label: "Set up payout account", href: "/payment-methods" });
     });
 
-    it("complete once the acting party's required usage (funding for debtor, payout for creditor) is actively assigned", async () => {
+    it("complete once the debtor's funding account + agreement mandate and the creditor's payout account are all active", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       const relationshipId = randomUUID();
       ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
@@ -176,11 +252,39 @@ describe("AgreementProgressService", () => {
         { usage: "funding", status: "active", financialAccount: { status: "verified" } },
         { usage: "payout", status: "active", financialAccount: { status: "verified" } },
       ]);
+      mandates.active.add(agreementId);
 
       const creditorProgress = await progressService.getProgress(agreementId, creditorUserId);
       const debtorProgress = await progressService.getProgress(agreementId, debtorUserId);
       expect(creditorProgress.steps.find((s) => s.key === "payment_method")?.status).toBe("complete");
       expect(debtorProgress.steps.find((s) => s.key === "payment_method")?.status).toBe("complete");
+    });
+
+    it("debtor sees 'action required' with a mandate-authorize CTA when a funding account is assigned but the agreement mandate isn't authorized yet", async () => {
+      const { agreementId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+      ]);
+
+      const progress = await progressService.getProgress(agreementId, debtorUserId);
+      const step = progress.steps.find((s) => s.key === "payment_method");
+      expect(step?.status).toBe("action_required");
+      expect(step?.statusText).toBe("Payment setup required");
+      expect(step?.cta).toEqual({ label: "Set up payment method", href: `/agreements/payment-authorize?id=${agreementId}` });
+    });
+
+    it("each party sees only their own missing requirement — never sent into the other party's account setup", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, []);
+
+      const creditorStep = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "payment_method");
+      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "payment_method");
+      expect(creditorStep?.statusText).toBe("Payout setup required");
+      expect(debtorStep?.statusText).toBe("Payment setup required");
     });
 
     it("degrades to optional (never crashes) if the relationship read fails — e.g. acting user isn't a participant", async () => {
@@ -274,15 +378,178 @@ describe("AgreementProgressService", () => {
     });
   });
 
-  describe("active", () => {
-    it("waiting while first_payment_pending", async () => {
-      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+  describe("active — restore agreement payment functionality: truthful post-signing readiness, never a generic 'Waiting on other party'", () => {
+    async function signBoth(agreementId: string, creditorUserId: string, debtorUserId: string) {
       await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
       await ctx.agreementService.signAgreement(agreementId, creditorUserId);
       await ctx.agreementService.signAgreement(agreementId, debtorUserId);
+    }
+
+    it("no linked relationship (e.g. manual/off-platform): falls through to the next-due installment rather than the payment-method gate", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await signBoth(agreementId, creditorUserId, debtorUserId);
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
-      expect(progress.steps.find((s) => s.key === "active")?.status).toBe("waiting");
+      const step = progress.steps.find((s) => s.key === "active");
+      expect(step?.status).toBe("waiting");
+      expect(step?.statusText).toBe("Next payment scheduled");
+    });
+
+    it("STATE B — debtor funding/mandate missing: debtor sees 'Payment setup required', creditor sees 'Waiting for debtor payment setup' with no action of their own", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      await signBoth(agreementId, creditorUserId, debtorUserId);
+
+      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
+      const creditorStep = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "active");
+      expect(debtorStep?.status).toBe("action_required");
+      expect(debtorStep?.statusText).toBe("Payment setup required");
+      expect(debtorStep?.cta).not.toBeNull();
+      expect(creditorStep?.status).toBe("waiting");
+      expect(creditorStep?.statusText).toBe("Waiting for debtor payment setup");
+      expect(creditorStep?.cta).toBeNull();
+    });
+
+    it("STATE C — creditor payout missing: creditor sees 'Payout setup required', debtor sees 'Waiting for creditor payout setup' and is never asked to fix the creditor's account", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+      await signBoth(agreementId, creditorUserId, debtorUserId);
+
+      const creditorStep = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "active");
+      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
+      expect(creditorStep?.status).toBe("action_required");
+      expect(creditorStep?.statusText).toBe("Payout setup required");
+      expect(debtorStep?.status).toBe("waiting");
+      expect(debtorStep?.statusText).toBe("Waiting for creditor payout setup");
+      expect(debtorStep?.cta).toBeNull();
+    });
+
+    it("STATE A — both ready, nothing overdue: debtor sees 'Next payment scheduled' with a Make Payment CTA, creditor sees the same status with no CTA", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+      await signBoth(agreementId, creditorUserId, debtorUserId);
+
+      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
+      const creditorStep = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "active");
+      expect(debtorStep?.status).toBe("waiting");
+      expect(debtorStep?.statusText).toBe("Next payment scheduled");
+      expect(debtorStep?.cta).toEqual({ label: "Make payment", href: `/agreements/detail?id=${agreementId}#make-payment` });
+      expect(creditorStep?.statusText).toBe("Next payment scheduled");
+      expect(creditorStep?.cta).toBeNull();
+    });
+
+    it("mentions the remaining balance when it's computable, and degrades silently (no crash, no stale text) when it isn't", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+      await signBoth(agreementId, creditorUserId, debtorUserId);
+      balance.byAgreement.set(agreementId, { remainingBalanceMinorUnits: 100_000, currency: "USD", settlementState: "unpaid" });
+
+      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
+      expect(debtorStep?.description).toMatch(/Remaining balance: \$1,000\.00/);
+    });
+
+    it("overdue next payment: debtor sees 'Payment due' as action_required with a Make Payment CTA", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+      await signBoth(agreementId, creditorUserId, debtorUserId);
+      const version = await ctx.versions.findById(ctx.agreements.byId.get(agreementId)!.currentVersionId!);
+      const items = await ctx.scheduleItems.listForVersion(version!.id);
+      items[0]!.dueDate = "2020-01-01";
+      await ctx.scheduleItems.replaceForVersion(version!.id, items);
+
+      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
+      expect(debtorStep?.status).toBe("action_required");
+      expect(debtorStep?.statusText).toBe("Payment due");
+    });
+
+    it("STATE D — an open payment attempt for the next-due installment reads 'Payment processing' for both parties", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+      await signBoth(agreementId, creditorUserId, debtorUserId);
+      paymentAttempts.byAgreement.set(agreementId, [
+        { installmentScheduleItemId: `${agreementId}:0`, status: "processing", failureReason: null, createdAt: new Date() },
+      ]);
+
+      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
+      expect(debtorStep?.status).toBe("waiting");
+      expect(debtorStep?.statusText).toBe("Payment processing");
+      expect(debtorStep?.cta).toBeNull();
+    });
+
+    it("a failed payment attempt: debtor sees 'Payment failed — action required' with a retry CTA and the safely-showable reason; creditor sees a non-actionable 'not yet completed' status", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+      await signBoth(agreementId, creditorUserId, debtorUserId);
+      paymentAttempts.byAgreement.set(agreementId, [
+        { installmentScheduleItemId: `${agreementId}:0`, status: "failed", failureReason: "insufficient_funds", createdAt: new Date() },
+      ]);
+
+      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
+      const creditorStep = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "active");
+      expect(debtorStep?.status).toBe("action_required");
+      expect(debtorStep?.statusText).toBe("Payment failed — action required");
+      expect(debtorStep?.description).toMatch(/insufficient_funds/);
+      expect(debtorStep?.cta).toEqual({ label: "Make payment", href: `/agreements/detail?id=${agreementId}#make-payment` });
+      expect(creditorStep?.status).toBe("waiting");
+      expect(creditorStep?.statusText).toBe("Payment not yet completed");
+    });
+
+    it("STATE E — every installment paid: reads 'Agreement paid in full' as complete", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+      await signBoth(agreementId, creditorUserId, debtorUserId);
+      const version = await ctx.versions.findById(ctx.agreements.byId.get(agreementId)!.currentVersionId!);
+      const items = await ctx.scheduleItems.listForVersion(version!.id);
+      for (const item of items) installments.markPaid(agreementId, item.sequenceNumber);
+
+      const step = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "active");
+      expect(step?.status).toBe("complete");
+      expect(step?.statusText).toBe("Agreement paid in full");
     });
   });
 
