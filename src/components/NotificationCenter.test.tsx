@@ -258,4 +258,66 @@ describe("NotificationCenter", () => {
       expect(screen.queryByRole("button", { name: /archive all read\/completed/i })).not.toBeInTheDocument();
     });
   });
+
+  describe("Agreement page ordering + notification retention (mandatory command): 7-day auto-archive notice", () => {
+    function notification(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        groupId: "group-1",
+        notificationType: "agreement_signed",
+        critical: false,
+        relatedAgreementId: null,
+        relatedPaymentAttemptId: null,
+        relatedInvitationId: null,
+        payload: {},
+        readAt: null,
+        inAppId: "notif-in-app-1",
+        createdAt: new Date().toISOString(),
+        archivedAt: null,
+        actionRequired: false,
+        channels: [{ channel: "in_app", status: "delivered", failureReason: null }],
+        ...overrides,
+      };
+    }
+
+    it("shows the 7-day auto-archive notice near the Current/Archived controls, even with no notifications", async () => {
+      vi.stubGlobal("fetch", mockFetchOnce({ notifications: [] }));
+      render(<NotificationCenter />);
+
+      expect(await screen.findByText(/automatically moved to archived 7 days after being marked as read/i)).toBeInTheDocument();
+    });
+
+    it("shows the notice in the Archived view too", async () => {
+      const user = userEvent.setup();
+      vi.stubGlobal("fetch", mockFetchOnce({ notifications: [] }));
+      render(<NotificationCenter />);
+      await screen.findByText(/no notifications yet/i);
+
+      await user.click(screen.getByRole("tab", { name: /archived/i }));
+
+      expect(await screen.findByText(/automatically moved to archived 7 days after being marked as read/i)).toBeInTheDocument();
+    });
+
+    it("marking read keeps the notification in Current — it does not immediately archive or remove it from view", async () => {
+      const user = userEvent.setup();
+      const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+        if (input === "/api/notifications/read") return { ok: true, status: 200, json: async () => ({ notification: {} }) };
+        return { ok: true, status: 200, json: async () => ({ notifications: [notification({ readAt: null })] }) };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<NotificationCenter />);
+
+      const markReadButton = await screen.findByRole("button", { name: /mark read/i });
+      await user.click(markReadButton);
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/notifications/read",
+          expect.objectContaining({ method: "POST", body: JSON.stringify({ id: "notif-in-app-1" }) }),
+        );
+      });
+      // Still rendered in the Current view — marking read is not archiving.
+      expect(screen.getByText(/agreement signed/i)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /mark read/i })).not.toBeInTheDocument();
+    });
+  });
 });

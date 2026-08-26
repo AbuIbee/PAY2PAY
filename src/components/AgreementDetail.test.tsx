@@ -472,6 +472,47 @@ describe("AgreementDetail", () => {
     });
   });
 
+  describe("Agreement page ordering remediation: Amendments modifies the agreement itself and must appear before supporting evidence/witness material", () => {
+    it("Payment schedule has a heading, the table sits beneath it, Amendments comes immediately after, then Evidence & witnesses — with no duplicate Amendments section", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+        }),
+      );
+
+      render(<AgreementDetail />);
+      await screen.findByText("Payment schedule");
+
+      const headings = screen.getAllByRole("heading").map((h) => h.textContent);
+      const scheduleIndex = headings.indexOf("Payment schedule");
+      const amendmentsIndex = headings.indexOf("Amendments");
+      const evidenceIndex = headings.indexOf("Evidence & witnesses");
+      expect(scheduleIndex).toBeGreaterThanOrEqual(0);
+      expect(amendmentsIndex).toBeGreaterThan(scheduleIndex);
+      expect(evidenceIndex).toBeGreaterThan(amendmentsIndex);
+      // Immediately after — no other heading in between.
+      expect(amendmentsIndex).toBe(scheduleIndex + 1);
+      expect(evidenceIndex).toBe(amendmentsIndex + 1);
+
+      // Never duplicated.
+      expect(headings.filter((h) => h === "Amendments").length).toBe(1);
+      expect(headings.filter((h) => h === "Evidence & witnesses").length).toBe(1);
+
+      // The schedule table itself is directly beneath the heading (same card).
+      const scheduleHeading = screen.getByRole("heading", { name: "Payment schedule" });
+      const scheduleCard = scheduleHeading.closest(".card");
+      expect(scheduleCard?.querySelector("table")).toBeTruthy();
+    });
+  });
+
   describe("Receiving-party amendment review remediation: the recipient must see actual proposed terms before deciding", () => {
     const PROPOSED_TERMS = {
       ...BASE_TERMS,

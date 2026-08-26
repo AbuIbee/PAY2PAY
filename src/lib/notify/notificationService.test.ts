@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { NotificationService } from "./notificationService";
 import { InMemoryNotificationEventRepository, createTestNotificationService } from "./testFakes";
 
+/**
+ * Test-only helper: forces every channel row sharing `dedupeKey` (or its `dedupeKey:channel` variants)
+ * to a specific createdAt. Sequential `notify()` calls in a fast test run can land on the exact same
+ * millisecond (the in-memory fake stamps `new Date()` at insert time), which would make
+ * createdAt-descending ordering tests flaky/order-dependent on tie-breaks that don't reflect real
+ * production timestamp precision — this makes creation order deterministic and explicit instead.
+ */
+function stampCreatedAt(events: InMemoryNotificationEventRepository, dedupeKey: string, createdAt: Date): void {
+  for (const row of events.byId.values()) {
+    if (row.dedupeKey === dedupeKey || row.dedupeKey?.startsWith(`${dedupeKey}:`)) row.createdAt = createdAt;
+  }
+}
+
 describe("NotificationService", () => {
   it("always records a durable notification_event row per default channel, even when the recipient has no contact info on file", async () => {
     const { notificationService, events } = createTestNotificationService();
@@ -720,53 +733,199 @@ describe("NotificationService", () => {
         });
       });
 
-      describe("Current-view priority: action required > unread > recent informational", () => {
-        it("an action-required notification sorts above an unread, more recent informational one", async () => {
-          const { notificationService, contacts } = createTestNotificationService();
+      describe("Agreement page ordering + notification retention (mandatory command): Current/Archived sort strictly newest-to-oldest by createdAt — no priority reordering", () => {
+        it("a newer informational notification sorts above an older action-required one — recency always wins, never action-required status", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
           contacts.set("user-1", "user1@example.com");
-          await notificationService.notify({ recipientUserId: "user-1", notificationType: "amendment", payload: {}, dedupeKey: "prio-action" }); // action-required
-          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "prio-unread" }); // unread, informational, created after
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "amendment", payload: {}, dedupeKey: "prio-action" }); // action-required, created first
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "prio-unread" }); // informational, created after
+          stampCreatedAt(events, "prio-action", new Date(2026, 0, 1));
+          stampCreatedAt(events, "prio-unread", new Date(2026, 0, 2));
 
           const current = await notificationService.listCurrentGroupedForUser("user-1");
-          expect(current.map((g) => g.groupId)).toEqual(["prio-action", "prio-unread"]);
+          expect(current.map((g) => g.groupId)).toEqual(["prio-unread", "prio-action"]);
         });
 
-        it("an unread informational notification sorts above an older, already-read one", async () => {
-          const { notificationService, contacts } = createTestNotificationService();
+        it("a newer unread notification sorts above an older, already-read one", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
           contacts.set("user-1", "user1@example.com");
           await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "prio-read" });
           const [readGroup] = await notificationService.listCurrentGroupedForUser("user-1");
           await notificationService.markRead("user-1", readGroup!.inAppId!);
 
           await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_cleared", payload: {}, dedupeKey: "prio-unread-2" });
+          stampCreatedAt(events, "prio-read", new Date(2026, 0, 1));
+          stampCreatedAt(events, "prio-unread-2", new Date(2026, 0, 2));
 
           const current = await notificationService.listCurrentGroupedForUser("user-1");
           expect(current.map((g) => g.groupId)).toEqual(["prio-unread-2", "prio-read"]);
         });
 
-        it("the exact scenario: 4 notifications for the same agreement — the newest sorts above 3 older, already-read informational ones", async () => {
-          const { notificationService, contacts } = createTestNotificationService();
+        it("a newer, already-read notification still sorts above an older, unread action-required one — a newer notification must never appear below an older one", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "amendment", payload: {}, dedupeKey: "override-action-old" }); // action-required, unread, created first
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "override-read-new" }); // created after
+          stampCreatedAt(events, "override-action-old", new Date(2026, 0, 1));
+          stampCreatedAt(events, "override-read-new", new Date(2026, 0, 2));
+          const [group] = (await notificationService.listCurrentGroupedForUser("user-1")).filter((g) => g.groupId === "override-read-new");
+          await notificationService.markRead("user-1", group!.inAppId!);
+
+          const current = await notificationService.listCurrentGroupedForUser("user-1");
+          expect(current.map((g) => g.groupId)).toEqual(["override-read-new", "override-action-old"]);
+        });
+
+        it("4 notifications for the same agreement sort strictly by creation order, newest first, regardless of read/action-required status", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
           contacts.set("user-1", "user1@example.com");
           const steps = [
             { type: "agreement_decided" as const, key: "step-1" },
             { type: "agreement_invitation_response" as const, key: "step-2" },
-            { type: "agreement_counterparty_signed" as const, key: "step-3" }, // action-required — recipient must sign next
+            { type: "agreement_counterparty_signed" as const, key: "step-3" }, // action-required
             { type: "agreement_signed" as const, key: "step-4" },
           ];
-          for (const step of steps) {
+          for (const [index, step] of steps.entries()) {
             await notificationService.notify({ recipientUserId: "user-1", notificationType: step.type, payload: {}, dedupeKey: step.key });
+            stampCreatedAt(events, step.key, new Date(2026, 0, index + 1));
           }
-          // Read everything except the newest (step-4) and the action-required one (step-3, which stays actionable regardless of read state).
           for (const key of ["step-1", "step-2"]) {
             const [group] = (await notificationService.listCurrentGroupedForUser("user-1")).filter((g) => g.groupId === key);
             await notificationService.markRead("user-1", group!.inAppId!);
           }
 
           const current = await notificationService.listCurrentGroupedForUser("user-1");
-          // step-3 (action required) first, then step-4 (newest, unread informational), then the two older read ones.
-          expect(current[0]?.groupId).toBe("step-3");
-          expect(current[1]?.groupId).toBe("step-4");
-          expect(current.map((g) => g.groupId).slice(2).sort()).toEqual(["step-1", "step-2"]);
+          expect(current.map((g) => g.groupId)).toEqual(["step-4", "step-3", "step-2", "step-1"]);
+        });
+
+        it("Archived sorts newest-to-oldest by createdAt too, not by when each was archived", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "arch-order-older" });
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "arch-order-newer" });
+          stampCreatedAt(events, "arch-order-older", new Date(2026, 0, 1));
+          stampCreatedAt(events, "arch-order-newer", new Date(2026, 0, 2));
+          // Archive the newer-created one first, then the older-created one — archival order is deliberately reversed from creation order.
+          await notificationService.archiveNotification("user-1", "arch-order-newer");
+          await notificationService.archiveNotification("user-1", "arch-order-older");
+
+          const archived = await notificationService.listArchivedGroupedForUser("user-1");
+          expect(archived.map((g) => g.groupId)).toEqual(["arch-order-newer", "arch-order-older"]);
+        });
+      });
+
+      describe("Agreement page ordering + notification retention (mandatory command): 7-day read-to-archive auto-archive rule", () => {
+        it("marking read does not immediately archive — the notification stays in Current", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "no-immediate-archive" });
+          const [group] = await notificationService.listCurrentGroupedForUser("user-1");
+          await notificationService.markRead("user-1", group!.inAppId!);
+
+          const current = await notificationService.listCurrentGroupedForUser("user-1");
+          expect(current.map((g) => g.groupId)).toEqual(["no-immediate-archive"]);
+          expect(current[0]?.readAt).not.toBeNull();
+          const archived = await notificationService.listArchivedGroupedForUser("user-1");
+          expect(archived).toHaveLength(0);
+        });
+
+        it("a read notification remains in Current just under 7 days after read_at, and moves to Archived once 7 days have elapsed", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "seven-day" });
+          const [group] = await notificationService.listCurrentGroupedForUser("user-1");
+          await notificationService.markRead("user-1", group!.inAppId!);
+          const readAt = events.byId.get(group!.inAppId!)!.readAt!;
+
+          const justUnder = new Date(readAt.getTime() + 7 * 24 * 60 * 60 * 1000 - 1000);
+          expect((await notificationService.listCurrentGroupedForUser("user-1", justUnder)).map((g) => g.groupId)).toEqual(["seven-day"]);
+          expect(await notificationService.listArchivedGroupedForUser("user-1", justUnder)).toHaveLength(0);
+
+          const atOrAfter = new Date(readAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+          expect(await notificationService.listCurrentGroupedForUser("user-1", atOrAfter)).toHaveLength(0);
+          expect((await notificationService.listArchivedGroupedForUser("user-1", atOrAfter)).map((g) => g.groupId)).toEqual(["seven-day"]);
+        });
+
+        it("never becomes eligible from createdAt alone — an old but still-unread notification stays in Current indefinitely", async () => {
+          const { notificationService, contacts } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "old-unread" });
+          const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+          expect((await notificationService.listCurrentGroupedForUser("user-1", farFuture)).map((g) => g.groupId)).toEqual(["old-unread"]);
+        });
+
+        it("autoArchiveEligibleReadNotifications persists archived_at for a group read 7+ days ago, and refresh (a fresh listCurrentGroupedForUser call) never restores it to Current", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          contacts.setPhone("user-1", "+15551234567");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "payment_failed", payload: {}, dedupeKey: "sweep-durable" }); // email+sms+in_app
+          const [group] = await notificationService.listCurrentGroupedForUser("user-1");
+          await notificationService.markRead("user-1", group!.inAppId!);
+          const readAt = events.byId.get(group!.inAppId!)!.readAt!;
+          const eightDaysLater = new Date(readAt.getTime() + 8 * 24 * 60 * 60 * 1000);
+
+          const result = await notificationService.autoArchiveEligibleReadNotifications(eightDaysLater);
+          expect(result).toEqual({ archived: 1 });
+
+          // Every channel row in the group was archived atomically, exactly like a manual archive.
+          for (const row of events.byId.values()) {
+            if (row.recipientUserId === "user-1") expect(row.archivedAt).not.toBeNull();
+          }
+
+          // A fresh read with no `now` override (defaults to the real current time) still finds it in Archived, not Current.
+          expect(await notificationService.listCurrentGroupedForUser("user-1")).toHaveLength(0);
+          const archived = await notificationService.listArchivedGroupedForUser("user-1");
+          expect(archived.map((g) => g.groupId)).toEqual(["sweep-durable"]);
+        });
+
+        it("never touches an unread notification, even long after it was created", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "still-unread" });
+
+          const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+          expect(await notificationService.autoArchiveEligibleReadNotifications(farFuture)).toEqual({ archived: 0 });
+          const unreadRow = [...events.byId.values()].find((r) => r.dedupeKey?.startsWith("still-unread:"));
+          expect(unreadRow?.archivedAt).toBeNull();
+        });
+
+        it("does not archive a notification read less than 7 days before the sweep's `now`", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "recently-read" });
+          const [group] = await notificationService.listCurrentGroupedForUser("user-1");
+          await notificationService.markRead("user-1", group!.inAppId!);
+          const readAt = events.byId.get(group!.inAppId!)!.readAt!;
+
+          const justUnderSevenDays = new Date(readAt.getTime() + 6 * 24 * 60 * 60 * 1000);
+          expect(await notificationService.autoArchiveEligibleReadNotifications(justUnderSevenDays)).toEqual({ archived: 0 });
+        });
+
+        it("running the sweep twice archives nothing new the second time (idempotent, deduplicated per group)", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "sweep-idempotent" });
+          const [group] = await notificationService.listCurrentGroupedForUser("user-1");
+          await notificationService.markRead("user-1", group!.inAppId!);
+          const readAt = events.byId.get(group!.inAppId!)!.readAt!;
+          const eightDaysLater = new Date(readAt.getTime() + 8 * 24 * 60 * 60 * 1000);
+
+          expect(await notificationService.autoArchiveEligibleReadNotifications(eightDaysLater)).toEqual({ archived: 1 });
+          expect(await notificationService.autoArchiveEligibleReadNotifications(eightDaysLater)).toEqual({ archived: 0 });
+        });
+
+        it("an existing read notification whose read_at is already 7+ days old becomes eligible with no backfill or fabricated timestamp — it is excluded from Current and included in Archived purely from its real, pre-existing read_at", async () => {
+          const { notificationService, contacts, events } = createTestNotificationService();
+          contacts.set("user-1", "user1@example.com");
+          await notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "preexisting-old-read" });
+          const [group] = await notificationService.listCurrentGroupedForUser("user-1");
+          await notificationService.markRead("user-1", group!.inAppId!);
+          // Simulate a record that was genuinely read 10 days ago, before this rule ever ran — the record's own real read_at, not a fabricated one.
+          const record = events.byId.get(group!.inAppId!)!;
+          record.readAt = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+
+          expect(await notificationService.listCurrentGroupedForUser("user-1")).toHaveLength(0);
+          const archived = await notificationService.listArchivedGroupedForUser("user-1");
+          expect(archived.map((g) => g.groupId)).toEqual(["preexisting-old-read"]);
         });
       });
 

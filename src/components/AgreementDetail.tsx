@@ -501,26 +501,53 @@ export function AgreementDetail() {
           />
         )}
 
-      <div className="table-wrap">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Due date</th>
-              <th>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.schedule.map((item) => (
-              <tr key={item.sequenceNumber}>
-                <td>{item.sequenceNumber === 0 ? "First payment" : item.sequenceNumber}</td>
-                <td>{formatDate(item.dueDate)}</td>
-                <td>{formatMoney(item.amountMinorUnits)}</td>
+      <div className="card">
+        <div className="card__header">
+          <h3>Payment schedule</h3>
+        </div>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Due date</th>
+                <th>Amount</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.schedule.map((item) => (
+                <tr key={item.sequenceNumber}>
+                  <td>{item.sequenceNumber === 0 ? "First payment" : item.sequenceNumber}</td>
+                  <td>{formatDate(item.dueDate)}</td>
+                  <td>{formatMoney(item.amountMinorUnits)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      {/* Agreement page ordering remediation: Amendments modifies the agreement itself, so it must
+          appear before supporting Evidence & witnesses material — both moved here, directly after
+          the payment schedule, ahead of version history/status-action sections. */}
+      <AmendmentPanel
+        agreementId={data.id}
+        amendments={amendments}
+        myRole={myRole}
+        currentTerms={terms}
+        currentFrequency={data.version.frequency}
+        currentFeeAllocation={data.version.feeAllocation}
+        currentSchedule={data.schedule}
+        currency={data.currency}
+        onChanged={() => void load()}
+      />
+
+      <EvidenceWitnessPanel
+        agreementId={data.id}
+        evidence={evidence}
+        witnesses={witnesses}
+        onChanged={() => void load()}
+      />
 
       {versions.length > 1 && (
         <div className="card">
@@ -795,25 +822,6 @@ export function AgreementDetail() {
           onRevised={() => void load()}
         />
       )}
-
-      <EvidenceWitnessPanel
-        agreementId={data.id}
-        evidence={evidence}
-        witnesses={witnesses}
-        onChanged={() => void load()}
-      />
-
-      <AmendmentPanel
-        agreementId={data.id}
-        amendments={amendments}
-        myRole={myRole}
-        currentTerms={terms}
-        currentFrequency={data.version.frequency}
-        currentFeeAllocation={data.version.feeAllocation}
-        currentSchedule={data.schedule}
-        currency={data.currency}
-        onChanged={() => void load()}
-      />
 
       <PartialPaymentPanel agreementId={data.id} requests={partialPayments} myRole={myRole} onChanged={() => void load()} />
 
