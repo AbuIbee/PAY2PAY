@@ -195,7 +195,7 @@ describe("AppNav", () => {
     render(<AppNav />);
 
     await screen.findByRole("button", { name: /^menu$/i });
-    for (const label of ["Dashboard", "Connections", "Agreements", "Payments", "Payment Methods", "Notifications", "Support"]) {
+    for (const label of ["Dashboard", "Connections", "Payment Arrangements", "My Cash", "Payment Methods", "Notifications", "Support"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}$`, "i") })).toBeInTheDocument();
     }
     expect(screen.getByRole("link", { name: /^settings$/i })).toHaveAttribute("href", "/account");

@@ -6,8 +6,8 @@ import { ProductTour } from "./ProductTour";
 const AREAS = [
   "Dashboard",
   "Connections",
-  "Agreements",
-  "Payments",
+  "Payment Arrangements",
+  "My Cash",
   "Payment Methods",
   "Notifications",
   "Support",

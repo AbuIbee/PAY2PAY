@@ -1774,7 +1774,7 @@ function PartialPaymentPanel({
               )}
               {r.status === "awaiting_payment" && (
                 <p className="confirm-banner" style={{ marginTop: "0.5rem" }}>
-                  Payment required — go to <a href="/payments">Payments</a> to pay this amount.
+                  Payment required — go to <a href="/payments">My Cash</a> to pay this amount.
                 </p>
               )}
             </div>
@@ -1882,7 +1882,7 @@ function SettlementPanel({
                 )}
                 {s.status === "awaiting_payment" && (
                   <p className="confirm-banner" style={{ marginTop: "0.5rem" }}>
-                    Payment required — go to <a href="/payments">Payments</a> to complete this settlement.
+                    Payment required — go to <a href="/payments">My Cash</a> to complete this settlement.
                   </p>
                 )}
               </div>

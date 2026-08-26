@@ -302,7 +302,7 @@ const SCENARIOS: DemoScenario[] = [
         stats: [
           { label: "Money I owe", value: "$1,000" },
           { label: "Money owed to me", value: "$0" },
-          { label: "Agreements", value: "2" },
+          { label: "Payment Arrangements", value: "2" },
         ],
         progressPercent: 0,
         timelineRows: [],
@@ -314,20 +314,20 @@ const SCENARIOS: DemoScenario[] = [
         statusLabel: "1 waiting",
         stats: [
           { label: "Pending invitations", value: "1 waiting on your response" },
-          { label: "Agreements needing signature", value: "0" },
+          { label: "Payment Arrangements needing signature", value: "0" },
           { label: "Unread notifications", value: "3" },
         ],
         progressPercent: 0,
         timelineRows: [],
       },
       {
-        title: "Agreements needing your signature",
+        title: "Payment Arrangements needing your signature",
         body: "Agreements awaiting your signature are called out separately from ones already in progress, so nothing sits unsigned by accident.",
         heading: "What requires action",
         statusLabel: "1 awaiting signature",
         stats: [
           { label: "Pending invitations", value: "0" },
-          { label: "Agreements needing signature", value: "1 awaiting your signature" },
+          { label: "Payment Arrangements needing signature", value: "1 awaiting your signature" },
           { label: "Unread notifications", value: "3" },
         ],
         progressPercent: 0,
@@ -354,7 +354,7 @@ const SCENARIOS: DemoScenario[] = [
         stats: [
           { label: "Payment methods", value: "Add or verify a bank account" },
           { label: "Support", value: "Open cases, disputes, appeals" },
-          { label: "Agreements", value: "2 active" },
+          { label: "Payment Arrangements", value: "2 active" },
         ],
         progressPercent: 0,
         timelineRows: [],

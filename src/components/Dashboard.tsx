@@ -118,7 +118,7 @@ function ActionCards({
       </Link>
       <Link href="/agreements" className="action-card">
         <div>
-          <p className="action-card__title">Agreements needing signature</p>
+          <p className="action-card__title">Payment Arrangements needing signature</p>
           <p className="action-card__detail">
             {needingSignature === null
               ? "Review and sign agreements awaiting you"
@@ -138,7 +138,7 @@ function ActionCards({
       </Link>
       <Link href="/payments" className="action-card">
         <div>
-          <p className="action-card__title">Payments</p>
+          <p className="action-card__title">My Cash</p>
           <p className="action-card__detail">View your payment history and status</p>
         </div>
         <span className="action-card__arrow" aria-hidden="true">→</span>
@@ -273,7 +273,7 @@ export function Dashboard() {
             <span className="stat-card__value">{formatMoney(summary.moneyOwedToMeMinorUnits)}</span>
           </div>
           <div className="stat-card">
-            <span className="stat-card__label">Agreements</span>
+            <span className="stat-card__label">Payment Arrangements</span>
             <span className="stat-card__value">{summary.agreementsCount}</span>
           </div>
           <div className="stat-card">

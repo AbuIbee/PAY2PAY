@@ -23,8 +23,8 @@ interface NavLinkItem {
 const PRIMARY_LINKS: NavLinkItem[] = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/connections", label: "Connections" },
-  { href: "/agreements", label: "Agreements" },
-  { href: "/payments", label: "Payments" },
+  { href: "/agreements", label: "Payment Arrangements" },
+  { href: "/payments", label: "My Cash" },
   { href: "/payment-methods", label: "Payment Methods" },
   { href: "/cards", label: "Cards" },
   { href: "/notifications", label: "Notifications" },

@@ -22,7 +22,7 @@ const TOUR_STEPS: TourStep[] = [
     area: "Dashboard",
     whatFor: "Your home base — a snapshot of what you owe, what's owed to you, your active agreements, and anything that needs your attention right now.",
     whatYouCanDo: "See your balances at a glance, jump to any pending invitation or agreement awaiting your signature, and check unread notifications.",
-    whatsNext: "From here, most people head to Connections to start a new relationship, or to Agreements to check on an existing one.",
+    whatsNext: "From here, most people head to Connections to start a new relationship, or to Payment Arrangements to check on an existing one.",
   },
   {
     area: "Connections",
@@ -31,13 +31,13 @@ const TOUR_STEPS: TourStep[] = [
     whatsNext: "Once a connection is accepted and set up, the next step is usually creating an Agreement together.",
   },
   {
-    area: "Agreements",
+    area: "Payment Arrangements",
     whatFor: "The documented terms of a repayment — principal, schedule, and any special conditions like early payoff or hardship rules.",
     whatYouCanDo: "Draft a new agreement with a connection, review the terms, sign, and track its status through the repayment lifecycle.",
     whatsNext: "Once both parties sign, the agreement becomes active and its scheduled Payments begin.",
   },
   {
-    area: "Payments",
+    area: "My Cash",
     whatFor: "A running record of every payment tied to your agreements — made, received, scheduled, or failed.",
     whatYouCanDo: "Review payment history, check on a specific payment's status, and see what's scheduled next.",
     whatsNext: "If a payment method needs attention, that's managed under Payment Methods.",
@@ -52,7 +52,7 @@ const TOUR_STEPS: TourStep[] = [
     area: "Notifications",
     whatFor: "Real-time updates on invitations, signatures, and payments as they happen — so nothing gets missed.",
     whatYouCanDo: "Review recent activity and jump straight to the connection, agreement, or payment a notification refers to.",
-    whatsNext: "Most notifications lead directly to an action waiting for you elsewhere in the app — usually Connections or Agreements.",
+    whatsNext: "Most notifications lead directly to an action waiting for you elsewhere in the app — usually Connections or Payment Arrangements.",
   },
   {
     area: "Support",
