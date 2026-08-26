@@ -20,6 +20,13 @@ const manualSchema = z.object({
   recipient: profileRefSchema,
   amountMinorUnits: z.number().int().positive(),
   currency: z.string().trim().length(3).default("USD"),
+  /**
+   * Restore agreement payment functionality: AchPaymentService.createManualPayment has always
+   * accepted this (to tag which scheduled installment a payment collects), but this route
+   * previously dropped it silently — no client could ever pass it through. Optional: PartialPaymentPanel's
+   * "pay this amount" flow and any off-schedule manual payment still have no installment to tag.
+   */
+  installmentScheduleItemId: z.string().uuid().optional(),
 });
 
 export function createAchManualPaymentHandler(authService: AuthService, achPaymentService: AchPaymentService) {

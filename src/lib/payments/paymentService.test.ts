@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { createTestNotificationService } from "@/lib/notify/testFakes";
 import { createTestPaymentService } from "./testFakes";
 import type { ProfileKind } from "./paymentProvider";
 
@@ -215,6 +216,62 @@ describe("PaymentService", () => {
       const canceled = await ctx.paymentService.cancelPayment(scheduled.id, PAYER_USER_ID);
       expect(canceled.status).toBe("canceled");
       ctx.provider.cancelPayment = originalCancel;
+    });
+
+    describe("restore agreement payment functionality: payment_scheduled/payment_processing were defined notification types never fired anywhere until now", () => {
+      it("notifies both parties on schedulePayment (payment_scheduled) and on submitPending reaching processing (payment_processing)", async () => {
+        const notifyCtx = createTestNotificationService();
+        notifyCtx.contacts.set(PAYER_USER_ID, "payer@example.com");
+        notifyCtx.contacts.set(RECIPIENT_USER_ID, "recipient@example.com");
+        const wired = createTestPaymentService({ notifications: notifyCtx.notificationService });
+        wired.verificationCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+        wired.verificationCtx.profileOwners.set(RECIPIENT.profileKind, RECIPIENT.profileId, RECIPIENT_USER_ID);
+        await wired.verificationCtx.verificationService.submitFullVerificationRequest(PAYER.profileKind, PAYER.profileId);
+        await wired.verificationCtx.verificationService.recordManualVerificationDecision({
+          actingRole: "platform_owner",
+          profileKind: PAYER.profileKind,
+          profileId: PAYER.profileId,
+          decision: "verified",
+          reviewerUserId: REVIEWER_USER_ID,
+          reason: null,
+        });
+        await wired.verificationCtx.verificationService.submitFullVerificationRequest(RECIPIENT.profileKind, RECIPIENT.profileId);
+        await wired.verificationCtx.verificationService.recordManualVerificationDecision({
+          actingRole: "platform_owner",
+          profileKind: RECIPIENT.profileKind,
+          profileId: RECIPIENT.profileId,
+          decision: "verified",
+          reviewerUserId: REVIEWER_USER_ID,
+          reason: null,
+        });
+
+        const scheduled = await wired.paymentService.schedulePayment({
+          idempotencyKey: "notify-sched-1",
+          payer: PAYER,
+          recipient: RECIPIENT,
+          amountMinorUnits: 10_000,
+          currency: "USD",
+          actingUserId: PAYER_USER_ID,
+        });
+        expect(scheduled.status).toBe("scheduled");
+        const payerAfterSchedule = await notifyCtx.notificationService.listForUser(PAYER_USER_ID);
+        expect(payerAfterSchedule.some((n) => n.notificationType === "payment_scheduled")).toBe(true);
+        const recipientAfterSchedule = await notifyCtx.notificationService.listForUser(RECIPIENT_USER_ID);
+        expect(recipientAfterSchedule.some((n) => n.notificationType === "payment_scheduled")).toBe(true);
+
+        await wired.paymentService.submitPending(scheduled.id, PAYER_USER_ID);
+        const payerAfterSubmit = await notifyCtx.notificationService.listForUser(PAYER_USER_ID);
+        expect(payerAfterSubmit.some((n) => n.notificationType === "payment_processing")).toBe(true);
+      });
+
+      it("does not fail schedulePayment/submitPending if notifications are unwired — remains optional, matching PaymentWebhookService's identical precedent", async () => {
+        // The shared beforeEach's ctx was constructed without notifications at all.
+        await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+        await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+        const scheduled = await ctx.paymentService.schedulePayment(baseInput({ idempotencyKey: "notify-optional-1" }));
+        const submitted = await ctx.paymentService.submitPending(scheduled.id, PAYER_USER_ID);
+        expect(submitted.status).toBe("processing");
+      });
     });
   });
 

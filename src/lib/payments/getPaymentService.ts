@@ -4,6 +4,7 @@ import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventReposi
 import { getAgreementCompletionService } from "@/lib/ledger/getAgreementCompletionService";
 import { getBalanceService } from "@/lib/ledger/getBalanceService";
 import { getLedgerService } from "@/lib/ledger/getLedgerService";
+import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { getVerificationService } from "@/lib/profiles/getVerificationService";
 import { DrizzleAgreementPartiesReader } from "./drizzleAgreementPartiesReader";
@@ -40,6 +41,7 @@ export function getPaymentService(): PaymentService {
       ledger: getLedgerService(),
       completion: getAgreementCompletionService(),
       atomicManualPayments: new DrizzleAtomicManualPaymentPoster(),
+      notifications: getNotificationService(),
     });
   }
   return cached;

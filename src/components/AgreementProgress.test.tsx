@@ -137,6 +137,28 @@ describe("AgreementProgress", () => {
     }
   });
 
+  it("restore agreement payment functionality: a step's statusText overrides the chip's generic status label", () => {
+    render(
+      <AgreementProgress
+        data={baseData({
+          steps: baseData().steps.map((s) =>
+            s.key === "payment_method"
+              ? {
+                  ...s,
+                  status: "waiting",
+                  statusText: "Waiting for creditor payout setup",
+                  description: "Your payment method is ready. Waiting for the creditor to set up a payout account.",
+                  cta: null,
+                }
+              : s,
+          ),
+        })}
+      />,
+    );
+    expect(screen.getByText("Waiting for creditor payout setup")).toBeInTheDocument();
+    expect(screen.queryByText("Waiting on other party")).not.toBeInTheDocument();
+  });
+
   it("renders a blocked step's exact reason, not a generic message", () => {
     render(
       <AgreementProgress

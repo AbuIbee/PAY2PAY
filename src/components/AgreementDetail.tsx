@@ -71,6 +71,12 @@ interface AgreementDetailData {
   schedule: ScheduleItem[];
 }
 
+interface NextPaymentData {
+  nextInstallment: { id: string; sequenceNumber: number; dueDate: string; amountMinorUnits: number } | null;
+  remainingBalanceMinorUnits: number | null;
+  fundingAccountLabel: string | null;
+}
+
 interface WitnessViewData {
   agreement: { id: string; status: string; currency: string };
   version: { id: string; versionNumber: number; terms: AgreementTerms; signedAt: string | null };
@@ -221,6 +227,7 @@ export function AgreementDetail() {
   const [disputes, setDisputes] = useState<DisputeItem[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState<AgreementProgressData | null>(null);
+  const [nextPayment, setNextPayment] = useState<NextPaymentData | null>(null);
   const [versions, setVersions] = useState<VersionHistoryItem[]>([]);
 
   const load = useCallback(async () => {
@@ -241,6 +248,11 @@ export function AgreementDetail() {
       apiFetch<AgreementProgressData>(`/api/agreements/progress?id=${encodeURIComponent(agreementId)}`)
         .then((body) => setProgress(Array.isArray(body?.steps) ? body : null))
         .catch(() => setProgress(null));
+      // Restore agreement payment functionality: same tolerant-fetch pattern as progress above — a
+      // failure here just hides the Make Payment section rather than blocking the rest of the page.
+      apiFetch<NextPaymentData>(`/api/agreements/payment-setup/next-payment?id=${encodeURIComponent(agreementId)}`)
+        .then(setNextPayment)
+        .catch(() => setNextPayment(null));
       const [evidenceRes, witnessRes, amendmentRes, partialRes, settlementRes, disputeRes, versionsRes] = await Promise.all([
         apiFetch<{ evidence: EvidenceItem[] }>(`/api/agreements/evidence?agreementId=${agreementId}`).catch(() => ({ evidence: [] })),
         apiFetch<{ witnesses: WitnessItem[] }>(`/api/agreements/witnesses?agreementId=${agreementId}`).catch(() => ({ witnesses: [] })),
@@ -463,6 +475,21 @@ export function AgreementDetail() {
       </div>
 
       {progress && <AgreementProgress data={progress} />}
+
+      {myRole === "debtor" &&
+        progress?.steps.find((s) => s.key === "payment_method")?.status === "complete" &&
+        nextPayment?.nextInstallment && (
+          <MakePaymentPanel
+            agreementId={data.id}
+            currency={data.currency}
+            payer={data.debtor}
+            recipient={data.creditor}
+            nextInstallment={nextPayment.nextInstallment}
+            remainingBalanceMinorUnits={nextPayment.remainingBalanceMinorUnits}
+            fundingAccountLabel={nextPayment.fundingAccountLabel}
+            onSubmitted={() => void load()}
+          />
+        )}
 
       <div className="table-wrap">
         <table className="table">
@@ -947,6 +974,100 @@ function SignaturePanel({
           onVerified={signAction.resolveChallenge}
           onCancel={signAction.cancelChallenge}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Restore agreement payment functionality: the debtor's "Make Payment" action — shows the exact
+ * amount that will be charged, the funding source, and the creditor before submission, and never
+ * marks a payment complete on click. It shows only whatever real status
+ * POST /api/ach/payments/manual returns (scheduled/submitted/processing/...); the actual clearing
+ * happens later via the provider webhook (see PaymentWebhookService), so `onSubmitted` reloads the
+ * agreement to reflect the real, current status rather than an optimistic one.
+ */
+function MakePaymentPanel({
+  agreementId,
+  currency,
+  payer,
+  recipient,
+  nextInstallment,
+  remainingBalanceMinorUnits,
+  fundingAccountLabel,
+  onSubmitted,
+}: {
+  agreementId: string;
+  currency: string;
+  payer: { kind: "personal" | "business"; id: string };
+  recipient: { kind: "personal" | "business"; id: string };
+  nextInstallment: { id: string; sequenceNumber: number; dueDate: string; amountMinorUnits: number };
+  remainingBalanceMinorUnits: number | null;
+  fundingAccountLabel: string | null;
+  onSubmitted: () => void;
+}) {
+  const [status, setStatus] = useState<"idle" | "submitting" | "submitted" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ id: string; status: string } | null>(null);
+
+  async function handlePay() {
+    setStatus("submitting");
+    setError(null);
+    try {
+      const body = await apiFetch<{ id: string; status: string }>("/api/ach/payments/manual", {
+        method: "POST",
+        body: JSON.stringify({
+          idempotencyKey: `agreement-payment-${agreementId}-${nextInstallment.id}-${crypto.randomUUID()}`,
+          agreementId,
+          payer: { profileKind: payer.kind, profileId: payer.id },
+          recipient: { profileKind: recipient.kind, profileId: recipient.id },
+          amountMinorUnits: nextInstallment.amountMinorUnits,
+          currency,
+          installmentScheduleItemId: nextInstallment.id,
+        }),
+      });
+      setResult(body);
+      setStatus("submitted");
+      onSubmitted();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not submit this payment. Please try again.");
+      setStatus("error");
+    }
+  }
+
+  return (
+    <div className="card" id="make-payment" aria-labelledby="make-payment-heading">
+      <div className="card__header">
+        <h3 id="make-payment-heading">Make a payment</h3>
+      </div>
+      <p style={{ margin: 0 }}>Amount due: {formatMoney(nextInstallment.amountMinorUnits, currency)}</p>
+      <p style={{ margin: 0 }}>Due date: {formatDate(nextInstallment.dueDate)}</p>
+      {remainingBalanceMinorUnits != null && (
+        <p style={{ margin: 0 }}>Remaining balance: {formatMoney(remainingBalanceMinorUnits, currency)}</p>
+      )}
+      <p style={{ margin: 0 }}>Funding source: {fundingAccountLabel ?? "Not set up"}</p>
+      <p style={{ margin: "0.5rem 0 0", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
+        Payments are not collected automatically — you&apos;ll need to submit each payment yourself when it&apos;s due.
+      </p>
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
+      {result ? (
+        <p className="form-status" role="status" style={{ marginTop: "0.75rem" }}>
+          Payment submitted — status: {result.status.replaceAll("_", " ")}. This page updates once your bank finishes processing it.
+        </p>
+      ) : (
+        <button
+          type="button"
+          className="button button--primary"
+          style={{ marginTop: "0.75rem" }}
+          disabled={status === "submitting" || !fundingAccountLabel}
+          onClick={() => void handlePay()}
+        >
+          {status === "submitting" ? "Submitting…" : `Pay ${formatMoney(nextInstallment.amountMinorUnits, currency)}`}
+        </button>
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 import "server-only";
 import type { AgreementService, AgreementStatus, PartyRole } from "./agreementService";
 import { isPastDate } from "./schedule";
+import { formatMoney } from "@/lib/ui/money";
 
 export type AgreementProgressStepKey =
   | "details_terms"
@@ -30,6 +31,14 @@ export interface AgreementProgressStep {
   status: AgreementProgressStepStatus;
   description: string;
   cta: AgreementProgressCta | null;
+  /**
+   * Restore agreement payment functionality: an optional override for the status chip's displayed
+   * text. Added so Step 3/Step 5 can surface truthful, specific wording ("Payment setup required",
+   * "Waiting for creditor payout setup", "Payment due", "Payment failed — action required") without
+   * introducing new AgreementProgressStepStatus values — every pre-existing step (acceptance,
+   * signatures) is unaffected and keeps falling back to the status's own generic label.
+   */
+  statusText?: string;
 }
 
 export interface AgreementPrimaryAction {
@@ -71,11 +80,75 @@ export interface AgreementCancellationReader {
   getCancellationInfo(agreementId: string): Promise<AgreementCancellationInfo | null>;
 }
 
+/**
+ * Restore agreement payment functionality: narrow view onto AchMandateService.isActiveForAgreement.
+ * The relationship-level funding assignment (RelationshipPaymentMethodReader above) says the debtor
+ * has *chosen* a funding account; this says the debtor has actually authorized this specific
+ * agreement to debit it — AchPaymentService.createManualPayment requires both, and until now nothing
+ * in the progress workflow ever checked the second one.
+ */
+export interface AgreementMandateReader {
+  isActiveForAgreement(agreementId: string): Promise<boolean>;
+}
+
+/** Narrow view onto BalanceService.getAgreementBalance — only the fields Step 5 needs to describe payment readiness truthfully. */
+export interface AgreementBalanceReader {
+  getAgreementBalance(agreementId: string): Promise<{
+    remainingBalanceMinorUnits: number;
+    currency: string;
+    settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid";
+  }>;
+}
+
+/** One scheduled installment together with its live paid/past_due/waived state — see DrizzleAgreementInstallmentStatusReader's own doc comment for why this is a separate reader from AgreementService's own schedule projection. */
+export interface InstallmentWithStatus {
+  id: string;
+  sequenceNumber: number;
+  dueDate: string;
+  amountMinorUnits: number;
+  status: "scheduled" | "paid" | "past_due" | "waived";
+}
+
+export interface AgreementInstallmentStatusReader {
+  listForAgreement(agreementId: string): Promise<InstallmentWithStatus[]>;
+}
+
+/** Narrow view onto PaymentAttemptRepository.listByAgreementId — only the fields Step 5 needs to tell "processing" from "failed" from "nothing attempted yet" for the next-due installment. */
+export interface AgreementPaymentAttemptRecord {
+  installmentScheduleItemId: string | null;
+  status: string;
+  failureReason: string | null;
+  createdAt: Date;
+}
+
+export interface AgreementPaymentAttemptsReader {
+  listByAgreementId(agreementId: string): Promise<AgreementPaymentAttemptRecord[]>;
+}
+
 export interface AgreementProgressServiceDeps {
   agreementService: AgreementService;
   relationshipPaymentMethods: RelationshipPaymentMethodReader;
   cancellation: AgreementCancellationReader;
+  mandates: AgreementMandateReader;
+  installments: AgreementInstallmentStatusReader;
+  paymentAttempts: AgreementPaymentAttemptsReader;
+  balance: AgreementBalanceReader;
 }
+
+/**
+ * Restore agreement payment functionality: shared, computed-once payment-readiness snapshot for one
+ * agreement/relationship, reused by both Step 3 (payment method) and Step 5 (active) so a single
+ * getProgress() call never fetches the relationship's financial accounts or the agreement's mandate
+ * twice.
+ */
+interface PaymentReadiness {
+  debtorFundingAssigned: boolean;
+  debtorMandateActive: boolean;
+  creditorPayoutReady: boolean;
+}
+
+const OPEN_PAYMENT_ATTEMPT_STATUSES = new Set(["pending", "scheduled", "submitted", "processing"]);
+const FAILED_PAYMENT_ATTEMPT_STATUSES = new Set(["failed", "canceled", "returned"]);
 
 const STATUS_LABELS: Record<AgreementStatus, string> = {
   draft: "Draft",
@@ -137,7 +210,7 @@ export class AgreementProgressService {
     // place that ever needs to reason about "what happens after cancellation" — every consumer
     // (Agreement Detail, the agreements list's attentionLabel, mobile) reads this same result.
     if (agreement.status === "mutually_canceled") {
-      return this.buildCancelledProgress(agreementId, myRole, agreement.relationshipId, actingUserId);
+      return this.buildCancelledProgress(agreementId, myRole);
     }
 
     const steps: AgreementProgressStep[] = [];
@@ -155,9 +228,12 @@ export class AgreementProgressService {
     // Step 2 — acceptance: draft (either party submits) -> debtor acknowledges -> creditor decides.
     steps.push(this.acceptanceStep(agreement.status, myRole));
 
-    // Step 3 — payment method: informational, not a hard gate (matches actual activation logic —
-    // AgreementCompletionService activates purely on a cleared payment, never on account assignment).
-    steps.push(await this.paymentMethodStep(agreement.relationshipId, myRole, actingUserId));
+    // Step 3 — payment method: derives a truthful, role-specific readiness status (never a bare
+    // "Optional") from the relationship's funding/payout assignment plus this agreement's own ACH
+    // mandate — see PaymentReadiness's doc comment for why this is computed once and shared with
+    // Step 5 below.
+    const readiness = await this.computePaymentReadiness(agreement.relationshipId, agreementId, actingUserId);
+    steps.push(this.paymentMethodStep(readiness, myRole, agreementId));
 
     // Step 4 — signatures: dependency-aware only on the schedule not being stale — never invites a
     // signature attempt that would just fail server-side. Also Originator/Counterparty aware
@@ -176,11 +252,14 @@ export class AgreementProgressService {
       }),
     );
 
-    // Step 5 — active.
-    steps.push(this.activeStep(agreement.status));
+    // Step 5 — active: truthful post-signing payment-readiness/status state machine — see
+    // activeStep's own doc comment. Never falls back to a generic "Waiting on other party".
+    steps.push(
+      await this.activeStep({ status: agreement.status, myRole, agreementId, readiness, currency: agreement.currency }),
+    );
 
     const actionableForMeCount = steps.filter((s) => s.status === "action_required").length;
-    const primaryAction = this.computePrimaryAction(steps, agreement.status, myRole);
+    const primaryAction = this.computePrimaryAction(steps, agreement.status);
 
     return { agreementId, myRole, status: agreement.status, steps, primaryAction, actionableForMeCount };
   }
@@ -194,12 +273,7 @@ export class AgreementProgressService {
    * for a phase that never finished. Steps 4-5 (signatures, active) are always "Cancelled": once
    * cancelled, there is no further prerequisite to complete or gate.
    */
-  private async buildCancelledProgress(
-    agreementId: string,
-    myRole: PartyRole,
-    relationshipId: string | null,
-    actingUserId: string,
-  ): Promise<AgreementProgress> {
+  private async buildCancelledProgress(agreementId: string, myRole: PartyRole): Promise<AgreementProgress> {
     const cancellationInfo = await this.deps.cancellation.getCancellationInfo(agreementId);
     const acceptanceHadCompleted = !!cancellationInfo && !["draft", "awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance"].includes(cancellationInfo.previousStatus);
 
@@ -220,7 +294,13 @@ export class AgreementProgressService {
             cta: null,
           }
         : this.cancelledStep("acceptance", "Review & acceptance"),
-      await this.paymentMethodStep(relationshipId, myRole, actingUserId),
+      {
+        key: "payment_method",
+        label: "Payment method",
+        status: "optional",
+        description: "This agreement was cancelled. Payment setup is no longer relevant.",
+        cta: null,
+      },
       this.cancelledStep("signatures", "Review & signatures"),
       this.cancelledStep("active", "Agreement active"),
     ];
@@ -304,47 +384,42 @@ export class AgreementProgressService {
         };
   }
 
-  private async paymentMethodStep(
+  /**
+   * Restore agreement payment functionality: computes the shared readiness snapshot once per
+   * getProgress() call. Returns null when there's no linked relationship, or the acting user's
+   * relationship-account read isn't resolvable — both degrade Step 3/5 to the same safe,
+   * non-blocking "not required" display the old implementation used, rather than failing the whole
+   * progress read (see class doc comment).
+   */
+  private async computePaymentReadiness(
     relationshipId: string | null,
-    myRole: PartyRole,
+    agreementId: string,
     actingUserId: string,
-  ): Promise<AgreementProgressStep> {
-    if (!relationshipId) {
-      return {
-        key: "payment_method",
-        label: "Payment method",
-        status: "optional",
-        description: "Not required for this agreement.",
-        cta: null,
-      };
-    }
-    const requiredUsage = myRole === "debtor" ? "funding" : "payout";
+  ): Promise<PaymentReadiness | null> {
+    if (!relationshipId) return null;
     try {
       const accounts = await this.deps.relationshipPaymentMethods.getRelationshipAccounts(relationshipId, actingUserId);
-      const hasActive = accounts.some(
-        (a) => a.usage === requiredUsage && a.status === "active" && a.financialAccount.status !== "disabled",
-      );
-      return hasActive
-        ? {
-            key: "payment_method",
-            label: "Payment method",
-            status: "complete",
-            description: myRole === "debtor" ? "A funding account is connected." : "A payout account is connected.",
-            cta: null,
-          }
-        : {
-            key: "payment_method",
-            label: "Payment method",
-            status: "action_required",
-            description:
-              myRole === "debtor"
-                ? "Add a funding account before making payments on this agreement."
-                : "Add a payout account before you can receive payments on this agreement.",
-            cta: { label: "Add payment method", href: "/payment-methods" },
-          };
+      const hasActive = (usage: "funding" | "payout") =>
+        accounts.some((a) => a.usage === usage && a.status === "active" && a.financialAccount.status !== "disabled");
+      const debtorMandateActive = await this.deps.mandates.isActiveForAgreement(agreementId);
+      return {
+        debtorFundingAssigned: hasActive("funding"),
+        debtorMandateActive,
+        creditorPayoutReady: hasActive("payout"),
+      };
     } catch {
-      // Not a participant of the linked relationship, or it's not resolvable — degrade to
-      // informational rather than failing the whole progress read (see class doc comment).
+      return null;
+    }
+  }
+
+  /**
+   * Step 3 — payment method. Never a bare "Optional": once a relationship is linked, each party sees
+   * only their own actionable item (debtor funding-source setup vs. creditor payout-destination
+   * setup) — a party is never sent into the other party's account setup, and once both are ready the
+   * step reads "Complete", never leaving a stale "action required" chip after setup succeeds.
+   */
+  private paymentMethodStep(readiness: PaymentReadiness | null, myRole: PartyRole, agreementId: string): AgreementProgressStep {
+    if (!readiness) {
       return {
         key: "payment_method",
         label: "Payment method",
@@ -353,6 +428,61 @@ export class AgreementProgressService {
         cta: null,
       };
     }
+    const debtorReady = readiness.debtorFundingAssigned && readiness.debtorMandateActive;
+    if (debtorReady && readiness.creditorPayoutReady) {
+      return {
+        key: "payment_method",
+        label: "Payment method",
+        status: "complete",
+        statusText: "Payment method — Complete",
+        description: "Payment accounts are ready for this agreement.",
+        cta: null,
+      };
+    }
+    if (myRole === "debtor") {
+      if (!debtorReady) {
+        return {
+          key: "payment_method",
+          label: "Payment method",
+          status: "action_required",
+          statusText: "Payment setup required",
+          description: "Add a payment method so payments can be made under this agreement.",
+          cta: {
+            label: "Set up payment method",
+            href: readiness.debtorFundingAssigned
+              ? `/agreements/payment-authorize?id=${agreementId}`
+              : "/payment-methods",
+          },
+        };
+      }
+      return {
+        key: "payment_method",
+        label: "Payment method",
+        status: "waiting",
+        statusText: "Waiting for creditor payout setup",
+        description: "Your payment method is ready. Waiting for the creditor to set up a payout account.",
+        cta: null,
+      };
+    }
+    // myRole === "creditor"
+    if (!readiness.creditorPayoutReady) {
+      return {
+        key: "payment_method",
+        label: "Payment method",
+        status: "action_required",
+        statusText: "Payout setup required",
+        description: "Add the account where you want to receive payments from this agreement.",
+        cta: { label: "Set up payout account", href: "/payment-methods" },
+      };
+    }
+    return {
+      key: "payment_method",
+      label: "Payment method",
+      status: "waiting",
+      statusText: "Waiting for debtor payment setup",
+      description: "Your payout account is ready. Waiting for the debtor to set up a payment method.",
+      cta: null,
+    };
   }
 
   private signaturesStep(input: {
@@ -428,28 +558,34 @@ export class AgreementProgressService {
     };
   }
 
-  private activeStep(status: AgreementStatus): AgreementProgressStep {
-    if (status === "first_payment_pending") {
-      return {
-        key: "active",
-        label: "Agreement active",
-        status: "waiting",
-        description: "Signed. Waiting for the first payment to clear.",
-        cta: null,
-      };
-    }
-    const completedStates: AgreementStatus[] = ["active", "past_due", "paid_in_full", "settled_in_full"];
-    if (completedStates.includes(status)) {
+  /**
+   * Step 5 — active. Restore agreement payment functionality: once both parties have signed, this
+   * step must never read a generic "Waiting on other party" — it derives the exact truthful status
+   * (payment setup required / payout setup required / waiting on the other party's setup / payment
+   * processing / payment failed — action required / payment due / next payment scheduled / paid in
+   * full) from the shared PaymentReadiness snapshot plus the live installment/payment-attempt state.
+   * "mutually_canceled" is deliberately not handled here — getProgress returns via
+   * buildCancelledProgress before this method is ever reached for that status.
+   */
+  private async activeStep(input: {
+    status: AgreementStatus;
+    myRole: PartyRole;
+    agreementId: string;
+    readiness: PaymentReadiness | null;
+    currency: string;
+  }): Promise<AgreementProgressStep> {
+    const { status, myRole, agreementId, readiness, currency } = input;
+
+    if (status === "paid_in_full" || status === "settled_in_full") {
       return {
         key: "active",
         label: "Agreement active",
         status: "complete",
-        description: status === "paid_in_full" || status === "settled_in_full" ? "This agreement is complete." : "This agreement is active.",
+        statusText: "Agreement paid in full",
+        description: "This agreement is complete.",
         cta: null,
       };
     }
-    // "mutually_canceled" is deliberately not handled here — getProgress returns via
-    // buildCancelledProgress before this method is ever reached for that status.
     if (status === "disputed" || status === "paused_by_amendment" || status === "closed") {
       return {
         key: "active",
@@ -459,16 +595,116 @@ export class AgreementProgressService {
         cta: null,
       };
     }
+
+    const signedStates: AgreementStatus[] = ["first_payment_pending", "active", "past_due"];
+    if (!signedStates.includes(status)) {
+      return {
+        key: "active",
+        label: "Agreement active",
+        status: "not_started",
+        description: "Not yet reached.",
+        cta: null,
+      };
+    }
+
+    // `readiness === null` means payment readiness genuinely doesn't apply to this agreement (no
+    // linked relationship — e.g. a manual/off-platform-only agreement) rather than "not ready yet":
+    // fall through to the installment-based status below instead of wrongly gating an active
+    // agreement behind account setup it was never going to need.
+    if (readiness && (!readiness.debtorFundingAssigned || !readiness.debtorMandateActive || !readiness.creditorPayoutReady)) {
+      // Reuses paymentMethodStep's own role-specific wording — the exact same missing requirement
+      // that blocks Step 3 is what "Agreement active" is truthfully waiting on here too.
+      const pm = this.paymentMethodStep(readiness, myRole, agreementId);
+      return { ...pm, key: "active", label: "Agreement active" };
+    }
+
+    const installments = await this.deps.installments.listForAgreement(agreementId);
+    const nextUnpaid = installments.find((i) => i.status !== "paid" && i.status !== "waived");
+    if (!nextUnpaid) {
+      return {
+        key: "active",
+        label: "Agreement active",
+        status: "complete",
+        statusText: "Agreement paid in full",
+        description: "All scheduled payments are complete.",
+        cta: null,
+      };
+    }
+
+    const attempts = await this.deps.paymentAttempts.listByAgreementId(agreementId);
+    const relevantAttempts = attempts
+      .filter((a) => a.installmentScheduleItemId === nextUnpaid.id)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    const openAttempt = relevantAttempts.find((a) => OPEN_PAYMENT_ATTEMPT_STATUSES.has(a.status));
+    if (openAttempt) {
+      return {
+        key: "active",
+        label: "Agreement active",
+        status: "waiting",
+        statusText: "Payment processing",
+        description: myRole === "debtor" ? "Your payment is processing." : "A payment from the debtor is processing.",
+        cta: null,
+      };
+    }
+
+    const lastAttempt = relevantAttempts[0];
+    if (lastAttempt && FAILED_PAYMENT_ATTEMPT_STATUSES.has(lastAttempt.status)) {
+      if (myRole === "debtor") {
+        return {
+          key: "active",
+          label: "Agreement active",
+          status: "action_required",
+          statusText: "Payment failed — action required",
+          description: lastAttempt.failureReason
+            ? `Your last payment attempt failed: ${lastAttempt.failureReason}. Please try again.`
+            : "Your last payment attempt failed. Please try again.",
+          cta: { label: "Make payment", href: `/agreements/detail?id=${agreementId}#make-payment` },
+        };
+      }
+      return {
+        key: "active",
+        label: "Agreement active",
+        status: "waiting",
+        statusText: "Payment not yet completed",
+        description: "The debtor's last payment attempt failed. They've been notified.",
+        cta: null,
+      };
+    }
+
+    const amount = formatMoney(nextUnpaid.amountMinorUnits, currency);
+    const overdue = isPastDate(nextUnpaid.dueDate);
+    const remainingSuffix = await this.remainingBalanceSuffix(agreementId, currency);
+    if (myRole === "debtor") {
+      return {
+        key: "active",
+        label: "Agreement active",
+        status: overdue ? "action_required" : "waiting",
+        statusText: overdue ? "Payment due" : "Next payment scheduled",
+        description: `Payment of ${amount} is due ${nextUnpaid.dueDate}.${remainingSuffix}`,
+        cta: { label: "Make payment", href: `/agreements/detail?id=${agreementId}#make-payment` },
+      };
+    }
     return {
       key: "active",
       label: "Agreement active",
-      status: "not_started",
-      description: "Not yet reached.",
+      status: "waiting",
+      statusText: "Next payment scheduled",
+      description: `Next payment of ${amount} from the debtor is due ${nextUnpaid.dueDate}.${remainingSuffix}`,
       cta: null,
     };
   }
 
-  private computePrimaryAction(steps: AgreementProgressStep[], status: AgreementStatus, myRole: PartyRole): AgreementPrimaryAction {
+  /** Restore agreement payment functionality: read-only, best-effort — a balance lookup failure (e.g. no signed version yet, which shouldn't be reachable here but is defended anyway) just omits the suffix rather than failing the whole progress read. */
+  private async remainingBalanceSuffix(agreementId: string, currency: string): Promise<string> {
+    try {
+      const { remainingBalanceMinorUnits } = await this.deps.balance.getAgreementBalance(agreementId);
+      return ` Remaining balance: ${formatMoney(remainingBalanceMinorUnits, currency)}.`;
+    } catch {
+      return "";
+    }
+  }
+
+  private computePrimaryAction(steps: AgreementProgressStep[], status: AgreementStatus): AgreementPrimaryAction {
     const mine = steps.find((s) => s.status === "action_required");
     if (mine) {
       return { label: mine.cta?.label ?? mine.label, description: mine.description, cta: mine.cta };
@@ -479,12 +715,11 @@ export class AgreementProgressService {
     }
     const waiting = steps.find((s) => s.status === "waiting");
     if (waiting) {
-      return { label: "Waiting for other party", description: waiting.description, cta: null };
-    }
-    if (status === "active" || status === "past_due") {
-      return myRole === "debtor"
-        ? { label: "Make payment", description: "Continue making scheduled payments.", cta: { label: "Make payment", href: "/payments" } }
-        : { label: "Agreement active", description: "This agreement is active.", cta: null };
+      // Restore agreement payment functionality: "Waiting for other party" is now only ever a
+      // fallback for the pre-existing acceptance/signatures waiting cases, which don't set
+      // statusText — every payment-readiness waiting state (payout setup, payment processing, next
+      // payment scheduled, ...) supplies its own truthful statusText instead.
+      return { label: waiting.statusText ?? "Waiting for other party", description: waiting.description, cta: null };
     }
     if (status === "paid_in_full" || status === "settled_in_full") {
       return { label: "Agreement complete", description: "This agreement is complete.", cta: null };
