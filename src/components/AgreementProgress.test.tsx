@@ -1,7 +1,10 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import { AgreementProgress } from "./AgreementProgress";
 import type { AgreementProgress as AgreementProgressData } from "@/lib/agreements/agreementProgressService";
+
+vi.mock("next/navigation", () => ({ usePathname: () => "/agreements/detail" }));
 
 function baseData(overrides: Partial<AgreementProgressData> = {}): AgreementProgressData {
   return {
@@ -157,6 +160,51 @@ describe("AgreementProgress", () => {
     );
     expect(screen.getByText("Waiting for creditor payout setup")).toBeInTheDocument();
     expect(screen.queryByText("Waiting on other party")).not.toBeInTheDocument();
+  });
+
+  describe("Fix the 'Make payment' button (mandatory command): same-page anchor CTAs scroll reliably instead of relying on Next.js Link's same-pathname hash navigation", () => {
+    it("scrolls the target element into view directly, rather than only navigating, for a CTA pointing at an anchor on the current page", async () => {
+      const user = userEvent.setup();
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+
+      render(
+        <div>
+          <div id="make-payment" />
+          <AgreementProgress
+            data={baseData({
+              steps: baseData().steps.map((s) =>
+                s.key === "active"
+                  ? { ...s, status: "waiting", statusText: "Next payment scheduled", cta: { label: "Make payment", href: "/agreements/detail?id=agreement-1#make-payment" } }
+                  : s,
+              ),
+            })}
+          />
+        </div>,
+      );
+
+      await user.click(screen.getByRole("link", { name: "Make payment" }));
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    });
+
+    it("falls back to normal navigation (no scroll call) when the CTA points at a different page", async () => {
+      const user = userEvent.setup();
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+
+      render(
+        <AgreementProgress
+          data={baseData({
+            steps: baseData().steps.map((s) => (s.key === "payment_method" ? { ...s, cta: { label: "Set up payment method", href: "/payment-methods" } } : s)),
+          })}
+        />,
+      );
+
+      const link = screen.getByRole("link", { name: "Set up payment method" });
+      await user.click(link);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      expect(link).toHaveAttribute("href", "/payment-methods");
+    });
   });
 
   it("renders a blocked step's exact reason, not a generic message", () => {

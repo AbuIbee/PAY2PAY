@@ -125,7 +125,14 @@ describe("GET /api/agreements/payment-setup/next-payment", () => {
   function handler() {
     return withErrorHandling(
       "agreement_payment_setup_next_payment",
-      createAgreementNextPaymentHandler(authCtx.authService, relCtx.agreementService, installments, balanceCtx.balanceService, relCtx.relationshipFinancialAccountService),
+      createAgreementNextPaymentHandler(
+        authCtx.authService,
+        relCtx.agreementService,
+        installments,
+        balanceCtx.balanceService,
+        relCtx.relationshipFinancialAccountService,
+        { getDisplayName: async () => "Test Creditor" },
+      ),
     );
   }
 
@@ -160,6 +167,24 @@ describe("GET /api/agreements/payment-setup/next-payment", () => {
     const response = await handler()(get(agreementId, creditor.token));
     const body = (await response.json()) as { fundingAccountLabel: string | null };
     expect(body.fundingAccountLabel).toBeNull();
+  });
+
+  it("Fix the 'Make payment' button: returns the creditor's display name to the debtor for the payment review step", async () => {
+    const { agreementId, debtor } = await createLinkedAgreementWithFunding();
+    balanceCtx.terms.set(agreementId, 120_000, "USD");
+
+    const response = await handler()(get(agreementId, debtor.token));
+    const body = (await response.json()) as { recipientDisplayName: string | null };
+    expect(body.recipientDisplayName).toBe("Test Creditor");
+  });
+
+  it("Fix the 'Make payment' button: never returns a recipientDisplayName to the creditor (only the debtor pays, so only the debtor needs to know who they're paying)", async () => {
+    const { agreementId, creditor } = await createLinkedAgreementWithFunding();
+    balanceCtx.terms.set(agreementId, 120_000, "USD");
+
+    const response = await handler()(get(agreementId, creditor.token));
+    const body = (await response.json()) as { recipientDisplayName: string | null };
+    expect(body.recipientDisplayName).toBeNull();
   });
 
   it("degrades remaining balance to null (never 500s) when the balance isn't computable yet", async () => {

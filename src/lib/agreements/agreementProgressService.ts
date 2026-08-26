@@ -417,15 +417,30 @@ export class AgreementProgressService {
    * only their own actionable item (debtor funding-source setup vs. creditor payout-destination
    * setup) — a party is never sent into the other party's account setup, and once both are ready the
    * step reads "Complete", never leaving a stale "action required" chip after setup succeeds.
+   *
+   * Fix the "Make payment" button (mandatory command): `readiness === null` used to be read as "this
+   * agreement genuinely doesn't need payment setup" and reported "optional"/"Not required" — that
+   * assumption is false for any agreement created via the agreement-invitation ("Invite someone")
+   * flow, which never links a relationship (AgreementInvitationService never calls
+   * RelationshipService.linkAgreement) and therefore can never have a relationship-scoped funding or
+   * payout account assigned. Reporting "optional" here previously let Step 5 (activeStep, below) fall
+   * through and offer a "Make payment" CTA that could never lead to a working payment, since
+   * AgreementDetail.tsx only renders the real payment panel once this step reads "complete" — a dead
+   * button. `blocked` here (not `optional`) is truthful: this agreement cannot self-serve payment
+   * setup right now, and support is the only real next step.
    */
   private paymentMethodStep(readiness: PaymentReadiness | null, myRole: PartyRole, agreementId: string): AgreementProgressStep {
     if (!readiness) {
       return {
         key: "payment_method",
         label: "Payment method",
-        status: "optional",
-        description: "Not required for this agreement.",
-        cta: null,
+        status: "blocked",
+        statusText: myRole === "debtor" ? "Payment setup unavailable" : "Payout setup unavailable",
+        description:
+          myRole === "debtor"
+            ? "This agreement isn't linked to a connection, so a funding account can't be assigned yet. Contact support for help."
+            : "This agreement isn't linked to a connection, so a payout account can't be assigned yet. Contact support for help.",
+        cta: { label: "Contact support", href: "/support" },
       };
     }
     const debtorReady = readiness.debtorFundingAssigned && readiness.debtorMandateActive;
@@ -607,11 +622,14 @@ export class AgreementProgressService {
       };
     }
 
-    // `readiness === null` means payment readiness genuinely doesn't apply to this agreement (no
-    // linked relationship — e.g. a manual/off-platform-only agreement) rather than "not ready yet":
-    // fall through to the installment-based status below instead of wrongly gating an active
-    // agreement behind account setup it was never going to need.
-    if (readiness && (!readiness.debtorFundingAssigned || !readiness.debtorMandateActive || !readiness.creditorPayoutReady)) {
+    // Fix the "Make payment" button (mandatory command): `readiness === null` used to be treated as
+    // "payment readiness genuinely doesn't apply — fall through to a plain 'Make payment' CTA below."
+    // That was wrong: every real path that reaches "active" status needs a real funding/payout
+    // account, and AgreementDetail.tsx's payment panel only ever renders once `payment_method` reads
+    // "complete" — which a null-readiness agreement (no linked relationship) can never reach. Treating
+    // null the same as "not ready" here means Step 5 always matches what the debtor can actually do —
+    // never a "Make payment" CTA pointing at a panel that will never exist.
+    if (!readiness || !readiness.debtorFundingAssigned || !readiness.debtorMandateActive || !readiness.creditorPayoutReady) {
       // Reuses paymentMethodStep's own role-specific wording — the exact same missing requirement
       // that blocks Step 3 is what "Agreement active" is truthfully waiting on here too.
       const pm = this.paymentMethodStep(readiness, myRole, agreementId);

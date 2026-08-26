@@ -224,10 +224,13 @@ describe("AgreementProgressService", () => {
   });
 
   describe("payment method — item: 'only require this step when the agreement type actually requires it'", () => {
-    it("marks the step optional (not blocking) when the agreement has no linked relationship", async () => {
+    it("Fix the 'Make payment' button: reports 'blocked' (never a falsely-reassuring 'optional') when the agreement has no linked relationship, since no relationship-scoped funding/payout account can ever be assigned", async () => {
       const { agreementId, creditorUserId } = await createAgreement();
       const progress = await progressService.getProgress(agreementId, creditorUserId);
-      expect(progress.steps.find((s) => s.key === "payment_method")?.status).toBe("optional");
+      const step = progress.steps.find((s) => s.key === "payment_method");
+      expect(step?.status).toBe("blocked");
+      expect(step?.statusText).toBe("Payout setup unavailable");
+      expect(step?.cta).toEqual({ label: "Contact support", href: "/support" });
     });
 
     it("action_required with a direct CTA when linked to a relationship with no matching account assigned", async () => {
@@ -287,14 +290,14 @@ describe("AgreementProgressService", () => {
       expect(debtorStep?.statusText).toBe("Payment setup required");
     });
 
-    it("degrades to optional (never crashes) if the relationship read fails — e.g. acting user isn't a participant", async () => {
+    it("degrades to blocked (never crashes, never falsely 'optional') if the relationship read fails — e.g. acting user isn't a participant", async () => {
       const { agreementId, creditorUserId } = await createAgreement();
       const relationshipId = randomUUID();
       ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
       relationshipPaymentMethods.throwFor.add(relationshipId);
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
-      expect(progress.steps.find((s) => s.key === "payment_method")?.status).toBe("optional");
+      expect(progress.steps.find((s) => s.key === "payment_method")?.status).toBe("blocked");
     });
   });
 
@@ -385,14 +388,14 @@ describe("AgreementProgressService", () => {
       await ctx.agreementService.signAgreement(agreementId, debtorUserId);
     }
 
-    it("no linked relationship (e.g. manual/off-platform): falls through to the next-due installment rather than the payment-method gate", async () => {
+    it("Fix the 'Make payment' button: no linked relationship — reports the same truthful 'blocked' state as Step 3, never a 'Make payment' CTA that can't lead to a working payment", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       await signBoth(agreementId, creditorUserId, debtorUserId);
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       const step = progress.steps.find((s) => s.key === "active");
-      expect(step?.status).toBe("waiting");
-      expect(step?.statusText).toBe("Next payment scheduled");
+      expect(step?.status).toBe("blocked");
+      expect(step?.cta).not.toEqual({ label: "Make payment", href: expect.stringContaining("#make-payment") });
     });
 
     it("STATE B — debtor funding/mandate missing: debtor sees 'Payment setup required', creditor sees 'Waiting for debtor payment setup' with no action of their own", async () => {
@@ -669,6 +672,17 @@ describe("AgreementProgressService", () => {
     it("surfaces the blocking prerequisite when nothing is actionable but something is blocked", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement({ firstPaymentDate: "2020-01-01" });
       await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      // Isolate the signatures block being tested from the (also now legitimately "blocked")
+      // no-relationship payment_method state — link a relationship with fully-ready accounts so
+      // payment_method reads "complete" and the signatures block is the only one left to surface.
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       expect(progress.primaryAction.description).toMatch(/2020-01-01/);
     });
@@ -676,6 +690,15 @@ describe("AgreementProgressService", () => {
     it("reports 'waiting for other party' once I've done everything I can", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      // Isolate the signatures wait being tested from the (also now legitimately "blocked")
+      // no-relationship payment_method state — link a relationship with fully-ready accounts.
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
       await ctx.agreementService.signAgreement(agreementId, creditorUserId);
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       expect(progress.primaryAction.label).toBe("Waiting for other party");

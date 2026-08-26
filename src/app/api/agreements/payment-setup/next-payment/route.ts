@@ -8,6 +8,8 @@ import type { BalanceService } from "@/lib/ledger/balanceService";
 import { getBalanceService } from "@/lib/ledger/getBalanceService";
 import type { RelationshipFinancialAccountService } from "@/lib/relationships/relationshipFinancialAccountService";
 import { getRelationshipFinancialAccountService } from "@/lib/relationships/getRelationshipFinancialAccountService";
+import type { ProfileDisplayReader } from "@/lib/documents/profileDisplayReader";
+import { DrizzleProfileDisplayReader } from "@/lib/documents/drizzleProfileDisplayReader";
 import type { AuthService } from "@/lib/auth/authService";
 import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
@@ -22,6 +24,11 @@ export const dynamic = "force-dynamic";
  * the debtor only) a masked label for their already-connected funding account. Deliberately never
  * returns a raw provider account reference — only a display label — matching this codebase's
  * established "the browser never sees a bank token" invariant.
+ *
+ * Fix the "Make payment" button (mandatory command): also returns `recipientDisplayName` (for the
+ * debtor, the creditor's best-effort display name via the existing ProfileDisplayReader — the same
+ * reader already used for PDF/evidence records — never a new lookup service) so the debtor's payment
+ * review step can show who they're paying, not just an amount and a due date.
  */
 export function createAgreementNextPaymentHandler(
   authService: AuthService,
@@ -29,6 +36,7 @@ export function createAgreementNextPaymentHandler(
   installments: AgreementInstallmentStatusReader,
   balance: BalanceService,
   relationshipAccounts: RelationshipFinancialAccountService,
+  profileDisplay: ProfileDisplayReader,
 ) {
   return async function handleGet(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
@@ -62,6 +70,15 @@ export function createAgreementNextPaymentHandler(
       }
     }
 
+    let recipientDisplayName: string | null = null;
+    if (myRole === "debtor") {
+      try {
+        recipientDisplayName = await profileDisplay.getDisplayName(agreement.creditorProfileKind, agreement.creditorProfileId);
+      } catch {
+        // Best-effort only — omit rather than fail the whole read.
+      }
+    }
+
     return NextResponse.json(
       {
         nextInstallment: nextUnpaid
@@ -69,6 +86,7 @@ export function createAgreementNextPaymentHandler(
           : null,
         remainingBalanceMinorUnits,
         fundingAccountLabel,
+        recipientDisplayName,
       },
       { status: 200 },
     );
@@ -82,6 +100,7 @@ async function handleGet(request: NextRequest): Promise<Response> {
     new DrizzleAgreementInstallmentStatusReader(),
     getBalanceService(),
     getRelationshipFinancialAccountService(),
+    new DrizzleProfileDisplayReader(),
   )(request);
 }
 

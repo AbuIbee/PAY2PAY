@@ -7,6 +7,7 @@ const mockRouterPush = vi.fn();
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams({ id: "agreement-1" }),
   useRouter: () => ({ push: mockRouterPush }),
+  usePathname: () => "/agreements/detail",
 }));
 
 const BASE_TERMS = {
@@ -357,6 +358,7 @@ describe("AgreementDetail", () => {
               nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 },
               remainingBalanceMinorUnits: 90000,
               fundingAccountLabel: "Test Bank ····4242",
+              recipientDisplayName: "Jordan Creditor",
             },
           },
           "/api/ach/payments/manual": { body: { id: "payment-1", status: "scheduled" } },
@@ -367,13 +369,21 @@ describe("AgreementDetail", () => {
       render(<AgreementDetail />);
 
       expect(await screen.findByRole("heading", { name: "Make a payment" })).toBeInTheDocument();
+      expect(screen.getByText("Pay to: Jordan Creditor")).toBeInTheDocument();
       expect(screen.getByText("Amount due: $100.00")).toBeInTheDocument();
       expect(screen.getByText(/Remaining balance: \$900\.00/)).toBeInTheDocument();
       expect(screen.getByText(/Funding source: Test Bank ····4242/)).toBeInTheDocument();
+      expect(screen.getByText(/Payment method: ACH bank transfer/)).toBeInTheDocument();
+      expect(screen.getByText(/Fee: None/)).toBeInTheDocument();
       // No false claim of automation — this system is manual/debtor-initiated (no due-date cron exists).
       expect(screen.getByText(/not collected automatically/i)).toBeInTheDocument();
 
-      await user.click(screen.getByRole("button", { name: "Pay $100.00" }));
+      // First click never submits — it opens the explicit review/confirm step.
+      await user.click(screen.getByRole("button", { name: "Review payment" }));
+      expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/ach/payments/manual"))).toBe(false);
+      expect(await screen.findByText(/Confirm payment of \$100\.00 to Jordan Creditor/)).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Confirm payment" }));
 
       const manualCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/ach/payments/manual"));
       if (!manualCall) throw new Error("expected a manual payment call");
@@ -391,6 +401,56 @@ describe("AgreementDetail", () => {
       // Never an optimistic "Payment complete" — shows only the real provider-consistent status returned.
       expect(await screen.findByText(/Payment submitted — status: scheduled/)).toBeInTheDocument();
       expect(screen.queryByText(/payment complete/i)).not.toBeInTheDocument();
+    });
+
+    it("Fix the 'Make payment' button: 'Cancel' on the confirmation step backs out without submitting, and clicking 'Confirm payment' twice never submits twice", async () => {
+      const user = userEvent.setup();
+      const fetchMock = vi.fn().mockImplementation(
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+          "/api/agreements/progress": {
+            body: { agreementId: "agreement-1", myRole: "debtor", status: "active", steps: READY_PROGRESS_STEPS, primaryAction: { label: "x", description: "x", cta: null }, actionableForMeCount: 0 },
+          },
+          "/api/agreements/payment-setup/next-payment": {
+            body: {
+              nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 },
+              remainingBalanceMinorUnits: 90000,
+              fundingAccountLabel: "Test Bank ····4242",
+              recipientDisplayName: "Jordan Creditor",
+            },
+          },
+          "/api/ach/payments/manual": { body: { id: "payment-1", status: "scheduled" } },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      render(<AgreementDetail />);
+
+      function manualCallCount() {
+        return fetchMock.mock.calls.filter((call) => String(call[0]).includes("/api/ach/payments/manual")).length;
+      }
+
+      await screen.findByRole("heading", { name: "Make a payment" });
+      await user.click(screen.getByRole("button", { name: "Review payment" }));
+      await screen.findByText(/Confirm payment of \$100\.00/);
+
+      // Cancel backs out without ever calling the payment API.
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.getByRole("button", { name: "Review payment" })).toBeInTheDocument();
+      expect(manualCallCount()).toBe(0);
+
+      // Re-entering and confirming for real only submits once, even if clicked twice in quick succession.
+      await user.click(screen.getByRole("button", { name: "Review payment" }));
+      const confirmButton = await screen.findByRole("button", { name: "Confirm payment" });
+      await Promise.all([user.click(confirmButton), user.click(confirmButton)]);
+      await screen.findByText(/Payment submitted/);
+      expect(manualCallCount()).toBe(1);
     });
 
     it("never shows the Make Payment section to the creditor", async () => {
