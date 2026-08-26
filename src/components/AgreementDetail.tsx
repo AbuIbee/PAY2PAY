@@ -108,11 +108,21 @@ interface AmendmentItem {
   status: string;
   proposingPartyRole: "creditor" | "debtor";
   reason: string;
+  requestedRelief: string | null;
+  proposedEffectiveDate: string | null;
   terms: AgreementTerms;
-  frequency: string;
+  frequency: "weekly" | "biweekly" | "monthly";
+  feeAllocation: "creditor_pays" | "debtor_pays" | "split_evenly";
   creditorSignedAt: string | null;
   debtorSignedAt: string | null;
+  resultingVersionId: string | null;
   createdAt: string;
+}
+
+interface AmendmentPreviewData {
+  schedule: ScheduleItem[];
+  finalPaymentMinorUnits: number;
+  numberOfInstallments: number;
 }
 
 interface PartialPaymentItem {
@@ -793,7 +803,17 @@ export function AgreementDetail() {
         onChanged={() => void load()}
       />
 
-      <AmendmentPanel agreementId={data.id} amendments={amendments} myRole={myRole} onChanged={() => void load()} />
+      <AmendmentPanel
+        agreementId={data.id}
+        amendments={amendments}
+        myRole={myRole}
+        currentTerms={terms}
+        currentFrequency={data.version.frequency}
+        currentFeeAllocation={data.version.feeAllocation}
+        currentSchedule={data.schedule}
+        currency={data.currency}
+        onChanged={() => void load()}
+      />
 
       <PartialPaymentPanel agreementId={data.id} requests={partialPayments} myRole={myRole} onChanged={() => void load()} />
 
@@ -1240,15 +1260,267 @@ function EvidenceWitnessPanel({
   );
 }
 
+function frequencyLabel(frequency: "weekly" | "biweekly" | "monthly"): string {
+  switch (frequency) {
+    case "weekly":
+      return "Weekly";
+    case "biweekly":
+      return "Every two weeks";
+    case "monthly":
+      return "Monthly";
+  }
+}
+
+/** One current-vs-proposed row — only rendered distinctly (bolded) when the two values actually differ, so the recipient's eye goes straight to what's changing. */
+function ComparisonRow({ label, current, proposed }: { label: string; current: string; proposed: string }) {
+  const changed = current !== proposed;
+  return (
+    <tr>
+      <td data-label="Term" style={{ fontWeight: 600 }}>
+        {label}
+      </td>
+      <td data-label="Current">{current}</td>
+      <td data-label="Proposed" style={changed ? { fontWeight: 700, color: "var(--gold-strong, #7a5610)" } : undefined}>
+        {proposed}
+        {changed && (
+          <span className="chip chip--warning" style={{ marginLeft: "0.5rem" }}>
+            Changed
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Receiving-party amendment review remediation: the full "what will actually change" view — current
+ * vs proposed terms, the proposed effective schedule, and a clear "not yet effective" banner so this
+ * can never be mistaken for the currently executed agreement. Reads only `amendment.terms`/
+ * `frequency`/`feeAllocation` (already delivered on every amendment record — never a second, partial
+ * amendment-summary payload) plus a lazily-fetched schedule preview for the itemized due-date table.
+ */
+function AmendmentReviewView({
+  amendment,
+  currentTerms,
+  currentFrequency,
+  currentFeeAllocation,
+  currentSchedule,
+  currency,
+}: {
+  amendment: AmendmentItem;
+  currentTerms: AgreementTerms;
+  currentFrequency: "weekly" | "biweekly" | "monthly";
+  currentFeeAllocation: "creditor_pays" | "debtor_pays" | "split_evenly";
+  currentSchedule: ScheduleItem[];
+  currency: string;
+}) {
+  const [preview, setPreview] = useState<AmendmentPreviewData | "loading" | "error">("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<AmendmentPreviewData>(`/api/agreements/amendments/preview?id=${amendment.id}`)
+      .then((body) => {
+        if (!cancelled) setPreview(body);
+      })
+      .catch(() => {
+        if (!cancelled) setPreview("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [amendment.id]);
+
+  const nextDueCurrent = currentSchedule[0]?.dueDate ?? currentTerms.firstPaymentDate;
+  const nextDueProposed = amendment.terms.firstPaymentDate;
+
+  return (
+    <div className="card" style={{ marginTop: "0.75rem", border: "2px solid var(--gold-strong, #7a5610)" }}>
+      <p
+        role="status"
+        style={{
+          margin: "0 0 1rem",
+          padding: "0.6rem 0.85rem",
+          borderRadius: "0.6rem",
+          fontWeight: 700,
+          fontSize: "0.85rem",
+          background: "var(--gold-soft)",
+          color: "#7a5610",
+        }}
+      >
+        PROPOSED REVISED AGREEMENT — NOT YET EFFECTIVE. The current, executed agreement (shown above) remains
+        controlling until this amendment is accepted and, if required, fully signed.
+      </p>
+
+      <p style={{ margin: 0 }}>
+        Proposed by <strong>{amendment.proposingPartyRole}</strong> on {formatDate(amendment.createdAt)}
+      </p>
+      <p style={{ margin: "0.35rem 0 0" }}>
+        <strong>Reason:</strong> {amendment.reason}
+      </p>
+      {amendment.requestedRelief && (
+        <p style={{ margin: "0.35rem 0 0" }}>
+          <strong>Requested relief:</strong> {amendment.requestedRelief}
+        </p>
+      )}
+      {amendment.proposedEffectiveDate && (
+        <p style={{ margin: "0.35rem 0 0" }}>
+          <strong>Proposed effective date:</strong> {formatDate(amendment.proposedEffectiveDate)}
+        </p>
+      )}
+
+      <div className="table-wrap table-wrap--responsive-cards" style={{ marginTop: "1rem" }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Term</th>
+              <th>Current</th>
+              <th>Proposed</th>
+            </tr>
+          </thead>
+          <tbody>
+            <ComparisonRow
+              label="Payment amount"
+              current={formatMoney(currentTerms.installmentAmountMinorUnits, currency)}
+              proposed={formatMoney(amendment.terms.installmentAmountMinorUnits, currency)}
+            />
+            <ComparisonRow label="Frequency" current={frequencyLabel(currentFrequency)} proposed={frequencyLabel(amendment.frequency)} />
+            <ComparisonRow
+              label="Fee allocation"
+              current={feeAllocationLabel(currentFeeAllocation)}
+              proposed={feeAllocationLabel(amendment.feeAllocation)}
+            />
+            <ComparisonRow label="Next due date" current={formatDate(nextDueCurrent)} proposed={formatDate(nextDueProposed)} />
+            <ComparisonRow
+              label="Remaining balance"
+              current={formatMoney(currentTerms.currentPrincipalMinorUnits, currency)}
+              proposed={formatMoney(amendment.terms.currentPrincipalMinorUnits, currency)}
+            />
+            <ComparisonRow
+              label="Final payment amount"
+              current={formatMoney(currentTerms.finalPaymentMinorUnits, currency)}
+              proposed={formatMoney(amendment.terms.finalPaymentMinorUnits, currency)}
+            />
+            <ComparisonRow
+              label="Remaining schedule"
+              current={`${currentTerms.numberOfInstallments} payments`}
+              proposed={`${amendment.terms.numberOfInstallments} payments`}
+            />
+          </tbody>
+        </table>
+      </div>
+
+      {(currentTerms.earlyPayoffTerms !== amendment.terms.earlyPayoffTerms ||
+        currentTerms.hardshipRules !== amendment.terms.hardshipRules ||
+        currentTerms.partialPaymentRules !== amendment.terms.partialPaymentRules ||
+        currentTerms.settlementRules !== amendment.terms.settlementRules ||
+        currentTerms.disputeProcedure !== amendment.terms.disputeProcedure ||
+        currentTerms.description !== amendment.terms.description) && (
+        <div className="table-wrap table-wrap--responsive-cards" style={{ marginTop: "1rem" }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Contract term</th>
+                <th>Current</th>
+                <th>Proposed</th>
+              </tr>
+            </thead>
+            <tbody>
+              <ComparisonRow label="Description" current={currentTerms.description} proposed={amendment.terms.description} />
+              <ComparisonRow label="Early payoff terms" current={currentTerms.earlyPayoffTerms} proposed={amendment.terms.earlyPayoffTerms} />
+              <ComparisonRow label="Hardship rules" current={currentTerms.hardshipRules} proposed={amendment.terms.hardshipRules} />
+              <ComparisonRow label="Partial payment rules" current={currentTerms.partialPaymentRules} proposed={amendment.terms.partialPaymentRules} />
+              <ComparisonRow label="Settlement rules" current={currentTerms.settlementRules} proposed={amendment.terms.settlementRules} />
+              <ComparisonRow label="Dispute procedure" current={currentTerms.disputeProcedure} proposed={amendment.terms.disputeProcedure} />
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <details style={{ marginTop: "1rem" }}>
+        <summary>Full proposed revised agreement text</summary>
+        <div className="card" style={{ marginTop: "0.5rem" }}>
+          <p style={{ margin: 0 }}>
+            <strong>{amendment.terms.category}</strong> — {amendment.terms.description}
+          </p>
+          <p style={{ margin: "0.4rem 0 0" }}>Original amount: {formatMoney(amendment.terms.originalAmountMinorUnits, currency)}</p>
+          <p style={{ margin: 0 }}>Previous payments: {formatMoney(amendment.terms.previousPaymentsMinorUnits, currency)}</p>
+          <p style={{ margin: 0 }}>Current principal: {formatMoney(amendment.terms.currentPrincipalMinorUnits, currency)}</p>
+          <p style={{ margin: 0 }}>
+            First payment: {formatMoney(amendment.terms.firstPaymentMinorUnits, currency)} on {formatDate(amendment.terms.firstPaymentDate)}
+          </p>
+          <p style={{ margin: 0 }}>
+            {frequencyLabel(amendment.frequency)} installments of {formatMoney(amendment.terms.installmentAmountMinorUnits, currency)} (
+            {amendment.terms.numberOfInstallments} remaining, final payment {formatMoney(amendment.terms.finalPaymentMinorUnits, currency)})
+          </p>
+          <p style={{ margin: 0 }}>Fee allocation: {feeAllocationLabel(amendment.feeAllocation)}</p>
+          <p style={{ margin: "0.4rem 0 0" }}>
+            <strong>Early payoff terms:</strong> {amendment.terms.earlyPayoffTerms}
+          </p>
+          <p style={{ margin: "0.4rem 0 0" }}>
+            <strong>Hardship rules:</strong> {amendment.terms.hardshipRules}
+          </p>
+          <p style={{ margin: "0.4rem 0 0" }}>
+            <strong>Partial payment rules:</strong> {amendment.terms.partialPaymentRules}
+          </p>
+          <p style={{ margin: "0.4rem 0 0" }}>
+            <strong>Settlement rules:</strong> {amendment.terms.settlementRules}
+          </p>
+          <p style={{ margin: "0.4rem 0 0" }}>
+            <strong>Dispute procedure:</strong> {amendment.terms.disputeProcedure}
+          </p>
+        </div>
+      </details>
+
+      <div style={{ marginTop: "1rem" }}>
+        <h4 style={{ margin: "0 0 0.5rem" }}>Proposed effective payment schedule</h4>
+        {preview === "loading" && <p className="form-status">Loading proposed schedule…</p>}
+        {preview === "error" && <p className="field-error" role="alert">Could not load the proposed schedule. Please try again.</p>}
+        {preview !== "loading" && preview !== "error" && (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Due date</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.schedule.map((item) => (
+                  <tr key={item.sequenceNumber}>
+                    <td>{item.sequenceNumber === 0 ? "First payment" : item.sequenceNumber}</td>
+                    <td>{formatDate(item.dueDate)}</td>
+                    <td>{formatMoney(item.amountMinorUnits, currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AmendmentPanel({
   agreementId,
   amendments,
   myRole,
+  currentTerms,
+  currentFrequency,
+  currentFeeAllocation,
+  currentSchedule,
+  currency,
   onChanged,
 }: {
   agreementId: string;
   amendments: AmendmentItem[];
   myRole: "creditor" | "debtor" | null;
+  currentTerms: AgreementTerms;
+  currentFrequency: "weekly" | "biweekly" | "monthly";
+  currentFeeAllocation: "creditor_pays" | "debtor_pays" | "split_evenly";
+  currentSchedule: ScheduleItem[];
+  currency: string;
   onChanged: () => void;
 }) {
   const [showForm, setShowForm] = useState(false);
@@ -1256,6 +1528,8 @@ function AmendmentPanel({
   const [reason, setReason] = useState("");
   const [proposedTerms, setProposedTerms] = useState<AgreementTermsFormValues>(BLANK_AGREEMENT_TERMS);
   const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function propose(event: React.FormEvent) {
     event.preventDefault();
@@ -1274,8 +1548,23 @@ function AmendmentPanel({
   }
 
   async function decide(amendmentId: string, decision: "accept" | "reject") {
-    await apiFetch("/api/agreements/amendments/decide", { method: "POST", body: JSON.stringify({ amendmentId, decision }) });
-    onChanged();
+    setActionError(null);
+    try {
+      await apiFetch("/api/agreements/amendments/decide", { method: "POST", body: JSON.stringify({ amendmentId, decision }) });
+      onChanged();
+    } catch (error) {
+      setActionError(error instanceof ApiError ? error.message : "Could not record this decision.");
+    }
+  }
+
+  async function sign(amendmentId: string) {
+    setActionError(null);
+    try {
+      await apiFetch("/api/agreements/amendments/sign", { method: "POST", body: JSON.stringify({ amendmentId }) });
+      onChanged();
+    } catch (error) {
+      setActionError(error instanceof ApiError ? error.message : "Could not sign this amendment.");
+    }
   }
 
   return (
@@ -1289,33 +1578,80 @@ function AmendmentPanel({
         )}
       </div>
 
+      {actionError && (
+        <p className="field-error" role="alert">
+          {actionError}
+        </p>
+      )}
+
       {amendments.length === 0 ? (
         <p className="form-status">No amendments proposed.</p>
       ) : (
         <div style={{ display: "grid", gap: "0.75rem" }}>
-          {amendments.map((amendment) => (
-            <div key={amendment.id} className="card" style={{ background: "var(--forest-50)" }}>
-              <div className="card__header">
-                <strong>{amendmentChangeTypeLabel(amendment.changeType as Parameters<typeof amendmentChangeTypeLabel>[0]).label}</strong>
-                <Chip {...amendmentStatusLabel(amendment.status as Parameters<typeof amendmentStatusLabel>[0])} />
-              </div>
-              <p style={{ margin: 0 }}>{amendment.reason}</p>
-              <p style={{ margin: "0.35rem 0 0", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
-                Proposed by {amendment.proposingPartyRole} on {formatDate(amendment.createdAt)}. Current terms shown above are unchanged
-                until this amendment is fully signed.
-              </p>
-              {amendment.status === "proposed" && myRole && myRole !== amendment.proposingPartyRole && (
-                <div className="hero__actions" style={{ marginTop: "0.5rem" }}>
-                  <button type="button" className="button button--primary" onClick={() => void decide(amendment.id, "accept")}>
-                    Accept
-                  </button>
-                  <button type="button" className="button button--ghost" onClick={() => void decide(amendment.id, "reject")}>
-                    Reject
-                  </button>
+          {amendments.map((amendment) => {
+            const iSigned = myRole === "creditor" ? !!amendment.creditorSignedAt : myRole === "debtor" ? !!amendment.debtorSignedAt : false;
+            const termsLoaded = !!amendment.terms;
+            return (
+              <div key={amendment.id} className="card" style={{ background: "var(--forest-50)" }}>
+                <div className="card__header">
+                  <strong>{amendmentChangeTypeLabel(amendment.changeType as Parameters<typeof amendmentChangeTypeLabel>[0]).label}</strong>
+                  <Chip {...amendmentStatusLabel(amendment.status as Parameters<typeof amendmentStatusLabel>[0])} />
                 </div>
-              )}
-            </div>
-          ))}
+                <p style={{ margin: 0 }}>{amendment.reason}</p>
+                <p style={{ margin: "0.35rem 0 0", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
+                  Proposed by {amendment.proposingPartyRole} on {formatDate(amendment.createdAt)}. Current terms shown above are unchanged
+                  until this amendment is fully signed.
+                </p>
+
+                <div className="hero__actions" style={{ marginTop: "0.5rem" }}>
+                  <button
+                    type="button"
+                    className="button button--ghost"
+                    aria-expanded={expandedId === amendment.id}
+                    onClick={() => setExpandedId((current) => (current === amendment.id ? null : amendment.id))}
+                  >
+                    {expandedId === amendment.id ? "Hide revised agreement" : "View revised agreement"}
+                  </button>
+                  {amendment.status === "proposed" && myRole && myRole !== amendment.proposingPartyRole && (
+                    <>
+                      <button
+                        type="button"
+                        className="button button--primary"
+                        disabled={!termsLoaded}
+                        onClick={() => void decide(amendment.id, "accept")}
+                      >
+                        Accept
+                      </button>
+                      <button type="button" className="button button--ghost" onClick={() => void decide(amendment.id, "reject")}>
+                        Reject
+                      </button>
+                    </>
+                  )}
+                  {amendment.status === "awaiting_signatures" && myRole && !iSigned && (
+                    <button type="button" className="button button--primary" onClick={() => void sign(amendment.id)}>
+                      Sign amendment
+                    </button>
+                  )}
+                  {amendment.status === "awaiting_signatures" && myRole && iSigned && (
+                    <span className="form-status" style={{ alignSelf: "center" }}>
+                      You&apos;ve signed. Waiting for the other party to sign.
+                    </span>
+                  )}
+                </div>
+
+                {expandedId === amendment.id && (
+                  <AmendmentReviewView
+                    amendment={amendment}
+                    currentTerms={currentTerms}
+                    currentFrequency={currentFrequency}
+                    currentFeeAllocation={currentFeeAllocation}
+                    currentSchedule={currentSchedule}
+                    currency={currency}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

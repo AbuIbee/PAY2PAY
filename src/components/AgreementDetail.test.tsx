@@ -472,6 +472,163 @@ describe("AgreementDetail", () => {
     });
   });
 
+  describe("Receiving-party amendment review remediation: the recipient must see actual proposed terms before deciding", () => {
+    const PROPOSED_TERMS = {
+      ...BASE_TERMS,
+      currentPrincipalMinorUnits: 65000,
+      installmentAmountMinorUnits: 7500,
+      firstPaymentDate: "2026-09-15",
+      finalPaymentMinorUnits: 7500,
+      numberOfInstallments: 13,
+    };
+
+    function amendmentFixture(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        id: "amendment-1",
+        changeType: "reduced_installment",
+        status: "proposed",
+        proposingPartyRole: "debtor",
+        reason: "Lost overtime hours at work",
+        requestedRelief: "Reduce installment to $75/month",
+        proposedEffectiveDate: "2026-09-15",
+        terms: PROPOSED_TERMS,
+        frequency: "biweekly",
+        feeAllocation: "creditor_pays",
+        creditorSignedAt: null,
+        debtorSignedAt: null,
+        resultingVersionId: null,
+        createdAt: "2026-08-20T00:00:00.000Z",
+        ...overrides,
+      };
+    }
+
+    it("shows 'View revised agreement' before Accept/Reject, and reveals the actual proposed terms (not just title/description) only once selected", async () => {
+      const user = userEvent.setup();
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [amendmentFixture()] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+          "/api/agreements/amendments/preview": {
+            body: {
+              schedule: [{ sequenceNumber: 0, dueDate: "2026-09-15", amountMinorUnits: 7500 }],
+              finalPaymentMinorUnits: 7500,
+              numberOfInstallments: 13,
+            },
+          },
+        }),
+      );
+
+      render(<AgreementDetail />);
+      const viewButton = await screen.findByRole("button", { name: "View revised agreement" });
+      const buttons = screen.getAllByRole("button").map((b) => b.textContent);
+      // "View revised agreement" must appear before Accept/Reject in DOM order.
+      expect(buttons.indexOf("View revised agreement")).toBeLessThan(buttons.indexOf("Accept"));
+      expect(buttons.indexOf("Accept")).toBeLessThan(buttons.indexOf("Reject"));
+
+      // Not shown yet — only the title/description/proposer, matching the pre-fix behavior, until expanded.
+      expect(screen.queryByText(/NOT YET EFFECTIVE/)).not.toBeInTheDocument();
+
+      await user.click(viewButton);
+
+      expect(await screen.findByText(/PROPOSED REVISED AGREEMENT — NOT YET EFFECTIVE/)).toBeInTheDocument();
+      // Current vs proposed payment amount both visible and distinguishable.
+      expect(screen.getByText("Payment amount")).toBeInTheDocument();
+      expect(screen.getAllByText("$100.00").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("$75.00").length).toBeGreaterThan(0);
+      expect(screen.getByText("Frequency")).toBeInTheDocument();
+      expect(screen.getByText("Every two weeks")).toBeInTheDocument();
+      expect(screen.getByText("Remaining schedule")).toBeInTheDocument();
+      expect(screen.getByText("13 payments")).toBeInTheDocument();
+
+      // The proposed itemized schedule (lazily fetched) is also shown.
+      expect(await screen.findByText("Proposed effective payment schedule")).toBeInTheDocument();
+
+      // The complete proposed revised agreement (not just a numeric diff) is available too.
+      await user.click(screen.getByText("Full proposed revised agreement text"));
+      expect(screen.getByText(/Early payoff terms:/)).toBeInTheDocument();
+      expect(screen.getByText(/Hardship rules:/)).toBeInTheDocument();
+      expect(screen.getByText(/Dispute procedure:/)).toBeInTheDocument();
+    });
+
+    it("never lets Accept apply to an amendment whose terms could not be loaded", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [amendmentFixture({ terms: null })] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+        }),
+      );
+
+      render(<AgreementDetail />);
+      const acceptButton = await screen.findByRole("button", { name: "Accept" });
+      expect(acceptButton).toBeDisabled();
+    });
+
+    it("shows a Sign amendment action once accepted (awaiting_signatures), and calls the real sign endpoint", async () => {
+      const user = userEvent.setup();
+      const fetchMock = vi.fn().mockImplementation(
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": {
+            body: { amendments: [amendmentFixture({ status: "awaiting_signatures", creditorSignedAt: null, debtorSignedAt: "2026-08-21T00:00:00.000Z" })] },
+          },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+          "/api/agreements/amendments/sign": { body: { status: "signed" } },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<AgreementDetail />);
+      await user.click(await screen.findByRole("button", { name: "Sign amendment" }));
+
+      const signCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/agreements/amendments/sign"));
+      if (!signCall) throw new Error("expected a sign call");
+      const [, init] = signCall;
+      expect(JSON.parse((init as RequestInit).body as string)).toEqual({ amendmentId: "amendment-1" });
+    });
+
+    it("rejecting leaves no Sign action and no revised terms applied — the current agreement remains unchanged", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [amendmentFixture({ status: "rejected" })] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+        }),
+      );
+
+      render(<AgreementDetail />);
+      await screen.findByText("Rejected");
+      expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Sign amendment" })).not.toBeInTheDocument();
+      // The original amount is still what's shown for the executed agreement.
+      expect(screen.getByText(/Original amount: \$1,000\.00/)).toBeInTheDocument();
+    });
+  });
+
   it("PRSprint 25: rejecting an agreement requires confirmation — declining the dialog never calls the API", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn().mockImplementation(mockFetchByUrl({
