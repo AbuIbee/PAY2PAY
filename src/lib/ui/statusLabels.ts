@@ -368,6 +368,8 @@ export const notificationEventLabel: Record<string, string> = {
   agreement_decided: "Agreement decision",
   agreement_counterparty_signed: "Signature needed",
   amendment_decided: "Amendment decision",
+  agreement_cancellation_requested: "Cancellation requested",
+  agreement_cancellation_decided: "Cancellation decision",
 };
 
 /**

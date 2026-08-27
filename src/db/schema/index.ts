@@ -22,6 +22,7 @@ export * from "./amendment";
 export * from "./partialPayment";
 export * from "./settlement";
 export * from "./agreementDispute";
+export * from "./agreementCancellation";
 export * from "./paymentDispute";
 export * from "./notify";
 export * from "./relationship";

@@ -486,6 +486,33 @@ export class AgreementService {
     return this.getAgreement(agreementId, actingUserId);
   }
 
+  /**
+   * Mutual cancellation (mandatory command): the write AgreementCancellationService.decideCancellation
+   * calls once BOTH parties have genuinely consented (a pending request the counterparty accepted) —
+   * never callable unilaterally, unlike `cancelAgreement`'s own pre-signature withdraw above. Reuses
+   * the exact same terminal status and "agreement_cancelled" audit shape `cancelAgreement` writes, so
+   * the existing cancelled-agreement progress display (DrizzleAgreementCancellationReader /
+   * buildCancelledProgress) recognizes this path with no changes needed.
+   */
+  async markMutuallyCanceled(agreementId: string, actingUserId: string, context: { cancellationRequestId: string }): Promise<AgreementWithDetail> {
+    const agreement = await this.requireAgreement(agreementId);
+    const role = await this.authorizeEitherParty(agreement, actingUserId, null);
+    const cancellableStatuses: AgreementStatus[] = ["first_payment_pending", "active", "past_due"];
+    if (!cancellableStatuses.includes(agreement.status)) {
+      throw new ValidationError(`This agreement can no longer be mutually cancelled — it is "${agreement.status}".`);
+    }
+    const previousStatus = agreement.status;
+    const versionIdAtCancellation = agreement.currentVersionId;
+    await this.deps.agreements.updateStatus(agreementId, "mutually_canceled");
+    await this.recordAudit(agreementId, actingUserId, "agreement_cancelled", {
+      cancelledByRole: role,
+      previousStatus,
+      versionId: versionIdAtCancellation,
+      cancellationRequestId: context.cancellationRequestId,
+    });
+    return this.getAgreement(agreementId, actingUserId);
+  }
+
   async submitDraft(agreementId: string, actingUserId: string): Promise<void> {
     const agreement = await this.requireAgreement(agreementId);
     await this.authorizeEitherParty(agreement, actingUserId, null);

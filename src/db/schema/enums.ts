@@ -463,6 +463,23 @@ export const settlementProposalStatusEnum = pgEnum("settlement_proposal_status",
 export const settlementPaymentModeEnum = pgEnum("settlement_payment_mode", ["one_time", "scheduled"]);
 
 /**
+ * Mutual cancellation (mandatory command): a request to cancel an already-active (post-execution)
+ * agreement, distinct from `AgreementService.cancelAgreement` — which is a pre-signature
+ * unilateral withdraw, gated to exactly the awaiting_debtor_acknowledgment/awaiting_creditor_acceptance/
+ * awaiting_signatures statuses precisely because "neither party has a completed contract to be
+ * protected from the other unilaterally walking away" at that stage (see that method's own doc
+ * comment). Once an agreement is genuinely active, the reverse is true — real mutual consent is
+ * required, so this collapses to a simple propose/decide pair (mirrors `settlementProposalStatusEnum`'s
+ * own "no signature phase" precedent — nothing here needs a dual-signed new agreement_version, just an
+ * accept that reuses the same terminal `mutually_canceled` status `cancelAgreement` already writes).
+ */
+export const agreementCancellationRequestStatusEnum = pgEnum("agreement_cancellation_request_status", [
+  "pending",
+  "accepted",
+  "rejected",
+]);
+
+/**
  * Sprint 15: master spec §12's four explicit failed-settlement consequence options, verbatim.
  * `restore_stated`/`forgive_permanently` each require their own stated amount, captured at proposal
  * time on `settlement_proposal.failure_consequence_stated_amount_minor_units` — see settlement.ts.
