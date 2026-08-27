@@ -234,9 +234,31 @@ export class RelationshipService {
    */
   async linkAgreement(relationshipId: string, agreementId: string, actingUserId: string): Promise<RelationshipRecord> {
     const relationship = await this.requireRelationship(relationshipId);
-    await this.resolveActingParticipant(relationship.id, actingUserId);
+    const actingParticipant = await this.resolveActingParticipant(relationship.id, actingUserId);
     if (relationship.currentAgreementId) {
       throw new ValidationError("This relationship already has a governing agreement linked.");
+    }
+    // Missing-connection remediation (mandatory command): AgreementCreateWizard always derives the
+    // counterparty it links FROM this same relationship's other participant, so this check is a
+    // no-op there. It exists for the "Choose Existing Connection" path (linking an *already-created*
+    // agreement to a relationship picked afterward), which has no such guarantee by construction —
+    // without this, a user could link an agreement to any of their own unattached relationships
+    // regardless of who the agreement's actual counterparty is.
+    const { agreement } = await this.deps.agreementService.getAgreement(agreementId, actingUserId);
+    const myRole = await this.deps.agreementService.resolvePartyRole(agreementId, actingUserId);
+    const agreementCounterparty =
+      myRole === "creditor"
+        ? { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId }
+        : { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId };
+    const participants = await this.deps.participants.listForRelationship(relationship.id);
+    const otherParticipant = participants.find((p) => p.id !== actingParticipant.id);
+    const otherParticipantRef = otherParticipant?.individualProfileId
+      ? { kind: "personal" as const, id: otherParticipant.individualProfileId }
+      : otherParticipant?.organizationId
+        ? { kind: "business" as const, id: otherParticipant.organizationId }
+        : null;
+    if (!otherParticipantRef || otherParticipantRef.kind !== agreementCounterparty.kind || otherParticipantRef.id !== agreementCounterparty.id) {
+      throw new ValidationError("This connection is not with the agreement's counterparty.");
     }
     await this.deps.relationships.setCurrentAgreementId(relationship.id, agreementId);
     await this.deps.agreements.linkRelationship(agreementId, relationship.id);
@@ -282,6 +304,50 @@ export class RelationshipService {
       }
     }
     return updated;
+  }
+
+  /**
+   * Missing-connection remediation (mandatory command): the acting party's own connections that
+   * could legitimately be linked to this already-created agreement — i.e. "Choose Existing
+   * Connection" candidates. Mirrors AgreementCreateWizard's own eligibility filter (not yet joined,
+   * not terminal, no governing agreement of its own already) plus the one check that filter can't
+   * make client-side: the relationship's *other* participant must actually be this agreement's
+   * counterparty (see `linkAgreement`'s identical check, the real enforcement boundary — this list is
+   * only ever a convenience for the picker, never itself a security check).
+   */
+  async listEligibleForAgreementLink(agreementId: string, actingUserId: string): Promise<RelationshipRecord[]> {
+    const myRole = await this.deps.agreementService.resolvePartyRole(agreementId, actingUserId);
+    const { agreement } = await this.deps.agreementService.getAgreement(agreementId, actingUserId);
+    const myProfile =
+      myRole === "creditor"
+        ? { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId }
+        : { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId };
+    const counterparty =
+      myRole === "creditor"
+        ? { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId }
+        : { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId };
+
+    const notYetJoined: RelationshipStatus = "invited";
+    const terminalStatuses: RelationshipStatus[] = ["restricted", "suspended", "closed", "cancelled"];
+
+    const all = await this.listRelationshipsForParty(actingUserId, myProfile);
+    const eligible: RelationshipRecord[] = [];
+    for (const relationship of all) {
+      if (relationship.currentAgreementId !== null) continue;
+      if (relationship.status === notYetJoined || terminalStatuses.includes(relationship.status)) continue;
+      const participants = await this.deps.participants.listForRelationship(relationship.id);
+      const actingParticipant = await this.resolveActingParticipant(relationship.id, actingUserId);
+      const other = participants.find((p) => p.id !== actingParticipant.id);
+      const otherRef = other?.individualProfileId
+        ? { kind: "personal" as const, id: other.individualProfileId }
+        : other?.organizationId
+          ? { kind: "business" as const, id: other.organizationId }
+          : null;
+      if (otherRef && otherRef.kind === counterparty.kind && otherRef.id === counterparty.id) {
+        eligible.push(relationship);
+      }
+    }
+    return eligible;
   }
 
   /** Read-time sync (mirrors syncFromAgreement's identical precedent) — advances `financial_setup_pending` to `financial_accounts_ready` once both the funding and payout assignments are active and verified. Called by RelationshipFinancialAccountService after each assignment/replacement. */

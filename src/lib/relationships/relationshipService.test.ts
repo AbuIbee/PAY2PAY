@@ -126,6 +126,39 @@ describe("RelationshipService", () => {
       expect(synced.status).toBe("signed");
     });
 
+    it("Missing-connection remediation (mandatory command): 'Choose Existing Connection' must not let a user link an agreement to a relationship with a different counterparty", async () => {
+      const { creditorUserId, creditorProfileId, debtorProfileId } = await createLinkedRelationship();
+
+      const created = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+
+      // A second, unrelated relationship for the SAME creditor, but with a different counterparty.
+      const strangerUserId = randomUUID();
+      const strangerProfileId = randomUUID();
+      ctx.profileOwners.set("personal", strangerProfileId, strangerUserId);
+      ctx.users.set("stranger@example.com", strangerUserId);
+      const { relationship: unrelatedRelationship, invitation } = await ctx.relationshipInvitationService.createInvitation({
+        actingUserId: creditorUserId,
+        actingParty: { kind: "personal", id: creditorProfileId },
+        inviteeEmail: "stranger@example.com",
+        inviteeRole: "debtor",
+      });
+      await ctx.relationshipInvitationService.acceptInvitation({
+        invitationId: invitation.id,
+        actingUserId: strangerUserId,
+        actingParty: { kind: "personal", id: strangerProfileId },
+      });
+
+      await expect(ctx.relationshipService.linkAgreement(unrelatedRelationship.id, created.agreement.id, creditorUserId)).rejects.toThrow(
+        /not with the agreement's counterparty/i,
+      );
+      expect(unrelatedRelationship.currentAgreementId).toBeNull();
+    });
+
     it("auto-authorizes an ACH mandate (ACH connector) when a verified bank-account funding source is already assigned at link time", async () => {
       const { relationship, creditorUserId, creditorProfileId, debtorUserId, debtorProfileId } = await createLinkedRelationship();
 

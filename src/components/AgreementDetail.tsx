@@ -162,6 +162,16 @@ interface DisputeItem {
   createdAt: string;
 }
 
+/** Mutual cancellation (mandatory command): mirrors AgreementCancellationService's own record shape. */
+interface CancellationRequestItem {
+  id: string;
+  status: "pending" | "accepted" | "rejected";
+  requestedByPartyRole: "creditor" | "debtor";
+  reason: string;
+  rejectedReason: string | null;
+  createdAt: string;
+}
+
 /** Agreement Lifecycle V2 (Part 5 — version history): mirrors AgreementService.listVersionHistory's own shape. */
 interface VersionHistoryItem {
   id: string;
@@ -236,6 +246,7 @@ export function AgreementDetail() {
   const [partialPayments, setPartialPayments] = useState<PartialPaymentItem[]>([]);
   const [settlements, setSettlements] = useState<SettlementItem[]>([]);
   const [disputes, setDisputes] = useState<DisputeItem[]>([]);
+  const [cancellationRequests, setCancellationRequests] = useState<CancellationRequestItem[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState<AgreementProgressData | null>(null);
   const [nextPayment, setNextPayment] = useState<NextPaymentData | null>(null);
@@ -264,7 +275,7 @@ export function AgreementDetail() {
       apiFetch<NextPaymentData>(`/api/agreements/payment-setup/next-payment?id=${encodeURIComponent(agreementId)}`)
         .then(setNextPayment)
         .catch(() => setNextPayment(null));
-      const [evidenceRes, witnessRes, amendmentRes, partialRes, settlementRes, disputeRes, versionsRes] = await Promise.all([
+      const [evidenceRes, witnessRes, amendmentRes, partialRes, settlementRes, disputeRes, versionsRes, cancellationRes] = await Promise.all([
         apiFetch<{ evidence: EvidenceItem[] }>(`/api/agreements/evidence?agreementId=${agreementId}`).catch(() => ({ evidence: [] })),
         apiFetch<{ witnesses: WitnessItem[] }>(`/api/agreements/witnesses?agreementId=${agreementId}`).catch(() => ({ witnesses: [] })),
         apiFetch<{ amendments: AmendmentItem[] }>(`/api/agreements/amendments?agreementId=${agreementId}`).catch(() => ({ amendments: [] })),
@@ -272,6 +283,7 @@ export function AgreementDetail() {
         apiFetch<{ proposals: SettlementItem[] }>(`/api/agreements/settlements?agreementId=${agreementId}`).catch(() => ({ proposals: [] })),
         apiFetch<{ disputes: DisputeItem[] }>(`/api/agreements/disputes?agreementId=${agreementId}`).catch(() => ({ disputes: [] })),
         apiFetch<{ versions: VersionHistoryItem[] }>(`/api/agreements/versions?agreementId=${agreementId}`).catch(() => ({ versions: [] })),
+        apiFetch<{ requests: CancellationRequestItem[] }>(`/api/agreements/cancellation-requests?agreementId=${agreementId}`).catch(() => ({ requests: [] })),
       ]);
       setEvidence(evidenceRes.evidence);
       setWitnesses(witnessRes.witnesses);
@@ -280,6 +292,7 @@ export function AgreementDetail() {
       setSettlements(settlementRes.proposals);
       setDisputes(disputeRes.disputes);
       setVersions(versionsRes.versions ?? []);
+      setCancellationRequests(cancellationRes.requests ?? []);
       setLoadStatus("ready");
     } catch (error) {
       if (error instanceof ApiError && error.httpStatus === 401) {
@@ -486,6 +499,10 @@ export function AgreementDetail() {
       </div>
 
       {progress && <AgreementProgress data={progress} />}
+
+      {progress?.steps.find((s) => s.key === "payment_method")?.status === "blocked" && (
+        <MissingConnectionPanel agreementId={data.id} onLinked={() => void load()} />
+      )}
 
       {myRole === "debtor" &&
         progress?.steps.find((s) => s.key === "payment_method")?.status === "complete" &&
@@ -837,6 +854,10 @@ export function AgreementDetail() {
       />
 
       <DisputePanel agreementId={data.id} disputes={disputes} onChanged={() => void load()} />
+
+      {["first_payment_pending", "active", "past_due"].includes(data.status) && myRole && (
+        <AgreementCancellationPanel agreementId={data.id} myRole={myRole} requests={cancellationRequests} onChanged={() => void load()} />
+      )}
     </div>
   );
 }
@@ -1131,6 +1152,97 @@ function MakePaymentPanel({
           Review payment
         </button>
       )}
+    </div>
+  );
+}
+
+interface LinkCandidate {
+  id: string;
+  status: string;
+}
+
+/**
+ * Missing-connection remediation (mandatory command): shown whenever Step 3/5's payment_method
+ * status reads "blocked" — the truthful state for an agreement with no linked relationship (every
+ * agreement created via the "Invite someone" flow, which never links one). Contact support alone was
+ * previously the only offered action; this adds the two real, working entry points a user actually
+ * needs: creating a brand-new connection, or — when one with the agreement's exact counterparty
+ * already exists and isn't governing another agreement — linking it directly via the pre-existing
+ * POST /api/relationships/link-agreement (the same call AgreementCreateWizard itself uses).
+ */
+function MissingConnectionPanel({ agreementId, onLinked }: { agreementId: string; onLinked: () => void }) {
+  const [candidates, setCandidates] = useState<LinkCandidate[] | null>(null);
+  const [selectedId, setSelectedId] = useState("");
+  const [status, setStatus] = useState<"idle" | "linking" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const body = await apiFetch<{ relationships: LinkCandidate[] }>(`/api/agreements/link-candidates?agreementId=${agreementId}`);
+        if (!cancelled) setCandidates(body.relationships);
+      } catch {
+        if (!cancelled) setCandidates([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agreementId]);
+
+  async function handleLink() {
+    if (!selectedId) return;
+    setStatus("linking");
+    setError(null);
+    try {
+      await apiFetch("/api/relationships/link-agreement", {
+        method: "POST",
+        body: JSON.stringify({ relationshipId: selectedId, agreementId }),
+      });
+      onLinked();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not link this connection. Please try again.");
+      setStatus("idle");
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <h3>Connection required</h3>
+      </div>
+      <p style={{ margin: 0 }}>
+        This agreement isn&apos;t linked to a connection, so a funding or payout account can&apos;t be assigned yet.
+      </p>
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
+        <a href="/connections/invite" className="button button--primary">
+          Create New Connection
+        </a>
+        {candidates && candidates.length > 0 && (
+          <>
+            <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)} aria-label="Choose an existing connection">
+              <option value="">Choose Existing Connection…</option>
+              {candidates.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.id.slice(0, 8)} — {c.status.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="button button--ghost" disabled={!selectedId || status === "linking"} onClick={() => void handleLink()}>
+              {status === "linking" ? "Linking…" : "Link connection"}
+            </button>
+          </>
+        )}
+        <a href="/support" className="button button--ghost">
+          Contact support
+        </a>
+      </div>
     </div>
   );
 }
@@ -2052,6 +2164,138 @@ function DisputePanel({ agreementId, disputes, onChanged }: { agreementId: strin
           <div className="hero__actions">
             <button type="submit" className="button button--primary" disabled={status === "working"}>
               Open dispute
+            </button>
+            <button type="button" className="button button--ghost" onClick={() => setShowForm(false)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Mutual cancellation (mandatory command): "Request Cancellation" on an already-active agreement —
+ * distinct from the pre-signature "Cancel Agreement" action elsewhere on this page (see
+ * AgreementCancellationService's own doc comment for why post-execution cancellation must be a real
+ * two-party consent, not a unilateral withdraw). The agreement stays visibly active while a request
+ * is pending — "pending cancellation" is this panel's own status, never agreement.status itself —
+ * and the counterparty reviews it right here, on the same page as the full agreement they're
+ * deciding about, before accepting or declining.
+ */
+function AgreementCancellationPanel({
+  agreementId,
+  myRole,
+  requests,
+  onChanged,
+}: {
+  agreementId: string;
+  myRole: "creditor" | "debtor";
+  requests: CancellationRequestItem[];
+  onChanged: () => void;
+}) {
+  const [showForm, setShowForm] = useState(false);
+  const [reason, setReason] = useState("");
+  const [declineReason, setDeclineReason] = useState("");
+  const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  const pending = requests.find((r) => r.status === "pending");
+
+  async function handleRequest(event: React.FormEvent) {
+    event.preventDefault();
+    setStatus("working");
+    setError(null);
+    try {
+      await apiFetch("/api/agreements/cancellation-requests", {
+        method: "POST",
+        body: JSON.stringify({ agreementId, reason }),
+      });
+      setShowForm(false);
+      setReason("");
+      onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not submit this cancellation request.");
+      setStatus("error");
+    }
+  }
+
+  async function handleDecide(decision: "accept" | "reject") {
+    if (!pending) return;
+    setStatus("working");
+    setError(null);
+    try {
+      await apiFetch("/api/agreements/cancellation-requests/decide", {
+        method: "POST",
+        body: JSON.stringify({ cancellationRequestId: pending.id, decision, rejectedReason: decision === "reject" ? declineReason || undefined : undefined }),
+      });
+      setDeclineReason("");
+      onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not record this decision.");
+      setStatus("error");
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <h3>Mutual cancellation</h3>
+        {!pending && !showForm && (
+          <button type="button" className="button button--ghost" onClick={() => setShowForm(true)}>
+            Request Cancellation
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
+
+      {pending && pending.requestedByPartyRole === myRole && (
+        <p className="form-status" role="status">
+          Cancellation requested — awaiting the other party&apos;s response. Reason given: &quot;{pending.reason}&quot;
+        </p>
+      )}
+
+      {pending && pending.requestedByPartyRole !== myRole && (
+        <div className="card" style={{ background: "var(--forest-50)" }}>
+          <p style={{ margin: 0 }}>
+            <strong>The other party has requested to cancel this agreement.</strong>
+          </p>
+          <p style={{ margin: "0.35rem 0 0" }}>Reason: &quot;{pending.reason}&quot;</p>
+          <p style={{ margin: "0.35rem 0 0", color: "var(--ink-soft)", fontSize: "0.85rem" }}>
+            Accepting cancels this agreement by mutual agreement. Declining leaves it active, unchanged.
+          </p>
+          <div className="field" style={{ marginTop: "0.5rem" }}>
+            <label htmlFor="cancellation-decline-reason">Reason if declining (optional)</label>
+            <input id="cancellation-decline-reason" value={declineReason} onChange={(event) => setDeclineReason(event.target.value)} />
+          </div>
+          <div className="hero__actions" style={{ marginTop: "0.5rem" }}>
+            <button type="button" className="button button--primary" disabled={status === "working"} onClick={() => void handleDecide("accept")}>
+              Accept cancellation
+            </button>
+            <button type="button" className="button button--ghost" disabled={status === "working"} onClick={() => void handleDecide("reject")}>
+              Decline
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!pending && !showForm && <p className="form-status">No cancellation request is pending.</p>}
+
+      {showForm && (
+        <form onSubmit={(event) => void handleRequest(event)} className="card" style={{ marginTop: "1rem" }}>
+          <div className="field">
+            <label htmlFor="cancellation-reason">Reason for requesting cancellation</label>
+            <textarea id="cancellation-reason" value={reason} onChange={(event) => setReason(event.target.value)} required maxLength={2000} />
+          </div>
+          <div className="hero__actions">
+            <button type="submit" className="button button--primary" disabled={status === "working"}>
+              Submit request
             </button>
             <button type="button" className="button button--ghost" onClick={() => setShowForm(false)}>
               Cancel

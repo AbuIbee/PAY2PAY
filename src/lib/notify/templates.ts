@@ -288,4 +288,30 @@ export const NOTIFICATION_TEMPLATES: Record<NotificationEventType, NotificationT
       inAppBody: body,
     };
   },
+  agreement_cancellation_requested: (p) => {
+    const reason = str(p, "reason", "");
+    const body = reason
+      ? `The other party has requested to cancel this agreement: "${reason}". Review it and accept or decline.`
+      : "The other party has requested to cancel this agreement. Review it and accept or decline.";
+    return {
+      subject: "A cancellation has been requested for your agreement",
+      emailBody: body,
+      smsBody: "PAY2PAY: the other party requested to cancel your agreement — review it to respond.",
+      inAppBody: body,
+    };
+  },
+  agreement_cancellation_decided: (p) => {
+    const decision = str(p, "decision", "decided");
+    const subject = decision === "accepted" ? "Your cancellation request was accepted" : "Your cancellation request was declined";
+    const body =
+      decision === "accepted"
+        ? "The other party accepted your cancellation request. This agreement is now cancelled by mutual agreement."
+        : "The other party declined your cancellation request. This agreement remains active.";
+    return {
+      subject,
+      emailBody: body,
+      smsBody: `PAY2PAY: ${subject.toLowerCase()}.`,
+      inAppBody: body,
+    };
+  },
 };

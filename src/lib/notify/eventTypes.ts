@@ -38,7 +38,9 @@ export type NotificationEventType =
   | "agreement_action_required"
   | "agreement_decided"
   | "agreement_counterparty_signed"
-  | "amendment_decided";
+  | "amendment_decided"
+  | "agreement_cancellation_requested"
+  | "agreement_cancellation_decided";
 
 /**
  * "Critical notifications cannot be disabled" (this sprint's own instruction, verbatim). Master spec
@@ -104,6 +106,15 @@ export type NotificationEventType =
  * - `amendment_decided`: the counterparty's accept/reject decision on a proposed amendment, and the
  *   amendment's own completion ("now applied, a new agreement version is active") — told to the
  *   proposer, mirroring `agreement_decided`'s identical shape for the main agreement.
+ *
+ * Mutual cancellation (mandatory command) adds `agreement_cancellation_requested` (told to the
+ * counterparty — they must accept or decline before anything happens, mirroring `amendment`'s own
+ * action-required framing) and `agreement_cancellation_decided` (the counterparty's accept/decline,
+ * told back to whoever requested it — mirrors `amendment_decided`'s identical shape). Both
+ * non-critical: cancelling an active agreement is significant, but nothing happens unnoticed —
+ * `agreement_cancellation_requested` still requires the recipient to actively decide, and
+ * `agreement_cancellation_decided` only ever reports an outcome the requester is already waiting to
+ * hear, the same bar every other non-critical "decided" type here is held to.
  */
 export const CRITICAL_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = new Set<NotificationEventType>([
   "payment_failed",
@@ -146,6 +157,7 @@ export const ACTION_REQUIRED_NOTIFICATION_TYPES: ReadonlySet<NotificationEventTy
   "settlement",
   "agreement_action_required",
   "agreement_counterparty_signed",
+  "agreement_cancellation_requested",
 ]);
 
 export function isActionRequiredNotificationType(type: NotificationEventType): boolean {
@@ -201,6 +213,8 @@ export const DEFAULT_CHANNELS: Record<NotificationEventType, readonly Notificati
   agreement_decided: ["email", "in_app"],
   agreement_counterparty_signed: ["email", "sms", "in_app"],
   amendment_decided: ["email", "in_app"],
+  agreement_cancellation_requested: ["email", "sms", "in_app"],
+  agreement_cancellation_decided: ["email", "in_app"],
 };
 
 export function isNotificationEventType(value: string): value is NotificationEventType {

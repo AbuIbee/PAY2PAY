@@ -532,6 +532,96 @@ describe("AgreementDetail", () => {
     });
   });
 
+  describe("Missing-connection remediation (mandatory command)", () => {
+    const BLOCKED_PROGRESS_STEPS = [
+      ...READY_PROGRESS_STEPS.slice(0, 2),
+      {
+        key: "payment_method",
+        label: "Payment method",
+        status: "blocked",
+        statusText: "Payment setup unavailable",
+        description: "This agreement isn't linked to a connection, so a funding account can't be assigned yet. Contact support for help.",
+        cta: { label: "Contact support", href: "/support" },
+      },
+      READY_PROGRESS_STEPS[3],
+      {
+        key: "active",
+        label: "Agreement active",
+        status: "blocked",
+        statusText: "Payment setup unavailable",
+        description: "This agreement isn't linked to a connection, so a funding account can't be assigned yet. Contact support for help.",
+        cta: { label: "Contact support", href: "/support" },
+      },
+    ];
+
+    it("offers both 'Create New Connection' and 'Choose Existing Connection' — not just Contact support — when a matching, unattached connection already exists", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+          "/api/agreements/progress": {
+            body: { agreementId: "agreement-1", myRole: "debtor", status: "active", steps: BLOCKED_PROGRESS_STEPS, primaryAction: { label: "x", description: "x", cta: null }, actionableForMeCount: 0 },
+          },
+          "/api/agreements/payment-setup/next-payment": {
+            body: { nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 }, remainingBalanceMinorUnits: 90000, fundingAccountLabel: null, recipientDisplayName: null },
+          },
+          "/api/agreements/link-candidates": { body: { relationships: [{ id: "rel-eligible-1", status: "financial_accounts_ready" }] } },
+        }),
+      );
+
+      render(<AgreementDetail />);
+
+      expect(await screen.findByRole("heading", { name: "Connection required" })).toBeInTheDocument();
+      const createLink = screen.getByRole("link", { name: "Create New Connection" });
+      expect(createLink).toHaveAttribute("href", "/connections/invite");
+      expect(await screen.findByLabelText("Choose an existing connection")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /link connection/i })).toBeDisabled();
+      // Contact support remains available too (both the progress step's own cta and the panel's),
+      // but is never the only option — both assertions above already prove that.
+      for (const link of screen.getAllByRole("link", { name: "Contact support" })) {
+        expect(link).toHaveAttribute("href", "/support");
+      }
+    });
+
+    it("omits 'Choose Existing Connection' (no dead picker) when no eligible connection exists yet, but 'Create New Connection' still works", async () => {
+      const user = userEvent.setup();
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+          "/api/agreements/progress": {
+            body: { agreementId: "agreement-1", myRole: "debtor", status: "active", steps: BLOCKED_PROGRESS_STEPS, primaryAction: { label: "x", description: "x", cta: null }, actionableForMeCount: 0 },
+          },
+          "/api/agreements/payment-setup/next-payment": {
+            body: { nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 }, remainingBalanceMinorUnits: 90000, fundingAccountLabel: null, recipientDisplayName: null },
+          },
+          "/api/agreements/link-candidates": { body: { relationships: [] } },
+        }),
+      );
+
+      render(<AgreementDetail />);
+      await screen.findByRole("heading", { name: "Connection required" });
+      expect(screen.queryByLabelText("Choose an existing connection")).not.toBeInTheDocument();
+      const createLink = screen.getByRole("link", { name: "Create New Connection" });
+      expect(createLink).toHaveAttribute("href", "/connections/invite");
+      await user.click(createLink); // a real, working navigable link — not a dead click.
+    });
+  });
+
   describe("Agreement page ordering remediation: Amendments modifies the agreement itself and must appear before supporting evidence/witness material", () => {
     it("Payment schedule has a heading, the table sits beneath it, Amendments comes immediately after, then Evidence & witnesses — with no duplicate Amendments section", async () => {
       vi.stubGlobal(
@@ -871,6 +961,113 @@ describe("AgreementDetail", () => {
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/agreements/cancel"))).toBe(true);
+    });
+  });
+
+  describe("Mutual cancellation (mandatory command)", () => {
+    function baseFetchHandlers(overrides: Record<string, { status?: number; body: unknown }> = {}) {
+      return mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/cancellation-requests?": { body: { requests: [] } },
+        ...overrides,
+      });
+    }
+
+    it("with no pending request, offers 'Request Cancellation', and submitting one calls the real API with the reason", async () => {
+      const user = userEvent.setup();
+      const fetchMock = vi.fn().mockImplementation(baseFetchHandlers());
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<AgreementDetail />);
+      await screen.findByText("No cancellation request is pending.");
+      await user.click(screen.getByRole("button", { name: "Request Cancellation" }));
+      await user.type(screen.getByLabelText(/reason for requesting cancellation/i), "No longer needed");
+      await user.click(screen.getByRole("button", { name: "Submit request" }));
+
+      await waitFor(() => {
+        const call = fetchMock.mock.calls.find(
+          ([url, init]) => String(url).includes("/api/agreements/cancellation-requests") && !String(url).includes("decide") && (init as RequestInit | undefined)?.method === "POST",
+        );
+        expect(call).toBeTruthy();
+        const [, init] = call!;
+        expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({ agreementId: "agreement-1", reason: "No longer needed" });
+      });
+    });
+
+    it("the requester sees their own pending request with no decide buttons", async () => {
+      vi.stubGlobal(
+        "fetch",
+        baseFetchHandlers({
+          "/api/agreements/cancellation-requests?": {
+            body: { requests: [{ id: "cancel-1", status: "pending", requestedByPartyRole: "debtor", reason: "No longer needed", rejectedReason: null, createdAt: "2026-08-20T00:00:00.000Z" }] },
+          },
+        }),
+      );
+
+      render(<AgreementDetail />);
+      expect(await screen.findByText(/awaiting the other party.s response/i)).toBeInTheDocument();
+      expect(screen.getByText(/No longer needed/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Accept cancellation" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Decline" })).not.toBeInTheDocument();
+    });
+
+    it("the counterparty can review and Accept a pending request — agreement transitions via the real API", async () => {
+      const user = userEvent.setup();
+      const fetchMock = vi.fn().mockImplementation(
+        baseFetchHandlers({
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+          "/api/agreements/cancellation-requests?": {
+            body: { requests: [{ id: "cancel-1", status: "pending", requestedByPartyRole: "debtor", reason: "No longer needed", rejectedReason: null, createdAt: "2026-08-20T00:00:00.000Z" }] },
+          },
+          "/api/agreements/cancellation-requests/decide": { body: { id: "cancel-1", status: "accepted" } },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<AgreementDetail />);
+      expect(await screen.findByText(/the other party has requested to cancel this agreement/i)).toBeInTheDocument();
+      expect(screen.getByText(/No longer needed/)).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Accept cancellation" }));
+
+      await waitFor(() => {
+        const call = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/agreements/cancellation-requests/decide"));
+        expect(call).toBeTruthy();
+        const [, init] = call!;
+        expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({ cancellationRequestId: "cancel-1", decision: "accept" });
+      });
+    });
+
+    it("the counterparty can Decline instead, leaving the agreement unchanged", async () => {
+      const user = userEvent.setup();
+      const fetchMock = vi.fn().mockImplementation(
+        baseFetchHandlers({
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+          "/api/agreements/cancellation-requests?": {
+            body: { requests: [{ id: "cancel-1", status: "pending", requestedByPartyRole: "debtor", reason: "No longer needed", rejectedReason: null, createdAt: "2026-08-20T00:00:00.000Z" }] },
+          },
+          "/api/agreements/cancellation-requests/decide": { body: { id: "cancel-1", status: "rejected", rejectedReason: "We agreed to keep going" } },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<AgreementDetail />);
+      await screen.findByText(/the other party has requested to cancel this agreement/i);
+      await user.type(screen.getByLabelText(/reason if declining/i), "We agreed to keep going");
+      await user.click(screen.getByRole("button", { name: "Decline" }));
+
+      await waitFor(() => {
+        const call = fetchMock.mock.calls.find(([url]) => String(url).includes("/api/agreements/cancellation-requests/decide"));
+        expect(call).toBeTruthy();
+        const [, init] = call!;
+        expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({ cancellationRequestId: "cancel-1", decision: "reject", rejectedReason: "We agreed to keep going" });
+      });
     });
   });
 });
