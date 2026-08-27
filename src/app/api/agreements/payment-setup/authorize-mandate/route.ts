@@ -12,6 +12,7 @@ import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
 import { ForbiddenError, RateLimitedError, ValidationError } from "@/lib/errors";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,6 +63,24 @@ export function createAuthorizeAgreementMandateHandler(
     );
     if (!funding) {
       throw new ValidationError("Add a funding account before authorizing payments on this agreement.");
+    }
+
+    // TEMPORARY PAYMENT SAFETY (connection P2P-EZ2R-V3MM remediation): the funding slot's account
+    // ownership is already enforced at assignment time (RelationshipFinancialAccountService.
+    // requireUsageMatchesRole — only the debtor may ever occupy the funding slot), but a mandate
+    // authorizes debiting real money, so this is verified again here rather than trusted transitively.
+    // Fail closed: never silently substitute another account or proceed with a source/debtor mismatch.
+    const fundingOwnerMatchesDebtor =
+      (agreement.debtorProfileKind === "personal" && funding.financialAccount.individualProfileId === agreement.debtorProfileId) ||
+      (agreement.debtorProfileKind === "business" && funding.financialAccount.organizationId === agreement.debtorProfileId);
+    if (!fundingOwnerMatchesDebtor) {
+      logger.error("payment_routing_funding_owner_mismatch", {
+        agreementId,
+        relationshipId: agreement.relationshipId,
+        financialAccountId: funding.financialAccount.id,
+        assignmentId: funding.id,
+      });
+      throw new ForbiddenError("This agreement's funding account could not be verified. Please contact support.");
     }
 
     const mandate = await mandates.authorize({

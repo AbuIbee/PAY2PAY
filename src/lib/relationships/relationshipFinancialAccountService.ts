@@ -10,6 +10,7 @@ import type { StaffService } from "@/lib/staff/staffService";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { PlatformRole } from "@/lib/auth/authService";
+import type { PartyRole } from "@/lib/agreements/agreementService";
 import { isAdminRole } from "@/lib/admin/capabilities";
 import type { PartyRef } from "./relationshipInvitationService";
 import type { RelationshipRepository, RelationshipParticipantRecord, RelationshipParticipantRepository } from "./relationshipService";
@@ -58,6 +59,34 @@ export interface RelationshipFinancialAccountAssignmentRecord {
 
 export interface RelationshipFinancialAccountAssignmentWithAccount extends RelationshipFinancialAccountAssignmentRecord {
   financialAccount: FinancialAccountRecord;
+}
+
+/**
+ * Privacy remediation (mutual-cancellation/missing-connection incident, connection P2P-EZ2R-V3MM):
+ * the participant-facing view of a relationship's funding/payout slots. A relationship has exactly two
+ * slots (`funding`, `payout`) and — per the required ownership model — exactly one of them is "mine"
+ * for any given caller (debtor owns funding, creditor owns payout; see `usageForRole`). Full bank
+ * details (`account`) are populated ONLY for the caller's own slot; the counterparty's slot exposes
+ * nothing beyond `ready` (an active, verified account is assigned) — never a bank name, last four,
+ * account type, or financial-account id. This is enforced here, server-side, precisely so no UI layer
+ * can accidentally render what this method never even returns.
+ */
+export interface RelationshipAccountSlotView {
+  usage: FinancialAccountUsage;
+  /** Whether this slot belongs to the caller's own participation in the relationship. */
+  mine: boolean;
+  assignmentId: string | null;
+  status: RelationshipFinancialAccountAssignmentStatus | null;
+  /** True iff an active assignment occupies this slot with a verified account — the only thing the counterparty's slot ever reveals. */
+  ready: boolean;
+  /** Populated only when `mine` is true; always null for the counterparty's slot. */
+  account: {
+    id: string;
+    accountType: FinancialAccountType;
+    maskedLast4: string | null;
+    institutionDisplayName: string | null;
+    status: FinancialAccountStatus;
+  } | null;
 }
 
 /**
@@ -155,6 +184,18 @@ export interface RelationshipFinancialAccountServiceDeps {
  * not distinguish the two.
  */
 const FINANCIAL_ACCOUNT_CAPABILITY: Capability = "change_payout_configuration";
+
+/**
+ * REQUIRED OWNERSHIP MODEL (connection P2P-EZ2R-V3MM remediation): for the two-principal debtor/
+ * creditor relationships this codebase's `financial_account_usage` enum supports today, the funding
+ * slot ("where money is pulled from") is always the debtor's own, and the payout slot ("where money is
+ * delivered") is always the creditor's own — never a shared, either-party-assignable connection-level
+ * slot. This is the single source of truth `requireUsageMatchesRole` enforces before any assignment
+ * mutation, and `getRelationshipAccountsForParticipant` reads it to decide which slot is "mine."
+ */
+function usageForRole(role: PartyRole): FinancialAccountUsage {
+  return role === "debtor" ? "funding" : "payout";
+}
 
 /**
  * Sprint 18A §14–§19: the party-owned financial account layer and its relationship-scoped assignment.
@@ -301,10 +342,54 @@ export class RelationshipFinancialAccountService {
     return updated;
   }
 
+  /**
+   * Internal/trusted-server view — the full, unredacted assignment list (both slots, full bank
+   * details) for a relationship the caller participates in. Reserved for server-side collaborators
+   * that need the actual account (e.g. resolving `providerAccountRef` to authorize an ACH mandate —
+   * see authorize-mandate's route handler) and that themselves apply any further role-specific
+   * filtering they need. Never call this on behalf of rendering anything back to a browser — use
+   * `getRelationshipAccountsForParticipant` for that (see its own doc comment for why).
+   */
   async getRelationshipAccounts(relationshipId: string, actingUserId: string): Promise<RelationshipFinancialAccountAssignmentWithAccount[]> {
     await this.requireRelationship(relationshipId);
     await this.resolveActingParticipant(relationshipId, actingUserId);
     return this.deps.assignments.listForRelationship(relationshipId);
+  }
+
+  /**
+   * Privacy remediation (connection P2P-EZ2R-V3MM): the ONLY method the connection-detail UI's
+   * account read should ever call. Unlike `getRelationshipAccounts`, this never returns the
+   * counterparty's bank name, last four, account type, status, or financial-account id — only whether
+   * their slot is `ready`. Each participant sees full detail for exactly the one slot their own role
+   * owns (see `usageForRole`), regardless of who happens to have selected the account.
+   */
+  async getRelationshipAccountsForParticipant(relationshipId: string, actingUserId: string): Promise<RelationshipAccountSlotView[]> {
+    await this.requireRelationship(relationshipId);
+    const participant = await this.resolveActingParticipant(relationshipId, actingUserId);
+    const myUsage = usageForRole(participant.role);
+    const assignments = await this.deps.assignments.listForRelationship(relationshipId);
+    const usages: FinancialAccountUsage[] = ["funding", "payout"];
+    return usages.map((usage) => {
+      const active = assignments.find((a) => a.usage === usage && a.status === "active");
+      const mine = usage === myUsage;
+      return {
+        usage,
+        mine,
+        assignmentId: active?.id ?? null,
+        status: active?.status ?? null,
+        ready: active?.financialAccount.status === "verified",
+        account:
+          mine && active
+            ? {
+                id: active.financialAccount.id,
+                accountType: active.financialAccount.accountType,
+                maskedLast4: active.financialAccount.maskedLast4,
+                institutionDisplayName: active.financialAccount.institutionDisplayName,
+                status: active.financialAccount.status,
+              }
+            : null,
+      };
+    });
   }
 
   /** Admin connector (Phase 37): read-only, masked support view — see AdminFinancialAccountAssignmentView's own doc comment for exactly what is/isn't exposed. Itself audited, matching RelationshipService.getRelationshipForAdmin's identical precedent. */
@@ -340,6 +425,7 @@ export class RelationshipFinancialAccountService {
   }): Promise<RelationshipFinancialAccountAssignmentRecord> {
     await this.requireRelationship(input.relationshipId);
     const participant = await this.resolveActingParticipant(input.relationshipId, input.actingUserId);
+    this.requireUsageMatchesRole(participant, input.usage);
     const account = await this.requireAccount(input.financialAccountId);
     this.requireAccountBelongsToParticipant(account, participant);
     if (account.status !== "verified") {
@@ -390,6 +476,7 @@ export class RelationshipFinancialAccountService {
   }): Promise<RelationshipFinancialAccountAssignmentRecord> {
     await this.requireRelationship(input.relationshipId);
     const participant = await this.resolveActingParticipant(input.relationshipId, input.actingUserId);
+    this.requireUsageMatchesRole(participant, input.usage);
     const account = await this.requireAccount(input.financialAccountId);
     this.requireAccountBelongsToParticipant(account, participant);
     if (account.status !== "verified") {
@@ -517,6 +604,22 @@ export class RelationshipFinancialAccountService {
       }
     }
     return assignment;
+  }
+
+  /**
+   * REQUIRED OWNERSHIP MODEL (connection P2P-EZ2R-V3MM remediation): without this, a participant could
+   * self-assign their OWN account into the OTHER usage slot (e.g. a debtor assigning their own account
+   * as "payout") — `requireAccountBelongsToParticipant` alone only checks account ownership, never
+   * which slot that participant's role is entitled to occupy. Left unchecked, that would let a
+   * relationship's payout destination resolve to the debtor's own account instead of the creditor's
+   * (see authorize-mandate's route handler, which trusts the funding slot's account to be the debtor's
+   * once this invariant holds) — a payment-routing defect, not merely a display one.
+   */
+  private requireUsageMatchesRole(participant: RelationshipParticipantRecord, usage: FinancialAccountUsage): void {
+    const requiredRole: PartyRole = usage === "funding" ? "debtor" : "creditor";
+    if (participant.role !== requiredRole) {
+      throw new ForbiddenError(`Only the ${requiredRole} may manage the ${usage} account for this relationship.`);
+    }
   }
 
   private requireAccountBelongsToParticipant(account: FinancialAccountRecord, participant: RelationshipParticipantRecord): void {
