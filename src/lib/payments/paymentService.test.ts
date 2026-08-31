@@ -377,6 +377,29 @@ describe("PaymentService", () => {
       ).rejects.toThrow(ForbiddenError);
     });
 
+    /**
+     * Paid2You remediation Priority 2/requirement 4 (creditor must not be able to initiate the
+     * debtor's payment): the agreement's own real creditor — correctly targeting this exact
+     * agreement, correctly naming the real debtor/creditor pair — still cannot submit the payment,
+     * because they don't own the debtor's profile. This is the payer-ownership check
+     * (paymentService.ts's own "You may only create a payment as the payer") firing against the
+     * agreement's genuine counterparty, not an unrelated stranger — the realistic shape of the
+     * attack this requirement names, distinct from the OTHER_PROFILE/OTHER_USER_ID tests above.
+     */
+    it("rejects the agreement's own creditor attempting to submit the debtor's payment — role does not substitute for profile ownership", async () => {
+      await expect(
+        ctx.paymentService.createPayment(
+          baseInput({ agreementId: AGREEMENT_ID, payer: PAYER, recipient: RECIPIENT, actingUserId: RECIPIENT_USER_ID }),
+        ),
+      ).rejects.toThrow(ForbiddenError);
+      await expect(
+        ctx.paymentService.createPayment(
+          baseInput({ agreementId: AGREEMENT_ID, payer: PAYER, recipient: RECIPIENT, actingUserId: RECIPIENT_USER_ID }),
+        ),
+      ).rejects.toThrow(/only create a payment as the payer/i);
+      expect(await ctx.paymentService.listByAgreementId(AGREEMENT_ID)).toEqual([]);
+    });
+
     it("does not enforce the check when the agreement id does not resolve to any real agreement", async () => {
       const record = await ctx.paymentService.createPayment(
         baseInput({ agreementId: "22222222-2222-2222-2222-222222222222", recipient: OTHER_PROFILE }),
