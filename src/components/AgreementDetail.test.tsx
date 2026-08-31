@@ -533,28 +533,28 @@ describe("AgreementDetail", () => {
   });
 
   describe("Missing-connection remediation (mandatory command)", () => {
-    const BLOCKED_PROGRESS_STEPS = [
+    const CONNECTION_REQUIRED_PROGRESS_STEPS = [
       ...READY_PROGRESS_STEPS.slice(0, 2),
       {
         key: "payment_method",
         label: "Payment method",
-        status: "blocked",
-        statusText: "Payment setup unavailable",
-        description: "This agreement isn't linked to a connection, so a funding account can't be assigned yet. Contact support for help.",
-        cta: { label: "Contact support", href: "/support" },
+        status: "action_required",
+        statusText: "Connection required",
+        description: "This agreement isn't linked to a connection yet, so a funding account can't be assigned. Link or create a connection to continue.",
+        cta: { label: "Resolve connection", href: "/agreements/detail?id=agreement-1#connection-required" },
       },
       READY_PROGRESS_STEPS[3],
       {
         key: "active",
         label: "Agreement active",
-        status: "blocked",
-        statusText: "Payment setup unavailable",
-        description: "This agreement isn't linked to a connection, so a funding account can't be assigned yet. Contact support for help.",
-        cta: { label: "Contact support", href: "/support" },
+        status: "action_required",
+        statusText: "Connection required",
+        description: "This agreement isn't linked to a connection yet, so a funding account can't be assigned. Link or create a connection to continue.",
+        cta: { label: "Resolve connection", href: "/agreements/detail?id=agreement-1#connection-required" },
       },
     ];
 
-    it("offers both 'Create New Connection' and 'Choose Existing Connection' — not just Contact support — when a matching, unattached connection already exists", async () => {
+    it("offers both 'Create New Connection' and 'Choose Existing Connection' — never 'Contact support' — when a matching, unattached connection already exists", async () => {
       vi.stubGlobal(
         "fetch",
         mockFetchByUrl({
@@ -567,7 +567,14 @@ describe("AgreementDetail", () => {
           "/api/agreements/settlements?": { body: { proposals: [] } },
           "/api/agreements/disputes?": { body: { disputes: [] } },
           "/api/agreements/progress": {
-            body: { agreementId: "agreement-1", myRole: "debtor", status: "active", steps: BLOCKED_PROGRESS_STEPS, primaryAction: { label: "x", description: "x", cta: null }, actionableForMeCount: 0 },
+            body: {
+              agreementId: "agreement-1",
+              myRole: "debtor",
+              status: "active",
+              steps: CONNECTION_REQUIRED_PROGRESS_STEPS,
+              primaryAction: { label: "Resolve connection", description: "x", cta: { label: "Resolve connection", href: "/agreements/detail?id=agreement-1#connection-required" } },
+              actionableForMeCount: 2,
+            },
           },
           "/api/agreements/payment-setup/next-payment": {
             body: { nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 }, remainingBalanceMinorUnits: 90000, fundingAccountLabel: null, recipientDisplayName: null },
@@ -583,14 +590,16 @@ describe("AgreementDetail", () => {
       expect(createLink).toHaveAttribute("href", "/connections/invite");
       expect(await screen.findByLabelText("Choose an existing connection")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /link connection/i })).toBeDisabled();
-      // Contact support remains available too (both the progress step's own cta and the panel's),
-      // but is never the only option — both assertions above already prove that.
-      for (const link of screen.getAllByRole("link", { name: "Contact support" })) {
-        expect(link).toHaveAttribute("href", "/support");
-      }
+      // "Contact support" must never appear for this condition — a missing connection is a normal,
+      // self-serve recoverable state, never a support case. Covers both the progress step's own CTA
+      // (Step 3 row and the "Next: ..." primary-action bar) and the recovery panel itself. (The page's
+      // own unrelated, always-present generic "Support" footer link is untouched by this defect and
+      // is deliberately not asserted against here.)
+      expect(screen.queryByRole("link", { name: /contact support/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/contact support/i)).not.toBeInTheDocument();
     });
 
-    it("omits 'Choose Existing Connection' (no dead picker) when no eligible connection exists yet, but 'Create New Connection' still works", async () => {
+    it("omits 'Choose Existing Connection' (no dead picker) when no eligible connection exists yet, but 'Create New Connection' still works, and 'Contact support' never appears", async () => {
       const user = userEvent.setup();
       vi.stubGlobal(
         "fetch",
@@ -604,7 +613,14 @@ describe("AgreementDetail", () => {
           "/api/agreements/settlements?": { body: { proposals: [] } },
           "/api/agreements/disputes?": { body: { disputes: [] } },
           "/api/agreements/progress": {
-            body: { agreementId: "agreement-1", myRole: "debtor", status: "active", steps: BLOCKED_PROGRESS_STEPS, primaryAction: { label: "x", description: "x", cta: null }, actionableForMeCount: 0 },
+            body: {
+              agreementId: "agreement-1",
+              myRole: "debtor",
+              status: "active",
+              steps: CONNECTION_REQUIRED_PROGRESS_STEPS,
+              primaryAction: { label: "Resolve connection", description: "x", cta: { label: "Resolve connection", href: "/agreements/detail?id=agreement-1#connection-required" } },
+              actionableForMeCount: 2,
+            },
           },
           "/api/agreements/payment-setup/next-payment": {
             body: { nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 }, remainingBalanceMinorUnits: 90000, fundingAccountLabel: null, recipientDisplayName: null },
@@ -619,6 +635,8 @@ describe("AgreementDetail", () => {
       const createLink = screen.getByRole("link", { name: "Create New Connection" });
       expect(createLink).toHaveAttribute("href", "/connections/invite");
       await user.click(createLink); // a real, working navigable link — not a dead click.
+      expect(screen.queryByRole("link", { name: /contact support/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/contact support/i)).not.toBeInTheDocument();
     });
   });
 

@@ -459,4 +459,262 @@ describe("AgreementInvitationService", () => {
       expect(history[1]!.terms.installmentAmountMinorUnits).toBe(7_500);
     });
   });
+
+  describe("Root-cause closure (Agreement invitation missing-connection defect): acceptPlan auto-links a connection", () => {
+    function acceptAsNewRecipient() {
+      const recipientUserId = randomUUID();
+      const recipientProfile = { kind: "personal" as const, id: randomUUID() };
+      ctx.agreementCtx.profileOwners.set("personal", recipientProfile.id, recipientUserId);
+      ctx.userEmails.register(recipientUserId, "recipient@example.com"); // matches createInvitation's default recipientEmail
+      return { recipientUserId, recipientProfile };
+    }
+
+    it("creates a brand-new connection when none exists yet, with both participants active under the correct roles — the agreement is never left with relationship_id = null after mutual acceptance", async () => {
+      const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
+      const { rawToken } = await createInvitation(); // default inviterRole: "creditor"
+
+      const result = await ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile });
+      const { agreementId } = result;
+      expect(result.connectionRequired).toBe(false);
+
+      // InMemoryAgreementRelationshipLinker (like the real DrizzleAgreementRelationshipLinker it
+      // mirrors) is the sole writer of agreement.relationship_id — matches relationshipService.test.ts's
+      // own established assertion precedent for "did this agreement get linked."
+      const relationshipId = ctx.relationshipCtx.agreementLinker.linked.get(agreementId);
+      expect(relationshipId).toBeTruthy();
+
+      const participants = await ctx.relationshipCtx.participants.listForRelationship(relationshipId!);
+      expect(participants).toHaveLength(2);
+      expect(participants.every((p) => p.status === "active")).toBe(true);
+      expect(participants.find((p) => p.role === "creditor")?.individualProfileId).toBe(INVITER_PROFILE.id);
+      expect(participants.find((p) => p.role === "debtor")?.individualProfileId).toBe(recipientProfile.id);
+    });
+
+    it("reuses an existing exact-party connection instead of creating a duplicate one", async () => {
+      const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
+
+      const existing = await ctx.relationshipCtx.relationships.insert({ initiatorUserId: inviterUserId });
+      await ctx.relationshipCtx.participants.insert({
+        relationshipId: existing.id,
+        individualProfileId: INVITER_PROFILE.id,
+        organizationId: null,
+        role: "creditor",
+        status: "active",
+        representedByUserId: inviterUserId,
+        joinedAt: new Date(),
+      });
+      await ctx.relationshipCtx.participants.insert({
+        relationshipId: existing.id,
+        individualProfileId: recipientProfile.id,
+        organizationId: null,
+        role: "debtor",
+        status: "active",
+        representedByUserId: recipientUserId,
+        joinedAt: new Date(),
+      });
+
+      const { rawToken } = await createInvitation();
+      const result = await ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile });
+      const { agreementId } = result;
+      expect(result.connectionRequired).toBe(false);
+
+      expect(ctx.relationshipCtx.agreementLinker.linked.get(agreementId)).toBe(existing.id);
+      expect(ctx.relationshipCtx.relationships.byId.size).toBe(1); // reused, not duplicated
+    });
+
+    it("establishAgreementRelationship is idempotent — a repeated call for an already-linked agreement returns the same connection and never creates a second one", async () => {
+      const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
+      const { rawToken } = await createInvitation();
+      const { agreementId } = await ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile });
+
+      const originalRelationshipId = ctx.relationshipCtx.agreementLinker.linked.get(agreementId)!;
+      expect(originalRelationshipId).toBeTruthy();
+      expect(ctx.relationshipCtx.relationships.byId.size).toBe(1);
+
+      const second = await ctx.relationshipCtx.relationshipService.establishAgreementRelationship({
+        agreementId,
+        creditor: INVITER_PROFILE,
+        creditorUserId: inviterUserId,
+        debtor: recipientProfile,
+        debtorUserId: recipientUserId,
+        initiatingUserId: recipientUserId,
+      });
+
+      expect(second.relationshipId).toBe(originalRelationshipId);
+      expect(ctx.relationshipCtx.relationships.byId.size).toBe(1);
+    });
+
+    it("protects against races — two concurrent resolutions for the same party pair still produce exactly one connection, never two", async () => {
+      const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
+      const input = {
+        creditor: INVITER_PROFILE,
+        creditorUserId: inviterUserId,
+        debtor: recipientProfile,
+        debtorUserId: recipientUserId,
+        initiatorUserId: inviterUserId,
+      };
+
+      const [a, b] = await Promise.all([
+        ctx.relationshipCtx.pairResolver.resolveForExactParties(input),
+        ctx.relationshipCtx.pairResolver.resolveForExactParties(input),
+      ]);
+
+      expect(a.relationshipId).toBe(b.relationshipId);
+      expect(ctx.relationshipCtx.relationships.byId.size).toBe(1);
+    });
+
+    it("never reuses or exposes a connection belonging to different users — an unrelated pair's connection is invisible to this resolution", async () => {
+      const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
+
+      const strangerA = randomUUID();
+      const strangerB = randomUUID();
+      const unrelated = await ctx.relationshipCtx.relationships.insert({ initiatorUserId: strangerA });
+      await ctx.relationshipCtx.participants.insert({
+        relationshipId: unrelated.id,
+        individualProfileId: strangerA,
+        organizationId: null,
+        role: "creditor",
+        status: "active",
+        representedByUserId: strangerA,
+        joinedAt: new Date(),
+      });
+      await ctx.relationshipCtx.participants.insert({
+        relationshipId: unrelated.id,
+        individualProfileId: strangerB,
+        organizationId: null,
+        role: "debtor",
+        status: "active",
+        representedByUserId: strangerB,
+        joinedAt: new Date(),
+      });
+
+      const { rawToken } = await createInvitation();
+      const { agreementId } = await ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile });
+
+      const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+      expect(agreement?.relationshipId).not.toBe(unrelated.id);
+      const participants = await ctx.relationshipCtx.participants.listForRelationship(agreement!.relationshipId!);
+      expect(participants.map((p) => p.individualProfileId).sort()).toEqual([INVITER_PROFILE.id, recipientProfile.id].sort());
+    });
+
+    it("never reuses a connection where the same two people hold reversed roles — role must match exactly, not just identity, so a funding/payout account can never end up assigned to the wrong side", async () => {
+      const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
+
+      // Existing connection between the SAME two people, but with roles reversed relative to the
+      // agreement about to be accepted below (inviter is creditor there, by createInvitation's default).
+      const reversed = await ctx.relationshipCtx.relationships.insert({ initiatorUserId: recipientUserId });
+      await ctx.relationshipCtx.participants.insert({
+        relationshipId: reversed.id,
+        individualProfileId: recipientProfile.id,
+        organizationId: null,
+        role: "creditor",
+        status: "active",
+        representedByUserId: recipientUserId,
+        joinedAt: new Date(),
+      });
+      await ctx.relationshipCtx.participants.insert({
+        relationshipId: reversed.id,
+        individualProfileId: INVITER_PROFILE.id,
+        organizationId: null,
+        role: "debtor",
+        status: "active",
+        representedByUserId: inviterUserId,
+        joinedAt: new Date(),
+      });
+
+      const { rawToken } = await createInvitation();
+      const { agreementId } = await ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile });
+
+      const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+      expect(agreement?.relationshipId).not.toBe(reversed.id);
+      const newParticipants = await ctx.relationshipCtx.participants.listForRelationship(agreement!.relationshipId!);
+      expect(newParticipants.find((p) => p.role === "creditor")?.individualProfileId).toBe(INVITER_PROFILE.id);
+      expect(newParticipants.find((p) => p.role === "debtor")?.individualProfileId).toBe(recipientProfile.id);
+    });
+
+    it("never blocks or fails an already-accepted agreement if connection linking hits an error — best-effort only, recoverable later through the agreement page's own 'Connection required' UI", async () => {
+      const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
+      ctx.relationshipCtx.pairResolver.resolveForExactParties = async () => {
+        throw new Error("simulated failure");
+      };
+
+      const { rawToken } = await createInvitation();
+      const result = await ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile });
+      const { agreementId } = result;
+
+      const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+      expect(agreement?.status).toBe("awaiting_signatures");
+      expect(agreement?.relationshipId ?? null).toBeNull();
+      expect(result.connectionRequired).toBe(true);
+    });
+
+    /**
+     * Partial-success correction (requested directly): acceptance and connection establishment are
+     * two independently-persisted outcomes. This proves the full contract end to end — the earlier
+     * test above already covers "acceptance isn't undone"; this one covers the caller-visible signal,
+     * no-duplicate-anything guarantee, and that a later recovery attempt genuinely succeeds.
+     */
+    it("GIVEN acceptance succeeded AND relationship establishment fails: acceptance stays recorded, relationship_id stays null, the result signals connectionRequired, a later recovery succeeds once, and nothing is ever duplicated", async () => {
+      const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
+      let attempts = 0;
+      const realResolve = ctx.relationshipCtx.pairResolver.resolveForExactParties.bind(ctx.relationshipCtx.pairResolver);
+      ctx.relationshipCtx.pairResolver.resolveForExactParties = async () => {
+        attempts += 1;
+        throw new Error("simulated failure");
+      };
+
+      const { rawToken } = await createInvitation();
+      const result = await ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile });
+      const { agreementId } = result;
+
+      // Acceptance remains fully recorded — the legally meaningful part is untouched by the failure.
+      const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+      expect(agreement?.status).toBe("awaiting_signatures");
+      expect(attempts).toBe(1);
+
+      // relationship_id remains null.
+      expect(ctx.relationshipCtx.agreementLinker.linked.get(agreementId)).toBeUndefined();
+      expect(ctx.relationshipCtx.relationships.byId.size).toBe(0);
+
+      // The result clearly indicates connection remediation is required — never an indistinguishable success.
+      expect(result.connectionRequired).toBe(true);
+
+      // A second accept attempt against the same (already-consumed) invitation correctly fails closed
+      // — retrying acceptPlan itself is not the recovery path, and must never repeat acceptance/signature
+      // actions or create a second agreement.
+      await expect(
+        ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile }),
+      ).rejects.toThrow(ValidationError);
+
+      // Restore the resolver — simulating the underlying transient condition clearing — and prove a
+      // later recovery (the real path: MissingConnectionPanel calling into RelationshipService, here
+      // exercised directly against the same establishAgreementRelationship a retry would use) succeeds
+      // exactly once, producing exactly one relationship, never a duplicate.
+      ctx.relationshipCtx.pairResolver.resolveForExactParties = realResolve;
+      const recovered = await ctx.relationshipCtx.relationshipService.establishAgreementRelationship({
+        agreementId,
+        creditor: INVITER_PROFILE,
+        creditorUserId: inviterUserId,
+        debtor: recipientProfile,
+        debtorUserId: recipientUserId,
+        initiatingUserId: recipientUserId,
+      });
+      expect(recovered.relationshipId).toBeTruthy();
+      expect(ctx.relationshipCtx.relationships.byId.size).toBe(1);
+      expect(ctx.relationshipCtx.agreementLinker.linked.get(agreementId)).toBe(recovered.relationshipId);
+
+      // Idempotent on top of that: repeating the exact same recovery call again is a no-op, never a
+      // second relationship.
+      const recoveredAgain = await ctx.relationshipCtx.relationshipService.establishAgreementRelationship({
+        agreementId,
+        creditor: INVITER_PROFILE,
+        creditorUserId: inviterUserId,
+        debtor: recipientProfile,
+        debtorUserId: recipientUserId,
+        initiatingUserId: recipientUserId,
+      });
+      expect(recoveredAgain.relationshipId).toBe(recovered.relationshipId);
+      expect(ctx.relationshipCtx.relationships.byId.size).toBe(1);
+    });
+  });
 });

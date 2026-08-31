@@ -3,6 +3,7 @@ import { getServerEnv } from "@/config/env";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getAgreementService } from "@/lib/agreements/getAgreementService";
+import { getRelationshipService } from "@/lib/relationships/getRelationshipService";
 import { getEmailSender } from "@/lib/notify/getEmailSender";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { getSmsSender } from "@/lib/notify/getSmsSender";
@@ -23,6 +24,7 @@ export function getAgreementInvitationService(): AgreementInvitationService {
     cached = new AgreementInvitationService({
       invitations: new DrizzleAgreementInvitationRepository(),
       agreements: getAgreementService(),
+      relationships: getRelationshipService(),
       profileOwners: new DrizzleProfileOwnerReader(),
       profileDisplay: new DrizzleProfileDisplayReader(),
       staffService: getStaffService(),

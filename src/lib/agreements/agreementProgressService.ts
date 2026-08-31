@@ -233,7 +233,7 @@ export class AgreementProgressService {
     // mandate — see PaymentReadiness's doc comment for why this is computed once and shared with
     // Step 5 below.
     const readiness = await this.computePaymentReadiness(agreement.relationshipId, agreementId, actingUserId);
-    steps.push(this.paymentMethodStep(readiness, myRole, agreementId));
+    steps.push(this.paymentMethodStep(readiness, myRole, agreementId, agreement.relationshipId));
 
     // Step 4 — signatures: dependency-aware only on the schedule not being stale — never invites a
     // signature attempt that would just fail server-side. Also Originator/Counterparty aware
@@ -255,7 +255,14 @@ export class AgreementProgressService {
     // Step 5 — active: truthful post-signing payment-readiness/status state machine — see
     // activeStep's own doc comment. Never falls back to a generic "Waiting on other party".
     steps.push(
-      await this.activeStep({ status: agreement.status, myRole, agreementId, readiness, currency: agreement.currency }),
+      await this.activeStep({
+        status: agreement.status,
+        myRole,
+        agreementId,
+        readiness,
+        relationshipId: agreement.relationshipId,
+        currency: agreement.currency,
+      }),
     );
 
     const actionableForMeCount = steps.filter((s) => s.status === "action_required").length;
@@ -386,10 +393,12 @@ export class AgreementProgressService {
 
   /**
    * Restore agreement payment functionality: computes the shared readiness snapshot once per
-   * getProgress() call. Returns null when there's no linked relationship, or the acting user's
-   * relationship-account read isn't resolvable — both degrade Step 3/5 to the same safe,
-   * non-blocking "not required" display the old implementation used, rather than failing the whole
-   * progress read (see class doc comment).
+   * getProgress() call. Returns null both when there's no linked relationship *and* when one is
+   * linked but the acting user's relationship-account read isn't resolvable — both degrade Step 3/5
+   * to a safe, non-blocking default rather than failing the whole progress read (see class doc
+   * comment). `paymentMethodStep` is given `relationshipId` separately so it can still tell these two
+   * genuinely different cases apart — "no connection yet" (self-serve recoverable) vs. "connected, but
+   * this read failed" (transient — must never invite creating a second, redundant connection).
    */
   private async computePaymentReadiness(
     relationshipId: string | null,
@@ -426,21 +435,45 @@ export class AgreementProgressService {
    * payout account assigned. Reporting "optional" here previously let Step 5 (activeStep, below) fall
    * through and offer a "Make payment" CTA that could never lead to a working payment, since
    * AgreementDetail.tsx only renders the real payment panel once this step reads "complete" — a dead
-   * button. `blocked` here (not `optional`) is truthful: this agreement cannot self-serve payment
-   * setup right now, and support is the only real next step.
+   * button.
+   *
+   * Missing-connection UI remediation: no linked relationship (`relationshipId === null`) is a
+   * normal, recoverable workflow state, never a dead end — AgreementInvitationService.acceptPlan now
+   * links a connection automatically at acceptance time (see that method's own doc comment), so this
+   * branch is reached only by an agreement predating that fix, or one from a creation path that
+   * doesn't yet auto-link (B2BWorkflowService/CsvImportService — see docs/SPRINT_CONTROL.md's
+   * known-limitations note). Either way, `action_required` (never `blocked`) plus a CTA into the
+   * existing `MissingConnectionPanel` ("Create New Connection" / "Choose Existing Connection",
+   * rendered on the agreement detail page) is the truthful, self-serve next step — never "Contact
+   * support".
+   *
+   * A relationship *is* linked but `readiness` still came back null (the relationship-account read
+   * itself failed) is a different, narrower case, kept as a distinct `blocked`/no-CTA state: showing
+   * `MissingConnectionPanel` here would be actively wrong — it offers "Create New Connection", and
+   * this agreement already has one; a fresh one would silently orphan the real link.
    */
-  private paymentMethodStep(readiness: PaymentReadiness | null, myRole: PartyRole, agreementId: string): AgreementProgressStep {
+  private paymentMethodStep(readiness: PaymentReadiness | null, myRole: PartyRole, agreementId: string, relationshipId: string | null): AgreementProgressStep {
     if (!readiness) {
+      if (!relationshipId) {
+        return {
+          key: "payment_method",
+          label: "Payment method",
+          status: "action_required",
+          statusText: "Connection required",
+          description:
+            myRole === "debtor"
+              ? "This agreement isn't linked to a connection yet, so a funding account can't be assigned. Link or create a connection to continue."
+              : "This agreement isn't linked to a connection yet, so a payout account can't be assigned. Link or create a connection to continue.",
+          cta: { label: "Resolve connection", href: `/agreements/detail?id=${agreementId}#connection-required` },
+        };
+      }
       return {
         key: "payment_method",
         label: "Payment method",
         status: "blocked",
-        statusText: myRole === "debtor" ? "Payment setup unavailable" : "Payout setup unavailable",
-        description:
-          myRole === "debtor"
-            ? "This agreement isn't linked to a connection, so a funding account can't be assigned yet. Contact support for help."
-            : "This agreement isn't linked to a connection, so a payout account can't be assigned yet. Contact support for help.",
-        cta: { label: "Contact support", href: "/support" },
+        statusText: "Payment setup temporarily unavailable",
+        description: "We couldn't check this agreement's payment setup just now. Please try again shortly.",
+        cta: null,
       };
     }
     const debtorReady = readiness.debtorFundingAssigned && readiness.debtorMandateActive;
@@ -587,9 +620,10 @@ export class AgreementProgressService {
     myRole: PartyRole;
     agreementId: string;
     readiness: PaymentReadiness | null;
+    relationshipId: string | null;
     currency: string;
   }): Promise<AgreementProgressStep> {
-    const { status, myRole, agreementId, readiness, currency } = input;
+    const { status, myRole, agreementId, readiness, relationshipId, currency } = input;
 
     if (status === "paid_in_full" || status === "settled_in_full") {
       return {
@@ -632,7 +666,7 @@ export class AgreementProgressService {
     if (!readiness || !readiness.debtorFundingAssigned || !readiness.debtorMandateActive || !readiness.creditorPayoutReady) {
       // Reuses paymentMethodStep's own role-specific wording — the exact same missing requirement
       // that blocks Step 3 is what "Agreement active" is truthfully waiting on here too.
-      const pm = this.paymentMethodStep(readiness, myRole, agreementId);
+      const pm = this.paymentMethodStep(readiness, myRole, agreementId, relationshipId);
       return { ...pm, key: "active", label: "Agreement active" };
     }
 

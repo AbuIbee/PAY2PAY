@@ -24,6 +24,7 @@ import type {
   AgreementRelationshipLinker,
   CardMethodReader,
   MandateReader,
+  RelationshipPairResolver,
   RelationshipParticipantRecord,
   RelationshipParticipantRepository,
   RelationshipParticipantStatus,
@@ -174,6 +175,91 @@ export class InMemoryRelationshipParticipantRepository implements RelationshipPa
 
   async listForRelationship(relationshipId: string): Promise<RelationshipParticipantRecord[]> {
     return this.rows.filter((p) => p.relationshipId === relationshipId);
+  }
+}
+
+/**
+ * Test-only in-memory double for `RelationshipPairResolver` (see that interface's own doc comment in
+ * relationshipService.ts). Mirrors `DrizzleRelationshipPairResolver`'s real matching/reuse/create
+ * semantics against the same shared `InMemoryRelationshipRepository`/`InMemoryRelationshipParticipantRepository`
+ * instances the rest of a `createTestRelationshipServices()` harness uses, and serializes concurrent
+ * calls for the same unordered party pair with a real promise-chain lock (not just a stub) — so a
+ * `Promise.all` of two concurrent `resolveForExactParties` calls for the same pair genuinely exercises
+ * the "no duplicate relationship" guarantee, the same way the real advisory lock does.
+ */
+export class InMemoryRelationshipPairResolver implements RelationshipPairResolver {
+  private locks = new Map<string, Promise<void>>();
+
+  constructor(
+    private readonly relationships: InMemoryRelationshipRepository,
+    private readonly participants: InMemoryRelationshipParticipantRepository,
+  ) {}
+
+  async resolveForExactParties(input: {
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatorUserId: string;
+  }): Promise<{ relationshipId: string }> {
+    const key = [`${input.creditor.kind}:${input.creditor.id}`, `${input.debtor.kind}:${input.debtor.id}`].sort().join("|");
+    const previous = this.locks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.locks.set(key, previous.then(() => current));
+    await previous;
+    try {
+      return await this.resolveLocked(input);
+    } finally {
+      release();
+    }
+  }
+
+  private async resolveLocked(input: {
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatorUserId: string;
+  }): Promise<{ relationshipId: string }> {
+    const TERMINAL_STATUSES: RelationshipStatus[] = ["restricted", "suspended", "closed", "cancelled"];
+    const matches = (party: PartyRef, p: RelationshipParticipantRecord) =>
+      party.kind === "personal" ? p.individualProfileId === party.id : p.organizationId === party.id;
+
+    const candidate = this.participants.rows
+      .filter((p) => p.role === "creditor" && p.status === "active" && matches(input.creditor, p))
+      .map((p) => this.relationships.byId.get(p.relationshipId))
+      .filter((r): r is RelationshipRecord => !!r && !r.currentAgreementId && !TERMINAL_STATUSES.includes(r.status))
+      .find((r) =>
+        this.participants.rows.some(
+          (p) => p.relationshipId === r.id && p.role === "debtor" && p.status === "active" && matches(input.debtor, p),
+        ),
+      );
+
+    if (candidate) return { relationshipId: candidate.id };
+
+    const relationship = await this.relationships.insert({ initiatorUserId: input.initiatorUserId });
+    await this.participants.insert({
+      relationshipId: relationship.id,
+      individualProfileId: input.creditor.kind === "personal" ? input.creditor.id : null,
+      organizationId: input.creditor.kind === "business" ? input.creditor.id : null,
+      role: "creditor",
+      status: "active",
+      representedByUserId: input.creditorUserId,
+      joinedAt: new Date(),
+    });
+    await this.participants.insert({
+      relationshipId: relationship.id,
+      individualProfileId: input.debtor.kind === "personal" ? input.debtor.id : null,
+      organizationId: input.debtor.kind === "business" ? input.debtor.id : null,
+      role: "debtor",
+      status: "active",
+      representedByUserId: input.debtorUserId,
+      joinedAt: new Date(),
+    });
+    return { relationshipId: relationship.id };
   }
 }
 
@@ -453,11 +539,23 @@ export class InMemoryUserLookupReader implements UserLookupReader {
   }
 }
 
+/**
+ * `agreements` is optional so every pre-existing call site (which only ever inspected `.linked`
+ * directly) keeps compiling unchanged. When provided, mirrors `DrizzleAgreementRelationshipLinker`'s
+ * real behavior more faithfully than the bare `.linked` map alone — it also writes `relationship_id`
+ * back onto the actual in-memory `agreement` record, so a later `AgreementService.getAgreement` read
+ * (e.g. `RelationshipService.establishAgreementRelationship`'s own idempotency short-circuit) sees the
+ * same already-linked state a real database read would.
+ */
 export class InMemoryAgreementRelationshipLinker implements AgreementRelationshipLinker {
   linked = new Map<string, string>(); // agreementId -> relationshipId
 
+  constructor(private readonly agreements?: InMemoryAgreementRepository) {}
+
   async linkRelationship(agreementId: string, relationshipId: string): Promise<void> {
     this.linked.set(agreementId, relationshipId);
+    const record = this.agreements?.byId.get(agreementId);
+    if (record) record.relationshipId = relationshipId;
   }
 }
 
@@ -565,7 +663,8 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
   const financialAccounts = new InMemoryFinancialAccountRepository();
   const assignments = new InMemoryRelationshipFinancialAccountRepository(financialAccounts);
   const users = new InMemoryUserLookupReader();
-  const agreementLinker = new InMemoryAgreementRelationshipLinker();
+  const agreementLinker = new InMemoryAgreementRelationshipLinker(agreements);
+  const pairResolver = new InMemoryRelationshipPairResolver(relationships, participants);
   const mandates = new InMemoryMandateReader();
   const cards = new InMemoryCardMethodReader();
   const emailSender = new InMemoryEmailSender();
@@ -595,6 +694,7 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
     financialAccounts: assignments,
     agreementService,
     agreements: agreementLinker,
+    pairResolver,
     mandates,
     cards,
     evidence: evidenceService,
@@ -650,6 +750,7 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
     assignments,
     users,
     agreementLinker,
+    pairResolver,
     mandates,
     cards,
     evidenceService,

@@ -5,6 +5,7 @@ import { buildTerms } from "@/lib/agreements/agreementService";
 import { isPastDate } from "@/lib/agreements/schedule";
 import { generateOpaqueToken, hashOpaqueToken } from "@/lib/auth/token";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { logger } from "@/lib/logger";
 import { normalizeE164 } from "@/lib/phone";
 import type { EmailSender } from "@/lib/notify/emailSender";
 import type { NotificationService } from "@/lib/notify/notificationService";
@@ -140,9 +141,28 @@ export interface PublicInvitationView {
   expiresAt: string;
 }
 
+/**
+ * Root-cause closure (Agreement invitation missing-connection defect): narrow view onto
+ * `RelationshipService.establishAgreementRelationship` — the one capability this class needs to stop
+ * producing agreements with `relationship_id = null`. Deliberately interface-segregated, matching
+ * this file's own `ProfileDisplayReader`/`UserLookupReader` precedent, rather than depending on the
+ * full `RelationshipService`.
+ */
+export interface AgreementRelationshipEstablisher {
+  establishAgreementRelationship(input: {
+    agreementId: string;
+    creditor: ProfileRef;
+    creditorUserId: string;
+    debtor: ProfileRef;
+    debtorUserId: string;
+    initiatingUserId: string;
+  }): Promise<{ relationshipId: string }>;
+}
+
 export interface AgreementInvitationServiceDeps {
   invitations: AgreementInvitationRepository;
   agreements: AgreementService;
+  relationships: AgreementRelationshipEstablisher;
   profileOwners: ProfileOwnerReader;
   profileDisplay: ProfileDisplayReader;
   staffService: StaffService;
@@ -395,8 +415,23 @@ export class AgreementInvitationService {
    * terms as-is — Scenarios A/B) or by the inviter (accepting the recipient's counter — the
    * finishing half of Scenario C); either way the recipient's identity must already be bound by
    * this point (either here, for a first-touch Accept, or earlier via `proposeTerms`).
+   *
+   * Root-cause closure — partial-success contract: agreement acceptance (the legally meaningful
+   * part — createDraft/submitDraft/acknowledgeDebt/creditorDecide) and connection establishment are
+   * two independently-persisted outcomes, never conflated. Acceptance is authoritative and final the
+   * moment `creditorDecide` returns — nothing below can or does roll it back. If connection
+   * establishment then fails, that failure is never swallowed into an indistinguishable 200: the
+   * result's `connectionRequired: true` tells the caller the agreement is real and accepted, but
+   * still needs a connection resolved (self-serve, via the agreement page's own "Connection
+   * required" / `MissingConnectionPanel` — see AgreementProgressService/AgreementDetail.tsx). A
+   * retry of `acceptPlan` itself is *not* the recovery path (the invitation is already consumed —
+   * see `claimAcceptance` above — so a retry correctly fails closed rather than re-running
+   * acceptance); `RelationshipService.establishAgreementRelationship`'s own idempotency (short-
+   * circuits once `agreement.relationshipId` is set) and `RelationshipPairResolver`'s race-safety
+   * are what make the *actual* recovery paths (the panel's "Choose Existing"/"Create New", or any
+   * future scheduled retry) safe to call repeatedly without ever creating a duplicate connection.
    */
-  async acceptPlan(input: { rawToken: string; actingUserId: string; actingProfile?: ProfileRef }): Promise<{ agreementId: string }> {
+  async acceptPlan(input: { rawToken: string; actingUserId: string; actingProfile?: ProfileRef }): Promise<{ agreementId: string; connectionRequired: boolean }> {
     const invitation = await this.requireOpenInvitation(await this.findByTokenOrThrow(input.rawToken));
     const isInviter = input.actingUserId === invitation.inviterUserId;
     let bound = invitation;
@@ -441,10 +476,41 @@ export class AgreementInvitationService {
     await this.deps.agreements.acknowledgeDebt(agreementId, debtorUserId);
     await this.deps.agreements.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" });
 
+    // Root-cause closure (Agreement invitation missing-connection defect): both parties are fully
+    // resolved at this point (real profile ids, already-owned/staffed, already mutually agreed to
+    // these terms) — reuse an existing exact-party connection or create one, then link it, so this
+    // agreement never sits at "both parties accepted" with no connection to hang payment setup off
+    // of. The acceptance recorded above is already final and is never undone by what happens here —
+    // see this method's own doc comment for the full partial-success contract. A failure (a narrow
+    // concurrent-claim edge case, or a transient DB error) is recorded, not swallowed: it's logged
+    // with full context for operational visibility, and surfaced to the caller via
+    // `connectionRequired` rather than reported as an indistinguishable full success.
+    let connectionRequired = false;
+    try {
+      await this.deps.relationships.establishAgreementRelationship({
+        agreementId,
+        creditor,
+        creditorUserId,
+        debtor,
+        debtorUserId,
+        initiatingUserId: input.actingUserId,
+      });
+    } catch (error) {
+      connectionRequired = true;
+      logger.error("agreement_invitation_connection_establishment_failed", {
+        agreementId,
+        invitationId: bound.id,
+        actingUserId: input.actingUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     // Unconditional — our claim on "accepted" already succeeded above, so there is nothing left to
-    // race against; this just attaches the now-created agreement's id.
+    // race against; this just attaches the now-created agreement's id. Runs regardless of
+    // connectionRequired — the invitation's own lifecycle (accepted/claimed/agreementId) is complete
+    // either way; only the separate connection-linkage outcome differs.
     await this.deps.invitations.attachAcceptedAgreement(bound.id, { claimedAt: new Date(), agreementId });
-    await this.recordAudit(bound.id, input.actingUserId, "agreement_invitation_accepted", { agreementId });
+    await this.recordAudit(bound.id, input.actingUserId, "agreement_invitation_accepted", { agreementId, connectionRequired });
 
     await this.deps.notifications.notify({
       recipientUserId: bound.inviterUserId === input.actingUserId ? bound.recipientUserId! : bound.inviterUserId,
@@ -453,7 +519,7 @@ export class AgreementInvitationService {
       payload: { action: "accepted" },
       dedupeKey: `agreement_invitation_response:${bound.id}:accepted`,
     });
-    return { agreementId };
+    return { agreementId, connectionRequired };
   }
 
   /**
