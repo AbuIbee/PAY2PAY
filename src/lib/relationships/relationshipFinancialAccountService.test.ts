@@ -298,6 +298,52 @@ describe("RelationshipFinancialAccountService", () => {
     });
   });
 
+  describe("assignAccount / role-usage enforcement (connection P2P-EZ2R-V3MM remediation)", () => {
+    it("rejects a debtor assigning their own account into the payout slot", async () => {
+      const { relationship, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+      const account = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_debtor_as_payout",
+        maskedLast4: "1111",
+        institutionDisplayName: "Debtor Bank",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(account.id, "verified");
+      await expect(
+        ctx.relationshipFinancialAccountService.assignAccount({
+          relationshipId: relationship.id,
+          actingUserId: debtorUserId,
+          financialAccountId: account.id,
+          usage: "payout",
+        }),
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it("rejects a creditor assigning their own account into the funding slot", async () => {
+      const { relationship, creditorUserId, creditorProfileId } = await createLinkedRelationship();
+      const account = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: creditorUserId,
+        actingParty: { kind: "personal", id: creditorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_creditor_as_funding",
+        maskedLast4: "2222",
+        institutionDisplayName: "Creditor Bank",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(account.id, "verified");
+      await expect(
+        ctx.relationshipFinancialAccountService.assignAccount({
+          relationshipId: relationship.id,
+          actingUserId: creditorUserId,
+          financialAccountId: account.id,
+          usage: "funding",
+        }),
+      ).rejects.toThrow(ForbiddenError);
+    });
+  });
+
   describe("assignAccount", () => {
     it("rejects assigning an account the participant does not own", async () => {
       const { relationship, debtorUserId, debtorProfileId } = await createLinkedRelationship();
@@ -422,6 +468,118 @@ describe("RelationshipFinancialAccountService", () => {
         usage: "payout",
       });
       expect((await ctx.relationships.findById(relationship.id))?.status).toBe("financial_accounts_ready");
+    });
+  });
+
+  describe("replaceAccount / role-usage enforcement (connection P2P-EZ2R-V3MM remediation)", () => {
+    it("rejects a creditor replacing the funding slot even with their own verified account", async () => {
+      const { relationship, creditorUserId, creditorProfileId, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+      const funding = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_funding_orig",
+        maskedLast4: "1111",
+        institutionDisplayName: "Debtor Bank",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(funding.id, "verified");
+      await ctx.relationshipFinancialAccountService.assignAccount({
+        relationshipId: relationship.id,
+        actingUserId: debtorUserId,
+        financialAccountId: funding.id,
+        usage: "funding",
+      });
+
+      const creditorAccount = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: creditorUserId,
+        actingParty: { kind: "personal", id: creditorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_creditor_hijack",
+        maskedLast4: "9999",
+        institutionDisplayName: "Creditor Bank",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(creditorAccount.id, "verified");
+      await expect(
+        ctx.relationshipFinancialAccountService.replaceAccount({
+          relationshipId: relationship.id,
+          actingUserId: creditorUserId,
+          actingSessionId: randomUUID(),
+          financialAccountId: creditorAccount.id,
+          usage: "funding",
+        }),
+      ).rejects.toThrow(ForbiddenError);
+    });
+  });
+
+  describe("getRelationshipAccountsForParticipant (connection P2P-EZ2R-V3MM remediation)", () => {
+    it("shows each participant their own slot's full bank detail and only a readiness flag for the counterparty's slot", async () => {
+      const { relationship, creditorUserId, creditorProfileId, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+      const funding = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_funding_visibility",
+        maskedLast4: "5218",
+        institutionDisplayName: "Chase",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(funding.id, "verified");
+      await ctx.relationshipFinancialAccountService.assignAccount({
+        relationshipId: relationship.id,
+        actingUserId: debtorUserId,
+        financialAccountId: funding.id,
+        usage: "funding",
+      });
+
+      const payout = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: creditorUserId,
+        actingParty: { kind: "personal", id: creditorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "ref_payout_visibility",
+        maskedLast4: "0808",
+        institutionDisplayName: "Bank of America",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(payout.id, "verified");
+      await ctx.relationshipFinancialAccountService.assignAccount({
+        relationshipId: relationship.id,
+        actingUserId: creditorUserId,
+        financialAccountId: payout.id,
+        usage: "payout",
+      });
+
+      const debtorView = await ctx.relationshipFinancialAccountService.getRelationshipAccountsForParticipant(relationship.id, debtorUserId);
+      const debtorMine = debtorView.find((s) => s.mine)!;
+      const debtorCounterparty = debtorView.find((s) => !s.mine)!;
+      expect(debtorMine.usage).toBe("funding");
+      expect(debtorMine.account?.maskedLast4).toBe("5218");
+      expect(debtorMine.account?.institutionDisplayName).toBe("Chase");
+      expect(debtorCounterparty.usage).toBe("payout");
+      expect(debtorCounterparty.account).toBeNull();
+      expect(debtorCounterparty.ready).toBe(true);
+      expect(JSON.stringify(debtorCounterparty)).not.toContain("0808");
+      expect(JSON.stringify(debtorCounterparty)).not.toContain("Bank of America");
+
+      const creditorView = await ctx.relationshipFinancialAccountService.getRelationshipAccountsForParticipant(relationship.id, creditorUserId);
+      const creditorMine = creditorView.find((s) => s.mine)!;
+      const creditorCounterparty = creditorView.find((s) => !s.mine)!;
+      expect(creditorMine.usage).toBe("payout");
+      expect(creditorMine.account?.maskedLast4).toBe("0808");
+      expect(creditorMine.account?.institutionDisplayName).toBe("Bank of America");
+      expect(creditorCounterparty.usage).toBe("funding");
+      expect(creditorCounterparty.account).toBeNull();
+      expect(creditorCounterparty.ready).toBe(true);
+      expect(JSON.stringify(creditorCounterparty)).not.toContain("5218");
+      expect(JSON.stringify(creditorCounterparty)).not.toContain("Chase");
+    });
+
+    it("reports an unassigned slot as not ready, with no account for either side", async () => {
+      const { relationship, debtorUserId } = await createLinkedRelationship();
+      const debtorView = await ctx.relationshipFinancialAccountService.getRelationshipAccountsForParticipant(relationship.id, debtorUserId);
+      expect(debtorView.every((s) => s.account === null)).toBe(true);
+      expect(debtorView.every((s) => s.ready === false)).toBe(true);
     });
   });
 

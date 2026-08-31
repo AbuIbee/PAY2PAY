@@ -500,7 +500,7 @@ export function AgreementDetail() {
 
       {progress && <AgreementProgress data={progress} />}
 
-      {progress?.steps.find((s) => s.key === "payment_method")?.status === "blocked" && (
+      {progress?.steps.find((s) => s.key === "payment_method")?.statusText === "Connection required" && (
         <MissingConnectionPanel agreementId={data.id} onLinked={() => void load()} />
       )}
 
@@ -1162,13 +1162,15 @@ interface LinkCandidate {
 }
 
 /**
- * Missing-connection remediation (mandatory command): shown whenever Step 3/5's payment_method
- * status reads "blocked" — the truthful state for an agreement with no linked relationship (every
- * agreement created via the "Invite someone" flow, which never links one). Contact support alone was
- * previously the only offered action; this adds the two real, working entry points a user actually
- * needs: creating a brand-new connection, or — when one with the agreement's exact counterparty
- * already exists and isn't governing another agreement — linking it directly via the pre-existing
- * POST /api/relationships/link-agreement (the same call AgreementCreateWizard itself uses).
+ * Missing-connection remediation (mandatory command): shown whenever Step 3/5's payment_method step
+ * reads "Connection required" — the truthful, recoverable state for an agreement with no linked
+ * relationship (a legacy agreement predating AgreementInvitationService's auto-link fix, or one from
+ * a creation path that doesn't yet auto-link — see agreementProgressService.ts's own doc comment).
+ * Never a dead end: this offers the two real, working entry points a user actually needs — creating a
+ * brand-new connection, or — when one with the agreement's exact counterparty already exists and
+ * isn't governing another agreement — linking it directly via the pre-existing POST
+ * /api/relationships/link-agreement (the same call AgreementCreateWizard itself uses). Deliberately no
+ * "Contact support" — this is a normal, self-serve workflow state, not a support case.
  */
 function MissingConnectionPanel({ agreementId, onLinked }: { agreementId: string; onLinked: () => void }) {
   const [candidates, setCandidates] = useState<LinkCandidate[] | null>(null);
@@ -1208,7 +1210,7 @@ function MissingConnectionPanel({ agreementId, onLinked }: { agreementId: string
   }
 
   return (
-    <div className="card">
+    <div className="card" id="connection-required">
       <div className="card__header">
         <h3>Connection required</h3>
       </div>
@@ -1239,9 +1241,6 @@ function MissingConnectionPanel({ agreementId, onLinked }: { agreementId: string
             </button>
           </>
         )}
-        <a href="/support" className="button button--ghost">
-          Contact support
-        </a>
       </div>
     </div>
   );

@@ -27,11 +27,26 @@ interface FinancialAccountRecord {
   organizationId: string | null;
 }
 
-interface AssignmentRecord {
-  id: string;
+/**
+ * Privacy remediation (connection P2P-EZ2R-V3MM): mirrors RelationshipAccountSlotView from
+ * relationshipFinancialAccountService.ts — `account` is populated by the server ONLY when `mine` is
+ * true. This component must never attempt to render bank details for a slot where `mine` is false;
+ * the server already withholds them, so there is nothing to accidentally leak, but the rendering below
+ * still keys off `mine` explicitly rather than off whether `account` happens to be present.
+ */
+interface AccountSlotView {
   usage: "funding" | "payout";
-  status: string;
-  financialAccount: FinancialAccountRecord;
+  mine: boolean;
+  assignmentId: string | null;
+  status: string | null;
+  ready: boolean;
+  account: {
+    id: string;
+    accountType: "bank_account" | "debit_card";
+    maskedLast4: string | null;
+    institutionDisplayName: string | null;
+    status: string;
+  } | null;
 }
 
 type LoadStatus = "loading" | "ready" | "error" | "not_found";
@@ -44,7 +59,7 @@ export function ConnectionDetail() {
   const [relationship, setRelationship] = useState<RelationshipRecord | null>(null);
   const [participants, setParticipants] = useState<ParticipantLike[]>([]);
   const [reasons, setReasons] = useState<string[]>([]);
-  const [assignments, setAssignments] = useState<AssignmentRecord[]>([]);
+  const [slots, setSlots] = useState<AccountSlotView[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [myAccounts, setMyAccounts] = useState<FinancialAccountRecord[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -67,10 +82,10 @@ export function ConnectionDetail() {
       );
       setReasons(check.reasons);
 
-      const accounts = await apiFetch<{ assignments: AssignmentRecord[] }>(
+      const accounts = await apiFetch<{ slots: AccountSlotView[] }>(
         `/api/relationships/accounts?relationshipId=${id}`,
       );
-      setAssignments(accounts.assignments);
+      setSlots(accounts.slots);
 
       const mine = detail.participants.find((p) => p.representedByUserId === me.id);
       if (mine) {
@@ -192,8 +207,11 @@ export function ConnectionDetail() {
 
   const { label, tone } = relationshipStatusLabel(relationship.status as never);
   const steps: SetupStep[] = buildSetupSteps(reasons, relationship.status);
-  const funding = assignments.find((a) => a.usage === "funding" && a.status === "active");
-  const payout = assignments.find((a) => a.usage === "payout" && a.status === "active");
+  // Privacy remediation (connection P2P-EZ2R-V3MM): the server (getRelationshipAccountsForParticipant)
+  // already withholds the counterparty's bank details — `mySlot` is the only slot this component ever
+  // renders full account information for; `counterpartySlot` renders readiness only.
+  const mySlot = slots.find((s) => s.mine);
+  const counterpartySlot = slots.find((s) => !s.mine);
   const canActivate = reasons.length === 0 && relationship.status !== "active";
   const canClose = !["closed", "cancelled"].includes(relationship.status);
 
@@ -242,28 +260,36 @@ export function ConnectionDetail() {
 
       <div className="card">
         <div className="card__header">
-          <h2>Accounts</h2>
+          <h2>Your payment account</h2>
         </div>
-        <AccountAssignmentRow
-          title="Pay from (funding)"
-          usage="funding"
-          current={funding}
-          myAccounts={myAccounts}
-          onAssign={handleAssign}
-          disabled={actionPending || myAccounts.length === 0}
-        />
-        <AccountAssignmentRow
-          title="Receive to (payout)"
-          usage="payout"
-          current={payout}
-          myAccounts={myAccounts}
-          onAssign={handleAssign}
-          disabled={actionPending || myAccounts.length === 0}
-        />
+        {mySlot && (
+          <AccountAssignmentRow
+            title={mySlot.usage === "funding" ? "Pay from (funding)" : "Receive to (payout)"}
+            usage={mySlot.usage}
+            current={mySlot}
+            myAccounts={myAccounts}
+            onAssign={handleAssign}
+            disabled={actionPending || myAccounts.length === 0}
+          />
+        )}
         {myAccounts.length === 0 && (
           <p className="app-page__lede">
             You have no verified payment methods yet. Add one from{" "}
             <a href="/payment-methods">Payment Methods</a>.
+          </p>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card__header">
+          <h2>Counterparty</h2>
+        </div>
+        {counterpartySlot && (
+          <p style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: 0 }}>
+            <span>{counterpartySlot.usage === "funding" ? "Funding account" : "Receiving account"}:</span>
+            <span className={`chip chip--${counterpartySlot.ready ? "success" : "neutral"}`}>
+              {counterpartySlot.ready ? "Ready" : "Not ready"}
+            </span>
           </p>
         )}
       </div>
@@ -304,20 +330,20 @@ function AccountAssignmentRow({
 }: {
   title: string;
   usage: "funding" | "payout";
-  current: AssignmentRecord | undefined;
+  current: AccountSlotView | undefined;
   myAccounts: FinancialAccountRecord[];
   onAssign: (usage: "funding" | "payout", financialAccountId: string, alreadyAssigned: boolean) => void;
   disabled: boolean;
 }) {
   const [selected, setSelected] = useState("");
-  const currentStatus = current ? financialAccountStatusLabel(current.financialAccount.status as never) : null;
+  const currentStatus = current?.account ? financialAccountStatusLabel(current.account.status as never) : null;
 
   return (
     <div style={{ paddingBlock: "0.75rem", borderBottom: "1px solid var(--border)" }}>
       <strong>{title}</strong>
-      {current ? (
+      {current?.account ? (
         <p style={{ margin: "0.35rem 0" }}>
-          {current.financialAccount.institutionDisplayName ?? "Account"} ending {current.financialAccount.maskedLast4 ?? "----"}{" "}
+          {current.account.institutionDisplayName ?? "Account"} ending {current.account.maskedLast4 ?? "----"}{" "}
           {currentStatus && <span className={`chip chip--${currentStatus.tone}`}>{currentStatus.label}</span>}
         </p>
       ) : (
@@ -343,16 +369,16 @@ function AccountAssignmentRow({
             disabled={disabled || !selected}
             onClick={() => {
               if (
-                current &&
+                current?.account &&
                 !window.confirm("Replacing this account changes where future payments are routed. Continue?")
               ) {
                 return;
               }
-              onAssign(usage, selected, !!current);
+              onAssign(usage, selected, !!current?.account);
               setSelected("");
             }}
           >
-            {current ? "Replace" : "Assign"}
+            {current?.account ? "Replace" : "Assign"}
           </button>
         </div>
       )}

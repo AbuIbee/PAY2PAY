@@ -13,6 +13,7 @@ import { DrizzleRelationshipRepository } from "./drizzleRelationshipRepository";
 import { DrizzleRelationshipParticipantRepository } from "./drizzleRelationshipParticipantRepository";
 import { DrizzleRelationshipFinancialAccountRepository } from "./drizzleRelationshipFinancialAccountRepository";
 import { DrizzleAgreementRelationshipLinker } from "./drizzleAgreementRelationshipLinker";
+import { DrizzleRelationshipPairResolver } from "./drizzleRelationshipPairResolver";
 import { AchMandateFinancialAccountAdapter } from "./achMandateFinancialAccountAdapter";
 import { DebitCardFinancialAccountAdapter } from "./debitCardFinancialAccountAdapter";
 
@@ -27,6 +28,7 @@ export function getRelationshipService(): RelationshipService {
       financialAccounts: new DrizzleRelationshipFinancialAccountRepository(),
       agreementService: getAgreementService(),
       agreements: new DrizzleAgreementRelationshipLinker(),
+      pairResolver: new DrizzleRelationshipPairResolver(),
       mandates: new AchMandateFinancialAccountAdapter(getAchMandateService()),
       cards: new DebitCardFinancialAccountAdapter(getDebitCardMethodService()),
       evidence: getEvidenceService(),

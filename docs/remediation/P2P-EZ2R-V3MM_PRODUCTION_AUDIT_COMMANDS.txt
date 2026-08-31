@@ -1,0 +1,83 @@
+P2P-EZ2R-V3MM remediation — Production read-only audit: PowerShell command sequence
+=====================================================================================
+Connection string key:
+postgresql://postgres.lmpicrmmixpvkwwhcxbh:Ibraheem_2026!@aws-0-ca-central-1.pooler.supabase.com:5432/postgres
+
+===============================================================================================================
+
+
+Run these in order, in PowerShell, from the repo root (C:\Users\solod\Desktop\PAY2PAY).
+Paste each numbered block, let it finish, review its output, then paste the next block.
+
+This sequence:
+  1. Loads the same production environment variables run-prod-probe.ps1 uses, from
+     .vercel\.env.production.local
+  2. Prints exactly which host/database/environment is about to be queried, so you can confirm
+     before anything runs
+  3. Runs scripts/audit-relationship-financial-accounts.cjs, which issues SELECT statements only
+     (grep the script for "sql`" to verify — no INSERT/UPDATE/DELETE/schema change/remediation
+     anywhere in it) and requires you to type "yes" at its own prompt before it queries anything
+  4. Never modifies production data — the script has no write path at all
+
+
+STEP 1 — Load production environment variables
+------------------------------------------------------------------------------------
+$envFile = ".vercel\.env.production.local"
+if (-not (Test-Path $envFile)) {
+    Write-Host "FAIL: Production environment file not found." -ForegroundColor Red
+} else {
+    Get-Content $envFile | ForEach-Object {
+        $line = $_.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("#")) { return }
+        if ($line -match '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            $name = $matches[1]
+            $value = $matches[2].Trim()
+            if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+            Set-Item -Path "Env:$name" -Value $value
+        }
+    }
+    Write-Host "Production environment loaded." -ForegroundColor Green
+}
+
+
+STEP 2 — Confirm which host/database you're about to query
+------------------------------------------------------------------------------------
+$dbUrl = if ($env:DATABASE_URL) { $env:DATABASE_URL } else { $env:POSTGRES_URL }
+if (-not $dbUrl) {
+    Write-Host "FAIL: neither DATABASE_URL nor POSTGRES_URL is set — do not proceed." -ForegroundColor Red
+} else {
+    $uri = [System.Uri]$dbUrl
+    Write-Host "About to query:" -ForegroundColor Yellow
+    Write-Host "  Host:      " $uri.Host
+    Write-Host "  Database:  " $uri.AbsolutePath.TrimStart('/')
+    Write-Host "  VERCEL_ENV:" $env:VERCEL_ENV
+    Write-Host "  APP_ENV:   " $env:APP_ENV
+}
+
+--> Stop here and eyeball this output. Confirm the host is the one you intend before continuing.
+
+
+STEP 3 — Run the SELECT-only audit script
+------------------------------------------------------------------------------------
+node .\scripts\audit-relationship-financial-accounts.cjs
+
+The script prints its own environment banner again, then prompts:
+  Type "yes" to run this read-only audit against <host><db> :
+Type yes and press Enter for it to proceed. It runs SELECT statements only and does not
+write to any table under any circumstances.
+
+
+STEP 4 — No data modification happens
+------------------------------------------------------------------------------------
+Nothing further to run. The script has no write path — there is no "step 4 command."
+
+
+AFTER RUNNING
+------------------------------------------------------------------------------------
+Paste back:
+  - The "JSON SUMMARY" block the script prints at the end
+  - The full rows printed under "1. The specific reported connection (P2P-EZ2R-V3MM)"
+
+Do not modify any production records based on these findings until they've been reviewed.

@@ -148,12 +148,36 @@ export interface AgreementRelationshipLinker {
   linkRelationship(agreementId: string, relationshipId: string): Promise<void>;
 }
 
+/**
+ * Root-cause closure (Agreement invitation missing-connection defect,
+ * docs/SPRINT_CONTROL.md's Sprint 18A implementation notes never covered this path — every prior
+ * relationship is created through RelationshipInvitationService's async invite/accept handshake).
+ * The one narrow capability `RelationshipService.establishAgreementRelationship` needs that no
+ * existing repository provides: given two *already-known, already-agreed* agreement parties (no
+ * identity left to verify — see that method's own doc comment), idempotently and race-safely
+ * resolve the single relationship that should govern them, creating one from scratch only if no
+ * reusable one exists. Deliberately excludes agreement-linking itself — `linkAgreement` (this same
+ * class, already hardened for exact-counterparty matching) remains the sole writer of
+ * `relationship.current_agreement_id`/`agreement.relationship_id`, so this interface's real
+ * implementation never duplicates that security-sensitive check.
+ */
+export interface RelationshipPairResolver {
+  resolveForExactParties(input: {
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatorUserId: string;
+  }): Promise<{ relationshipId: string }>;
+}
+
 export interface RelationshipServiceDeps {
   relationships: RelationshipRepository;
   participants: RelationshipParticipantRepository;
   financialAccounts: RelationshipFinancialAccountRepository;
   agreementService: AgreementService;
   agreements: AgreementRelationshipLinker;
+  pairResolver: RelationshipPairResolver;
   mandates: MandateReader;
   cards: CardMethodReader;
   evidence: EvidenceReader;
@@ -304,6 +328,44 @@ export class RelationshipService {
       }
     }
     return updated;
+  }
+
+  /**
+   * Root-cause closure (Agreement invitation missing-connection defect): called once, right after an
+   * agreement created via AgreementInvitationService.acceptPlan reaches mutual acceptance — the point
+   * at which both parties are already definitively resolved (real profile ids, already-owned/staffed,
+   * already mutually agreed to these terms). Unlike every other relationship in this codebase, no
+   * separate invitation/acceptance handshake is used to establish it: requiring one here would just
+   * be a second identity check on parties who already cleared one to get this far.
+   *
+   * Idempotent: if `agreementId` is already linked (e.g. a defensive re-call), returns the existing
+   * relationship untouched rather than erroring or re-linking. Race-safety for the "find or create the
+   * one relationship for this exact party pair" step is delegated entirely to `pairResolver` (see that
+   * interface's own doc comment); the actual link write reuses `linkAgreement` unchanged — the same,
+   * already-hardened exact-counterparty check every other linking path (wizard, "Choose Existing
+   * Connection") goes through, never duplicated here.
+   */
+  async establishAgreementRelationship(input: {
+    agreementId: string;
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatingUserId: string;
+  }): Promise<{ relationshipId: string }> {
+    const { agreement } = await this.deps.agreementService.getAgreement(input.agreementId, input.initiatingUserId);
+    if (agreement.relationshipId) return { relationshipId: agreement.relationshipId };
+
+    const { relationshipId } = await this.deps.pairResolver.resolveForExactParties({
+      creditor: input.creditor,
+      creditorUserId: input.creditorUserId,
+      debtor: input.debtor,
+      debtorUserId: input.debtorUserId,
+      initiatorUserId: input.initiatingUserId,
+    });
+
+    const updated = await this.linkAgreement(relationshipId, input.agreementId, input.initiatingUserId);
+    return { relationshipId: updated.id };
   }
 
   /**

@@ -25,7 +25,11 @@ const acceptSchema = z.object({
  * Accept/Counter requires verified identity/account"). Finalizes the current proposed terms into a
  * real agreement — see AgreementInvitationService.acceptPlan's own doc comment for the full state-
  * machine walk. Returns the new agreementId so the client can "return the user directly to the
- * agreement" (never a generic dashboard).
+ * agreement" (never a generic dashboard), plus `connectionRequired` — always `false` on a fully
+ * normal accept; `true` only in the rare case acceptance itself succeeded (status 200, never a 500
+ * that would invite a full retry) but connection establishment didn't — the agreement page's own
+ * existing "Connection required" progress step and MissingConnectionPanel are the recovery path,
+ * not a second call to this route (the invitation is already consumed).
  */
 export function createAgreementInvitationAcceptHandler(authService: AuthService, invitationService: AgreementInvitationService) {
   return async function handleAccept(request: NextRequest): Promise<Response> {

@@ -224,13 +224,15 @@ describe("AgreementProgressService", () => {
   });
 
   describe("payment method — item: 'only require this step when the agreement type actually requires it'", () => {
-    it("Fix the 'Make payment' button: reports 'blocked' (never a falsely-reassuring 'optional') when the agreement has no linked relationship, since no relationship-scoped funding/payout account can ever be assigned", async () => {
+    it("missing-connection UI remediation: reports a recoverable 'action_required' (never 'blocked', never a falsely-reassuring 'optional') when the agreement has no linked relationship, with no 'Contact support' CTA", async () => {
       const { agreementId, creditorUserId } = await createAgreement();
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       const step = progress.steps.find((s) => s.key === "payment_method");
-      expect(step?.status).toBe("blocked");
-      expect(step?.statusText).toBe("Payout setup unavailable");
-      expect(step?.cta).toEqual({ label: "Contact support", href: "/support" });
+      expect(step?.status).toBe("action_required");
+      expect(step?.statusText).toBe("Connection required");
+      expect(step?.cta?.label).not.toMatch(/support/i);
+      expect(step?.cta?.href).not.toBe("/support");
+      expect(step?.cta).toEqual({ label: "Resolve connection", href: `/agreements/detail?id=${agreementId}#connection-required` });
     });
 
     it("action_required with a direct CTA when linked to a relationship with no matching account assigned", async () => {
@@ -290,14 +292,17 @@ describe("AgreementProgressService", () => {
       expect(debtorStep?.statusText).toBe("Payment setup required");
     });
 
-    it("degrades to blocked (never crashes, never falsely 'optional') if the relationship read fails — e.g. acting user isn't a participant", async () => {
+    it("degrades to blocked, distinctly from 'Connection required' (never crashes, never falsely 'optional', never offers to create a redundant connection) if a relationship IS linked but its account read fails — e.g. acting user isn't a participant", async () => {
       const { agreementId, creditorUserId } = await createAgreement();
       const relationshipId = randomUUID();
       ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
       relationshipPaymentMethods.throwFor.add(relationshipId);
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
-      expect(progress.steps.find((s) => s.key === "payment_method")?.status).toBe("blocked");
+      const step = progress.steps.find((s) => s.key === "payment_method");
+      expect(step?.status).toBe("blocked");
+      expect(step?.statusText).not.toBe("Connection required");
+      expect(step?.cta).toBeNull();
     });
   });
 
@@ -388,13 +393,14 @@ describe("AgreementProgressService", () => {
       await ctx.agreementService.signAgreement(agreementId, debtorUserId);
     }
 
-    it("Fix the 'Make payment' button: no linked relationship — reports the same truthful 'blocked' state as Step 3, never a 'Make payment' CTA that can't lead to a working payment", async () => {
+    it("Fix the 'Make payment' button: no linked relationship — reports the same truthful, recoverable 'action_required'/'Connection required' state as Step 3, never a 'Make payment' CTA that can't lead to a working payment", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       await signBoth(agreementId, creditorUserId, debtorUserId);
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       const step = progress.steps.find((s) => s.key === "active");
-      expect(step?.status).toBe("blocked");
+      expect(step?.status).toBe("action_required");
+      expect(step?.statusText).toBe("Connection required");
       expect(step?.cta).not.toEqual({ label: "Make payment", href: expect.stringContaining("#make-payment") });
     });
 
@@ -665,6 +671,17 @@ describe("AgreementProgressService", () => {
     it("prioritizes an action that's mine over a blocked/waiting step", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+      // Isolate the signatures action being tested from the (also now legitimately "action_required")
+      // no-relationship payment_method state — link a relationship with fully-ready accounts so
+      // payment_method reads "complete" and signing is the only actionable item left.
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       expect(progress.primaryAction.label).toMatch(/sign|review/i);
     });
@@ -672,7 +689,7 @@ describe("AgreementProgressService", () => {
     it("surfaces the blocking prerequisite when nothing is actionable but something is blocked", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement({ firstPaymentDate: "2020-01-01" });
       await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
-      // Isolate the signatures block being tested from the (also now legitimately "blocked")
+      // Isolate the signatures block being tested from the (also now legitimately "action_required")
       // no-relationship payment_method state — link a relationship with fully-ready accounts so
       // payment_method reads "complete" and the signatures block is the only one left to surface.
       const relationshipId = randomUUID();
@@ -690,7 +707,7 @@ describe("AgreementProgressService", () => {
     it("reports 'waiting for other party' once I've done everything I can", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
-      // Isolate the signatures wait being tested from the (also now legitimately "blocked")
+      // Isolate the signatures wait being tested from the (also now legitimately "action_required")
       // no-relationship payment_method state — link a relationship with fully-ready accounts.
       const relationshipId = randomUUID();
       ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;

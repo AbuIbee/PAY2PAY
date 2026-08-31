@@ -10,14 +10,20 @@ import { ValidationError } from "@/lib/errors";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** GET /api/relationships/accounts?relationshipId=... — the funding/payout assignments for a relationship the caller participates in. */
+/**
+ * GET /api/relationships/accounts?relationshipId=... — the funding/payout slot views for a
+ * relationship the caller participates in. Privacy remediation (connection P2P-EZ2R-V3MM): this
+ * deliberately calls `getRelationshipAccountsForParticipant`, never `getRelationshipAccounts` — the
+ * latter returns full bank details for BOTH participants' slots and must never be handed back to a
+ * browser response. See that method's own doc comment.
+ */
 export function createRelationshipAccountsHandler(authService: AuthService, financialAccountService: RelationshipFinancialAccountService) {
   return async function handleAccounts(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
     const relationshipId = new URL(request.url).searchParams.get("relationshipId");
     if (!relationshipId) throw new ValidationError("relationshipId is required.");
-    const assignments = await financialAccountService.getRelationshipAccounts(relationshipId, userId);
-    return NextResponse.json({ assignments }, { status: 200 });
+    const slots = await financialAccountService.getRelationshipAccountsForParticipant(relationshipId, userId);
+    return NextResponse.json({ slots }, { status: 200 });
   };
 }
 

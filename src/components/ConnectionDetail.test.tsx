@@ -45,7 +45,12 @@ function buildFetchMock() {
       return jsonResponse({ eligible: false, reasons: ["funding_account_missing", "payout_account_missing", "agreement_missing"] });
     }
     if (url.includes("/api/relationships/accounts?")) {
-      return jsonResponse({ assignments: [] });
+      return jsonResponse({
+        slots: [
+          { usage: "funding", mine: false, assignmentId: null, status: null, ready: false, account: null },
+          { usage: "payout", mine: true, assignmentId: null, status: null, ready: false, account: null },
+        ],
+      });
     }
     if (url.includes("/api/relationships/accounts/party")) {
       return jsonResponse({ accounts: [] });
@@ -90,10 +95,72 @@ describe("ConnectionDetail", () => {
   });
 
   /**
+   * Privacy remediation (connection P2P-EZ2R-V3MM): the connection page must never render the
+   * counterparty's bank name or last four — only a readiness chip. "me" here is the creditor (payout
+   * slot is mine); the debtor's funding slot must show as "Funding account: Not ready" with no bank
+   * details, even though the server-shaped fixture below never even offers this component that
+   * account data (mirroring what the real, redacted API response looks like).
+   */
+  it("never renders counterparty bank details — only a readiness status", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/me")) return jsonResponse({ id: "me", email: "me@example.com" });
+      if (url.includes("/api/relationships/detail")) {
+        return jsonResponse({
+          relationship: { id: "rel-1", status: "financial_accounts_ready", currentAgreementId: null, createdAt: "2026-01-01T00:00:00.000Z" },
+          participants: [BUSINESS_PARTICIPANT, COUNTERPARTY_PARTICIPANT],
+        });
+      }
+      if (url.includes("/api/relationships/activate/check")) {
+        return jsonResponse({ eligible: false, reasons: ["agreement_missing"] });
+      }
+      if (url.includes("/api/relationships/accounts?")) {
+        return jsonResponse({
+          slots: [
+            { usage: "funding", mine: false, assignmentId: "assignment-debtor", status: "active", ready: true, account: null },
+            {
+              usage: "payout",
+              mine: true,
+              assignmentId: "assignment-1",
+              status: "active",
+              ready: true,
+              account: { id: "acct-mine", accountType: "bank_account", maskedLast4: "0808", institutionDisplayName: "Bank of America", status: "verified" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/relationships/accounts/party")) {
+        return jsonResponse({
+          accounts: [{ id: "acct-mine", accountType: "bank_account", maskedLast4: "0808", institutionDisplayName: "Bank of America", status: "verified", individualProfileId: null, organizationId: "org-1" }],
+        });
+      }
+      return jsonResponse({}, false);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ConnectionDetail />);
+    await waitFor(() => expect(screen.getByText("Your payment account")).toBeInTheDocument());
+
+    // My own slot (payout, since "me" is the creditor here) shows full bank detail.
+    expect(screen.getAllByText(/Bank of America/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/0808/).length).toBeGreaterThan(0);
+
+    // The counterparty's slot (funding, owned by the debtor) shows readiness only.
+    expect(screen.getByText("Funding account:")).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.queryByText(/Chase/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/5218/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ending 5218/)).not.toBeInTheDocument();
+  });
+
+  /**
    * SPRINT_20_ClosedBetaReadiness (P0): replaceAccount gained a fresh-MFA-step-up requirement in
    * Sprint 19, but this handler previously called apiFetch directly with no step-up handling — a
    * real user replacing a funding/payout account would hit a raw, unhandled 403. This proves the
    * fix: the step-up dialog appears, and verification retries the original replace request.
+   *
+   * "me" is the creditor (payout is mine) — the payout slot is the one this test replaces, matching
+   * the required ownership model (only the creditor may manage the payout slot).
    */
   it("shows a step-up challenge when replacing an already-assigned account, and retries after verification", async () => {
     let replaced = false;
@@ -107,16 +174,19 @@ describe("ConnectionDetail", () => {
         });
       }
       if (url.includes("/api/relationships/activate/check")) {
-        return jsonResponse({ eligible: false, reasons: ["payout_account_missing", "agreement_missing"] });
+        return jsonResponse({ eligible: false, reasons: ["agreement_missing"] });
       }
       if (url.includes("/api/relationships/accounts?")) {
         return jsonResponse({
-          assignments: [
+          slots: [
+            { usage: "funding", mine: false, assignmentId: null, status: null, ready: false, account: null },
             {
-              id: "assignment-1",
-              usage: "funding",
+              usage: "payout",
+              mine: true,
+              assignmentId: "assignment-1",
               status: "active",
-              financialAccount: { id: "acct-old", accountType: "bank_account", maskedLast4: "1111", institutionDisplayName: "Old Bank", status: "verified", individualProfileId: null, organizationId: "org-1" },
+              ready: true,
+              account: { id: "acct-old", accountType: "bank_account", maskedLast4: "1111", institutionDisplayName: "Old Bank", status: "verified" },
             },
           ],
         });
@@ -148,9 +218,9 @@ describe("ConnectionDetail", () => {
     const user = userEvent.setup();
 
     render(<ConnectionDetail />);
-    await waitFor(() => expect(screen.getByLabelText(/select account for pay from \(funding\)/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText(/select account for receive to \(payout\)/i)).toBeInTheDocument());
 
-    await user.selectOptions(screen.getByLabelText(/select account for pay from \(funding\)/i), "acct-new");
+    await user.selectOptions(screen.getByLabelText(/select account for receive to \(payout\)/i), "acct-new");
     await user.click(screen.getByRole("button", { name: /^replace$/i }));
 
     expect(await screen.findByText(/verify it's you/i)).toBeInTheDocument();
