@@ -49,4 +49,15 @@ export class DrizzleRelationshipParticipantRepository implements RelationshipPar
     const rows = await db.select().from(relationshipParticipant).where(eq(relationshipParticipant.relationshipId, relationshipId));
     return rows.map(toRecord);
   }
+
+  async activate(id: string): Promise<RelationshipParticipantRecord> {
+    const db = getDb();
+    const [row] = await db
+      .update(relationshipParticipant)
+      .set({ status: "active", joinedAt: new Date(), updatedAt: new Date() })
+      .where(eq(relationshipParticipant.id, id))
+      .returning();
+    if (!row) throw new ConfigurationError("relationship_participant activate found no row");
+    return toRecord(row);
+  }
 }

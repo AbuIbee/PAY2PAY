@@ -27,6 +27,14 @@ const connectionEstablisher: AgreementConnectionEstablisher = {
     const { getRelationshipService } = await import("@/lib/relationships/getRelationshipService");
     return getRelationshipService().establishAgreementRelationship(input);
   },
+  async proposeAgreementRelationship(input) {
+    const { getRelationshipService } = await import("@/lib/relationships/getRelationshipService");
+    return getRelationshipService().proposeAgreementRelationship(input);
+  },
+  async confirmAgreementRelationship(input) {
+    const { getRelationshipService } = await import("@/lib/relationships/getRelationshipService");
+    return getRelationshipService().confirmAgreementRelationship(input);
+  },
 };
 
 const identitySnapshotter: AgreementIdentitySnapshotter = {

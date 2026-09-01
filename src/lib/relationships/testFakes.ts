@@ -19,7 +19,7 @@ import { BasicFileValidator } from "@/lib/evidence/fileValidator";
 import { InMemoryDocumentStorage } from "@/lib/documents/testFakes";
 import { createTestRiskEventService } from "@/lib/risk/testFakes";
 import type { PartyRole } from "@/lib/agreements/agreementService";
-import { RelationshipService } from "./relationshipService";
+import { RelationshipService, type EvidenceReader } from "./relationshipService";
 import type {
   AgreementRelationshipLinker,
   CardMethodReader,
@@ -177,6 +177,15 @@ export class InMemoryRelationshipParticipantRepository implements RelationshipPa
   async listForRelationship(relationshipId: string): Promise<RelationshipParticipantRecord[]> {
     return this.rows.filter((p) => p.relationshipId === relationshipId);
   }
+
+  async activate(id: string): Promise<RelationshipParticipantRecord> {
+    const record = this.rows.find((p) => p.id === id);
+    if (!record) throw new Error("relationship_participant not found");
+    record.status = "active";
+    record.joinedAt = new Date();
+    record.updatedAt = new Date();
+    return record;
+  }
 }
 
 /**
@@ -261,6 +270,79 @@ export class InMemoryRelationshipPairResolver implements RelationshipPairResolve
       status: "active",
       representedByUserId: input.debtorUserId,
       joinedAt: new Date(),
+    });
+    return { relationshipId: relationship.id };
+  }
+
+  async resolveOrCreatePendingForExactParties(input: {
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatorUserId: string;
+  }): Promise<{ relationshipId: string }> {
+    const key = [`${input.creditor.kind}:${input.creditor.id}`, `${input.debtor.kind}:${input.debtor.id}`].sort().join("|");
+    const previous = this.locks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.locks.set(key, previous.then(() => current));
+    await previous;
+    try {
+      return await this.resolveOrCreatePendingLocked(input);
+    } finally {
+      release();
+    }
+  }
+
+  private async resolveOrCreatePendingLocked(input: {
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatorUserId: string;
+  }): Promise<{ relationshipId: string }> {
+    const TERMINAL_STATUSES: RelationshipStatus[] = ["restricted", "suspended", "closed", "cancelled"];
+    const reusableStatuses: RelationshipParticipantStatus[] = ["active", "invited"];
+    const matches = (party: PartyRef, p: RelationshipParticipantRecord) =>
+      party.kind === "personal" ? p.individualProfileId === party.id : p.organizationId === party.id;
+
+    const candidate = this.participants.rows
+      .filter((p) => reusableStatuses.includes(p.status) && matches(input.creditor, p))
+      .map((p) => this.relationships.byId.get(p.relationshipId))
+      .filter((r): r is RelationshipRecord => !!r && !TERMINAL_STATUSES.includes(r.status))
+      .find((r) =>
+        this.participants.rows.some(
+          (p) => p.relationshipId === r.id && reusableStatuses.includes(p.status) && matches(input.debtor, p),
+        ),
+      );
+
+    if (candidate) return { relationshipId: candidate.id };
+
+    const initiatorIsCreditor = input.initiatorUserId === input.creditorUserId;
+    const initiator = initiatorIsCreditor ? input.creditor : input.debtor;
+    const counterparty = initiatorIsCreditor ? input.debtor : input.creditor;
+    const counterpartyUserId = initiatorIsCreditor ? input.debtorUserId : input.creditorUserId;
+
+    const relationship = await this.relationships.insert({ initiatorUserId: input.initiatorUserId });
+    await this.participants.insert({
+      relationshipId: relationship.id,
+      individualProfileId: initiator.kind === "personal" ? initiator.id : null,
+      organizationId: initiator.kind === "business" ? initiator.id : null,
+      role: initiatorIsCreditor ? "creditor" : "debtor",
+      status: "active",
+      representedByUserId: input.initiatorUserId,
+      joinedAt: new Date(),
+    });
+    await this.participants.insert({
+      relationshipId: relationship.id,
+      individualProfileId: counterparty.kind === "personal" ? counterparty.id : null,
+      organizationId: counterparty.kind === "business" ? counterparty.id : null,
+      role: initiatorIsCreditor ? "debtor" : "creditor",
+      status: "invited",
+      representedByUserId: counterpartyUserId,
+      joinedAt: null,
     });
     return { relationshipId: relationship.id };
   }
@@ -801,4 +883,62 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
     relationshipFinancialAccountService,
     agreementRoles,
   };
+}
+
+/** A relationship layer needs an EvidenceReader dependency it never actually calls from establishAgreementRelationship's own path — a real EvidenceService would just be extra harness weight for no test coverage gained. */
+class NotImplementedEvidenceReader implements EvidenceReader {
+  async listEvidence(): Promise<never[]> {
+    return [];
+  }
+  async getSignedEvidenceUrl(): Promise<string> {
+    throw new Error("not implemented in this test harness");
+  }
+}
+
+/**
+ * Production defect remediation (canonical connection + party name display): a real
+ * `RelationshipService`, sharing a caller-supplied `AgreementService` harness's own
+ * `agreements`/`profileOwners`/`staffService` instances (mirrors `createTestRelationshipServices`'s
+ * own sharing precedent), so `establishAgreementRelationship` — called from either
+ * `AgreementService.tryEstablishConnection`/`ensureRelationshipLinked` or
+ * `AgreementInvitationService.acceptPlan` — exercises real Sprint 18A relationship logic
+ * (`linkAgreement`'s exact-counterparty check, `pairResolver`'s advisory-lock reuse-or-create
+ * resolution) against the exact same in-memory agreement data the caller's own harness already wrote,
+ * rather than a stub. Extracted from a duplicate originally inlined in
+ * `agreementInvitations/testFakes.ts` so any harness needing a real connection-establishment mechanism
+ * (agreement progress self-heal tests included) can share one implementation.
+ */
+export function createTestAgreementRelationshipEstablisher(agreementCtx: {
+  agreements: InMemoryAgreementRepository;
+  agreementService: AgreementService;
+  profileOwners: InMemoryProfileOwnerReader;
+  staffCtx: { staffService: ReturnType<typeof createTestStaffService>["staffService"] };
+}) {
+  const participants = new InMemoryRelationshipParticipantRepository();
+  const relationships = new InMemoryRelationshipRepository(participants);
+  const pairResolver = new InMemoryRelationshipPairResolver(relationships, participants);
+  const agreementLinker = new InMemoryAgreementRelationshipLinker(agreementCtx.agreements);
+  const financialAccounts = new InMemoryFinancialAccountRepository();
+  const assignments = new InMemoryRelationshipFinancialAccountRepository(financialAccounts);
+  const mandates = new InMemoryMandateReader();
+  const cards = new InMemoryCardMethodReader();
+  const auditRepo = new InMemoryAuditEventRepositoryForRelationships();
+
+  const relationshipService = new RelationshipService({
+    relationships,
+    participants,
+    financialAccounts: assignments,
+    agreementService: agreementCtx.agreementService,
+    agreements: agreementLinker,
+    pairResolver,
+    mandates,
+    cards,
+    evidence: new NotImplementedEvidenceReader(),
+    profileOwners: agreementCtx.profileOwners,
+    staffService: agreementCtx.staffCtx.staffService,
+    notifications: createTestNotificationService().notificationService,
+    audit: new AuditService(auditRepo),
+  });
+
+  return { relationshipService, relationships, participants, pairResolver, agreementLinker, financialAccounts, assignments, mandates, cards };
 }

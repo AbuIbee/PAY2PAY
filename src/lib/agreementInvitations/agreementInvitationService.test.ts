@@ -649,6 +649,13 @@ describe("AgreementInvitationService", () => {
 
     it("never blocks or fails an already-accepted agreement if connection linking hits an error — best-effort only, recoverable later through the agreement page's own 'Connection required' UI", async () => {
       const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
+      // Production defect remediation (canonical connection) — Step-1/Step-2 lifecycle correction:
+      // Step 1 (createDraft, inside acceptPlan) now attempts first via resolveOrCreatePendingForExactParties;
+      // Step 2's confirm falls back to resolveForExactParties only if Step 1 never linked anything. Both
+      // must fail to genuinely simulate total establishment failure here.
+      ctx.relationshipCtx.pairResolver.resolveOrCreatePendingForExactParties = async () => {
+        throw new Error("simulated failure");
+      };
       ctx.relationshipCtx.pairResolver.resolveForExactParties = async () => {
         throw new Error("simulated failure");
       };
@@ -673,6 +680,13 @@ describe("AgreementInvitationService", () => {
       const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
       let attempts = 0;
       const realResolve = ctx.relationshipCtx.pairResolver.resolveForExactParties.bind(ctx.relationshipCtx.pairResolver);
+      // Both resolver methods must fail: Step 1 (proposeAgreementRelationship, via
+      // resolveOrCreatePendingForExactParties) attempts first; Step 2's confirm falls back to
+      // establishAgreementRelationship (resolveForExactParties) only because Step 1 left nothing linked.
+      ctx.relationshipCtx.pairResolver.resolveOrCreatePendingForExactParties = async () => {
+        attempts += 1;
+        throw new Error("simulated failure");
+      };
       ctx.relationshipCtx.pairResolver.resolveForExactParties = async () => {
         attempts += 1;
         throw new Error("simulated failure");
@@ -685,7 +699,11 @@ describe("AgreementInvitationService", () => {
       // Acceptance remains fully recorded — the legally meaningful part is untouched by the failure.
       const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
       expect(agreement?.status).toBe("awaiting_signatures");
-      expect(attempts).toBe(1);
+      // Production defect remediation (canonical connection) — Correction 3: Step 1 (createDraft,
+      // inside acceptPlan) now also attempts establishment, in addition to Step 2 (creditorDecide's
+      // accept branch) — both best-effort, both independently logged-and-swallowed on failure. Two
+      // failed attempts here, never more, never a duplicate/divergent mechanism.
+      expect(attempts).toBe(2);
 
       // relationship_id remains null.
       expect(ctx.relationshipCtx.agreementLinker.linked.get(agreementId)).toBeUndefined();

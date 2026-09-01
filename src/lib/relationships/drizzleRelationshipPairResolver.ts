@@ -120,4 +120,90 @@ export class DrizzleRelationshipPairResolver implements RelationshipPairResolver
       return { relationshipId: newRelationship.id };
     });
   }
+
+  /**
+   * Production defect remediation (canonical connection) — Step-1/Step-2 lifecycle correction: the
+   * Step 1 counterpart to `resolveForExactParties` above. Same advisory-lock serialization (identical
+   * unordered-pair lock key), so a concurrent call to either method for the same pair can never race
+   * into creating two relationships. The reuse-candidate query is broadened to match a participant row
+   * in EITHER `active` or `invited` status for each party — an already-confirmed connection is reused
+   * exactly as-is (never touched), and a still-pending one from an earlier/abandoned Step 1 attempt for
+   * this exact pair is reused too, rather than creating a duplicate. Only when truly no candidate
+   * exists does this create a new relationship — with the counterparty's participant row inserted
+   * `invited` (not `active`): they have not yet confirmed anything at Step 1.
+   */
+  async resolveOrCreatePendingForExactParties(input: {
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatorUserId: string;
+  }): Promise<{ relationshipId: string }> {
+    const db = getDb();
+    const [lockKeyA, lockKeyB] = [partyKey(input.creditor), partyKey(input.debtor)].sort();
+    const initiatorIsCreditor = input.initiatorUserId === input.creditorUserId;
+    const initiator = initiatorIsCreditor ? input.creditor : input.debtor;
+    const initiatorRole = initiatorIsCreditor ? "creditor" : "debtor";
+    const counterparty = initiatorIsCreditor ? input.debtor : input.creditor;
+    const counterpartyUserId = initiatorIsCreditor ? input.debtorUserId : input.creditorUserId;
+    const counterpartyRole = initiatorIsCreditor ? "debtor" : "creditor";
+
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKeyA}), hashtext(${lockKeyB}))`);
+
+      const reusableStatuses = ["active", "invited"] as const;
+      const partyARows = await tx
+        .select({ relationshipId: relationshipParticipant.relationshipId })
+        .from(relationshipParticipant)
+        .where(and(inArray(relationshipParticipant.status, [...reusableStatuses]), partyMatch(input.creditor)));
+      const partyBRows = await tx
+        .select({ relationshipId: relationshipParticipant.relationshipId })
+        .from(relationshipParticipant)
+        .where(and(inArray(relationshipParticipant.status, [...reusableStatuses]), partyMatch(input.debtor)));
+
+      const partyBRelationshipIds = new Set(partyBRows.map((r) => r.relationshipId));
+      const candidateIds = [...new Set(partyARows.map((r) => r.relationshipId))].filter((id) => partyBRelationshipIds.has(id));
+
+      if (candidateIds.length > 0) {
+        const candidates = await tx
+          .select()
+          .from(relationship)
+          .where(and(inArray(relationship.id, candidateIds), notInArray(relationship.status, [...TERMINAL_STATUSES])))
+          .orderBy(asc(relationship.createdAt))
+          .limit(1);
+        if (candidates[0]) {
+          return { relationshipId: candidates[0].id };
+        }
+      }
+
+      const [newRelationship] = await tx
+        .insert(relationship)
+        .values({ initiatorUserId: input.initiatorUserId, publicReference: generateRelationshipReferenceCode() })
+        .returning();
+      if (!newRelationship) throw new ConfigurationError("relationship insert returned no row during pending pair resolution");
+
+      await tx.insert(relationshipParticipant).values([
+        {
+          relationshipId: newRelationship.id,
+          individualProfileId: initiator.kind === "personal" ? initiator.id : null,
+          organizationId: initiator.kind === "business" ? initiator.id : null,
+          role: initiatorRole,
+          status: "active",
+          representedByUserId: input.initiatorUserId,
+          joinedAt: new Date(),
+        },
+        {
+          relationshipId: newRelationship.id,
+          individualProfileId: counterparty.kind === "personal" ? counterparty.id : null,
+          organizationId: counterparty.kind === "business" ? counterparty.id : null,
+          role: counterpartyRole,
+          status: "invited",
+          representedByUserId: counterpartyUserId,
+          joinedAt: null,
+        },
+      ]);
+
+      return { relationshipId: newRelationship.id };
+    });
+  }
 }

@@ -3,17 +3,7 @@ import { AuditService, type AuditEventRecord, type AuditEventRepository } from "
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { createTestNotificationService } from "@/lib/notify/testFakes";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
-import { RelationshipService, type EvidenceReader } from "@/lib/relationships/relationshipService";
-import {
-  InMemoryAgreementRelationshipLinker,
-  InMemoryCardMethodReader,
-  InMemoryFinancialAccountRepository,
-  InMemoryMandateReader,
-  InMemoryRelationshipFinancialAccountRepository,
-  InMemoryRelationshipPairResolver,
-  InMemoryRelationshipParticipantRepository,
-  InMemoryRelationshipRepository,
-} from "@/lib/relationships/testFakes";
+import { createTestAgreementRelationshipEstablisher } from "@/lib/relationships/testFakes";
 import { AgreementInvitationService } from "./agreementInvitationService";
 import type {
   AgreementInvitationProposedTerms,
@@ -206,54 +196,6 @@ class InMemoryAuditEventRepositoryForAgreementInvitations implements AuditEventR
   }
 }
 
-/** A relationship layer needs an EvidenceReader dependency it never actually calls from acceptPlan's establishAgreementRelationship path — a real EvidenceService would just be extra harness weight for no test coverage gained. */
-class NotImplementedEvidenceReader implements EvidenceReader {
-  async listEvidence(): Promise<never[]> {
-    return [];
-  }
-  async getSignedEvidenceUrl(): Promise<string> {
-    throw new Error("not implemented in this test harness");
-  }
-}
-
-/**
- * Root-cause closure (Agreement invitation missing-connection defect): a real `RelationshipService`,
- * sharing this same harness's `agreementService`/`profileOwners`/`staffService` instances (mirrors
- * `createTestRelationshipServices`'s own sharing precedent) so `establishAgreementRelationship` —
- * called from `AgreementInvitationService.acceptPlan` — exercises real Sprint 18A relationship logic
- * (`linkAgreement`'s exact-counterparty check included) against the exact same in-memory agreement
- * data `acceptPlan` itself just wrote, rather than a stub.
- */
-function createTestAgreementRelationshipEstablisher(agreementCtx: ReturnType<typeof createTestAgreementService>) {
-  const participants = new InMemoryRelationshipParticipantRepository();
-  const relationships = new InMemoryRelationshipRepository(participants);
-  const pairResolver = new InMemoryRelationshipPairResolver(relationships, participants);
-  const agreementLinker = new InMemoryAgreementRelationshipLinker(agreementCtx.agreements);
-  const financialAccounts = new InMemoryFinancialAccountRepository();
-  const assignments = new InMemoryRelationshipFinancialAccountRepository(financialAccounts);
-  const mandates = new InMemoryMandateReader();
-  const cards = new InMemoryCardMethodReader();
-  const auditRepo = new InMemoryAuditEventRepositoryForAgreementInvitations();
-
-  const relationshipService = new RelationshipService({
-    relationships,
-    participants,
-    financialAccounts: assignments,
-    agreementService: agreementCtx.agreementService,
-    agreements: agreementLinker,
-    pairResolver,
-    mandates,
-    cards,
-    evidence: new NotImplementedEvidenceReader(),
-    profileOwners: agreementCtx.profileOwners,
-    staffService: agreementCtx.staffCtx.staffService,
-    notifications: createTestNotificationService().notificationService,
-    audit: new AuditService(auditRepo),
-  });
-
-  return { relationshipService, relationships, participants, pairResolver, agreementLinker, financialAccounts, assignments, mandates, cards };
-}
-
 /**
  * Shares its embedded AgreementService's own `profileOwners`/`staffCtx.staffService` instances —
  * both classes must agree on who owns/staffs which profile for a claim-time `createDraft` call to
@@ -270,6 +212,14 @@ export function createTestAgreementInvitationService(appUrl = "https://paid2you.
     establishAgreementRelationship: (input) => {
       if (!connectionEstablisherBox.target) throw new Error("test connectionEstablisher not wired yet");
       return connectionEstablisherBox.target.establishAgreementRelationship(input);
+    },
+    proposeAgreementRelationship: (input) => {
+      if (!connectionEstablisherBox.target) throw new Error("test connectionEstablisher not wired yet");
+      return connectionEstablisherBox.target.proposeAgreementRelationship(input);
+    },
+    confirmAgreementRelationship: (input) => {
+      if (!connectionEstablisherBox.target) throw new Error("test connectionEstablisher not wired yet");
+      return connectionEstablisherBox.target.confirmAgreementRelationship(input);
     },
   };
   const agreementCtx = createTestAgreementService(undefined, undefined, connectionEstablisher);
