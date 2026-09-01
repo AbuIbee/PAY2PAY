@@ -26,6 +26,15 @@ export type AgreementStatus =
   | "mutually_canceled"
   | "closed";
 
+/**
+ * Production defect remediation (canonical connection + party name display): the one shared
+ * definition of "Step 2 — Review & Acceptance has not yet completed" — every status an agreement
+ * passes through before `creditorDecide(accept)` moves it to `awaiting_signatures`. Exported so
+ * `AgreementProgressService` and `ensureRelationshipLinked` (below) share the identical list instead
+ * of each maintaining their own copy that could drift apart.
+ */
+export const PRE_ACCEPTANCE_STATUSES: readonly AgreementStatus[] = ["draft", "awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance"];
+
 export type PartyRole = "creditor" | "debtor";
 export type FeeAllocation = "creditor_pays" | "debtor_pays" | "split_evenly";
 
@@ -239,10 +248,35 @@ export interface SigningApplicationRepository {
  * Decision 3 (canonical connection — centralized auto-connection): the one capability the shared
  * agreement-lifecycle boundary needs to stop producing agreements with `relationship_id = null`,
  * regardless of which caller (wizard, invitation, B2B, CSV, or any future path) drove the agreement to
- * this transition. Real implementation: RelationshipService.establishAgreementRelationship.
+ * this transition.
+ *
+ * Production defect remediation (canonical connection) — Step-1/Step-2 lifecycle correction: split
+ * into three methods matching the three distinct moments a connection can be touched.
+ * `establishAgreementRelationship` (real implementation: RelationshipService.establishAgreementRelationship)
+ * is UNCHANGED — reuse-or-create-fully-active, immediately — used only where both parties are already
+ * definitively, mutually engaged (legacy remediation; the invitation flow's own direct calls).
+ * `proposeAgreementRelationship` (Step 1 — createDraft) and `confirmAgreementRelationship` (Step 2 —
+ * creditorDecide's accept branch) are new: see RelationshipService's own doc comments on each for the
+ * exact pending/confirmed semantics.
  */
 export interface AgreementConnectionEstablisher {
   establishAgreementRelationship(input: {
+    agreementId: string;
+    creditor: ProfileRef;
+    creditorUserId: string;
+    debtor: ProfileRef;
+    debtorUserId: string;
+    initiatingUserId: string;
+  }): Promise<{ relationshipId: string }>;
+  proposeAgreementRelationship(input: {
+    agreementId: string;
+    creditor: ProfileRef;
+    creditorUserId: string;
+    debtor: ProfileRef;
+    debtorUserId: string;
+    initiatingUserId: string;
+  }): Promise<{ relationshipId: string }>;
+  confirmAgreementRelationship(input: {
     agreementId: string;
     creditor: ProfileRef;
     creditorUserId: string;
@@ -477,7 +511,36 @@ export class AgreementService {
       relationshipShape: this.relationshipShape(agreement),
     });
 
-    return { agreement: { ...agreement, currentVersionId: version.id }, version, schedule };
+    // Production defect remediation (canonical connection) — Correction 3: Step 1 establishes/reuses
+    // the exact-party canonical relationship right here, using the SAME best-effort, idempotent,
+    // race-safe mechanism Decision 3 already uses at Step 2 acceptance (tryEstablishConnection ->
+    // connectionEstablisher.establishAgreementRelationship -> pairResolver's advisory-lock exact-party
+    // resolution — never a second, divergent mechanism). An already-existing relationship for this
+    // exact pair (the common case: AgreementCreateWizard only ever offers an already-active connection
+    // to pick from) is reused and linked immediately, closing the wizard's old two-step, non-atomic
+    // createDraft + POST /api/relationships/link-agreement gap. Step 2's own call to this identical
+    // method (creditorDecide's accept branch, unchanged) is then a guaranteed idempotent no-op —
+    // `establishAgreementRelationship`'s own first line returns immediately once `relationship_id` is
+    // already set — confirming, never duplicating, the same relationship; "no second relationship is
+    // created at Step 2" holds by construction, not by a special case.
+    //
+    // Never blocks draft creation on failure (see tryEstablishConnection's own doc comment: try/catch,
+    // logged only) — a legacy/failed case still self-heals seamlessly once Step 2 completes, via the
+    // explicit POST /api/agreements/ensure-relationship remediation (Correction 1).
+    //
+    // Design note on the "no relationship exists yet" branch: `pairResolver` creates a brand-new
+    // relationship with BOTH participants already `active` (no separate invited/pending handshake) —
+    // this was Decision 3's own reviewed, deliberate choice ("both parties' identities are already
+    // established by the caller," see DrizzleRelationshipPairResolver's doc comment), and it applies
+    // identically here: `createDraft` itself already requires both `creditor`/`debtor` to be existing,
+    // already-owned platform profiles (never an unknown/email-only party) — the counterparty's
+    // *identity* is exactly as established at Step 1 as it is at Step 2; only acceptance of this
+    // specific agreement's financial terms is still pending, and that remains fully gated by the
+    // agreement's own separate acceptance/payment-setup lifecycle regardless of connection status. No
+    // second relationship is ever created afterward — Step 2 always reuses this same one.
+    await this.tryEstablishConnection(agreement, input.creatorUserId, "propose");
+
+    return this.getAgreement(agreement.id, input.creatorUserId);
   }
 
   /**
@@ -607,29 +670,7 @@ export class AgreementService {
       // logged with full context and never undoes or blocks the acceptance already persisted above —
       // exactly the partial-success contract AgreementInvitationService.acceptPlan established before
       // this was centralized (that class no longer duplicates this call).
-      if (this.deps.connectionEstablisher) {
-        try {
-          const creditorUserId = await this.deps.profileOwners.getOwnerUserId(agreement.creditorProfileKind, agreement.creditorProfileId);
-          const debtorUserId = await this.deps.profileOwners.getOwnerUserId(agreement.debtorProfileKind, agreement.debtorProfileId);
-          if (!creditorUserId || !debtorUserId) {
-            throw new Error(`could not resolve owning user for creditor/debtor profile of agreement ${agreement.id}`);
-          }
-          await this.deps.connectionEstablisher.establishAgreementRelationship({
-            agreementId: agreement.id,
-            creditor: { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId },
-            creditorUserId,
-            debtor: { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId },
-            debtorUserId,
-            initiatingUserId: input.actingUserId,
-          });
-        } catch (error) {
-          logger.error("agreement_connection_establishment_failed", {
-            agreementId: agreement.id,
-            actingUserId: input.actingUserId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
+      await this.tryEstablishConnection(agreement, input.actingUserId, "confirm");
       if (this.deps.identitySnapshotter && agreement.currentVersionId) {
         try {
           await this.deps.identitySnapshotter.freezeSnapshot({
@@ -669,6 +710,95 @@ export class AgreementService {
       newTerms: input.counterTerms,
       reason: input.reason ?? "The creditor proposed different terms.",
     });
+  }
+
+  /**
+   * Production defect remediation (canonical connection + party name display): the one place that
+   * resolves authoritative creditor/debtor user ids and calls `connectionEstablisher`. Extracted from
+   * `creditorDecide`'s accept branch (unchanged behavior there — this is a pure extraction) so
+   * `ensureRelationshipLinked` below can reuse the identical resolution/best-effort/logging behavior
+   * for legacy self-repair, rather than a second, divergent copy. Never matches parties by name/
+   * display name/email — only by the agreement's own authoritative `creditorProfileKind`/
+   * `creditorProfileId`/`debtorProfileKind`/`debtorProfileId` and the owning user id each resolves to.
+   *
+   * Production defect remediation (canonical connection) — Step-1/Step-2 lifecycle correction: `mode`
+   * selects which of `connectionEstablisher`'s methods this call means:
+   * - `"propose"` (Step 1 — `createDraft`): the counterparty has not yet confirmed anything. Reuses
+   *   any existing relationship for this exact pair as-is; creates a new one with the counterparty
+   *   left unconfirmed if none exists.
+   * - `"confirm"` (Step 2 — `creditorDecide`'s accept branch; legacy remediation via
+   *   `ensureRelationshipLinked`): acceptance IS the confirmation. Ensures established (falling back
+   *   to full establishment if Step 1 never ran — every legacy record predating this correction takes
+   *   exactly this path, unchanged) and activates any still-unconfirmed participant on the resulting
+   *   relationship.
+   */
+  private async tryEstablishConnection(agreement: AgreementRecord, actingUserId: string, mode: "propose" | "confirm"): Promise<void> {
+    if (!this.deps.connectionEstablisher) return;
+    try {
+      const creditorUserId = await this.deps.profileOwners.getOwnerUserId(agreement.creditorProfileKind, agreement.creditorProfileId);
+      const debtorUserId = await this.deps.profileOwners.getOwnerUserId(agreement.debtorProfileKind, agreement.debtorProfileId);
+      if (!creditorUserId || !debtorUserId) {
+        throw new Error(`could not resolve owning user for creditor/debtor profile of agreement ${agreement.id}`);
+      }
+      const input = {
+        agreementId: agreement.id,
+        creditor: { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId },
+        creditorUserId,
+        debtor: { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId },
+        debtorUserId,
+        initiatingUserId: actingUserId,
+      };
+      if (mode === "propose") {
+        await this.deps.connectionEstablisher.proposeAgreementRelationship(input);
+      } else {
+        await this.deps.connectionEstablisher.confirmAgreementRelationship(input);
+      }
+    } catch (error) {
+      logger.error("agreement_connection_establishment_failed", {
+        agreementId: agreement.id,
+        actingUserId,
+        mode,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Production defect remediation (canonical connection + party name display) — Fix 1/Fix 2: the
+   * mandatory invariant this method exists to enforce is "Step 2 Complete implies
+   * agreement.relationship_id is not null." Called from `AgreementProgressService.getProgress` on
+   * every read that finds a null relationship_id on an agreement whose acceptance has completed —
+   * covers BOTH a legacy agreement that predates centralized auto-establishment (Decision 3) and the
+   * rarer case where the original accept-time attempt itself failed (`tryEstablishConnection` is
+   * best-effort and only logs on failure, by design — acceptance itself must never be blocked by it).
+   *
+   * Idempotent (a no-op once relationship_id is already set — reads it fresh, never trusts a caller-
+   * supplied value), race-safe (delegates to the exact same `connectionEstablisher` ->
+   * `RelationshipService.establishAgreementRelationship` -> `pairResolver`/`linkAgreement` path
+   * `creditorDecide` itself uses, including that path's own advisory-lock exact-party resolution —
+   * never a second, divergent mechanism), and never throws — a failed repair attempt is logged and
+   * simply leaves relationship_id null for the caller to handle (see
+   * AgreementProgressService.paymentMethodStep's own "setup incomplete, try again" state).
+   *
+   * A pre-acceptance agreement (Step 2 not yet complete) is untouched — there is nothing to repair
+   * yet, and establishing a connection before both parties have even accepted terms would be
+   * premature. A cancelled agreement is likewise untouched — repairing a dead agreement's connection
+   * has no product value.
+   */
+  async ensureRelationshipLinked(agreementId: string, actingUserId: string): Promise<string | null> {
+    const { agreement } = await this.getAgreement(agreementId, actingUserId);
+    if (agreement.relationshipId) return agreement.relationshipId;
+    if (PRE_ACCEPTANCE_STATUSES.includes(agreement.status) || agreement.status === "mutually_canceled") return null;
+    // "confirm", not a plain establish: this agreement's Step 2 has already genuinely completed (the
+    // PRE_ACCEPTANCE_STATUSES check above guarantees it), but relationship_id is still null — either
+    // because this record predates any connection attempt at all (confirmAgreementRelationship's own
+    // establishAgreementRelationship fallback handles that identically to before this correction), OR
+    // because Step 1 left a pending relationship whose Step 2 confirm attempt itself failed — "confirm"
+    // is the only mode that also activates that still-unconfirmed participant; "establish" would wrongly
+    // no-op on an already-linked-but-still-pending relationship.
+    await this.tryEstablishConnection(agreement, actingUserId, "confirm");
+    const refreshed = await this.getAgreement(agreementId, actingUserId);
+    return refreshed.agreement.relationshipId;
   }
 
   /**

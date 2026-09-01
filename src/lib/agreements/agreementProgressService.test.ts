@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DraftTermsInput } from "./agreementService";
 import { createTestAgreementService } from "./testFakes";
+import { createTestAgreementRelationshipEstablisher } from "@/lib/relationships/testFakes";
 import {
   AgreementProgressService,
   type AgreementBalanceReader,
@@ -224,15 +225,26 @@ describe("AgreementProgressService", () => {
   });
 
   describe("payment method — item: 'only require this step when the agreement type actually requires it'", () => {
-    it("missing-connection UI remediation: reports a recoverable 'action_required' (never 'blocked', never a falsely-reassuring 'optional') when the agreement has no linked relationship, with no 'Contact support' CTA", async () => {
+    it("Production defect remediation (canonical connection): before acceptance, payment method is simply 'not_started' — never a connection-related state, since there is nothing to connect yet", async () => {
       const { agreementId, creditorUserId } = await createAgreement();
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       const step = progress.steps.find((s) => s.key === "payment_method");
+      expect(step?.status).toBe("not_started");
+      if (step?.statusText) expect(step.statusText).not.toMatch(/connection/i);
+      expect(step?.cta).toBeFalsy();
+    });
+
+    it("Production defect remediation (canonical connection): once accepted, a still-unlinked relationship (self-heal unavailable/failed) reports a recoverable 'action_required' with a 'Try again' CTA — never a manual 'Resolve connection'/'Create New Connection' workflow", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+
+      const progress = await progressService.getProgress(agreementId, creditorUserId);
+      const step = progress.steps.find((s) => s.key === "payment_method");
       expect(step?.status).toBe("action_required");
-      expect(step?.statusText).toBe("Connection required");
+      expect(step?.statusText).toBe("Setup incomplete");
       expect(step?.cta?.label).not.toMatch(/support/i);
-      expect(step?.cta?.href).not.toBe("/support");
-      expect(step?.cta).toEqual({ label: "Resolve connection", href: `/agreements/detail?id=${agreementId}#connection-required` });
+      expect(step?.cta?.label).not.toMatch(/resolve connection|create.*connection/i);
+      expect(step?.cta).toEqual({ label: "Try again", href: `/agreements/detail?id=${agreementId}#payment-setup-retry` });
     });
 
     it("action_required with a direct CTA when linked to a relationship with no matching account assigned", async () => {
@@ -393,18 +405,19 @@ describe("AgreementProgressService", () => {
       await ctx.agreementService.signAgreement(agreementId, debtorUserId);
     }
 
-    it("Fix the 'Make payment' button: no linked relationship — reports the same truthful, recoverable 'action_required'/'Connection required' state as Step 3, never a 'Make payment' CTA that can't lead to a working payment", async () => {
+    it("Production defect remediation (canonical connection): no linked relationship after signing (self-heal unavailable/failed) — reports a truthful, non-actionable 'waiting' state, never a 'Make payment' CTA that can't lead to a working payment, and never a 'Connection required'/manual-connection state", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       await signBoth(agreementId, creditorUserId, debtorUserId);
 
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       const step = progress.steps.find((s) => s.key === "active");
-      expect(step?.status).toBe("action_required");
-      expect(step?.statusText).toBe("Connection required");
-      expect(step?.cta).not.toEqual({ label: "Make payment", href: expect.stringContaining("#make-payment") });
+      expect(step?.status).toBe("waiting");
+      expect(step?.statusText).toBe("Waiting for payment setup");
+      expect(step?.statusText).not.toMatch(/connection required|setup incomplete/i);
+      expect(step?.cta).toBeNull();
     });
 
-    it("STATE B — debtor funding/mandate missing: debtor sees 'Payment setup required', creditor sees 'Waiting for debtor payment setup' with no action of their own", async () => {
+    it("Production defect remediation (canonical connection) — Correction 2: Step 5 never duplicates Step 3's actionable CTA. STATE B (debtor funding/mandate missing): Step 3 is action_required for the debtor, but Step 5 reads a plain, non-actionable 'Waiting for payment setup' for both parties, with no Add-bank/Authorize CTA", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       const relationshipId = randomUUID();
       ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
@@ -413,17 +426,26 @@ describe("AgreementProgressService", () => {
       ]);
       await signBoth(agreementId, creditorUserId, debtorUserId);
 
-      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
-      const creditorStep = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "active");
-      expect(debtorStep?.status).toBe("action_required");
-      expect(debtorStep?.statusText).toBe("Payment setup required");
-      expect(debtorStep?.cta).not.toBeNull();
+      const debtorProgress = await progressService.getProgress(agreementId, debtorUserId);
+      const creditorProgress = await progressService.getProgress(agreementId, creditorUserId);
+      const debtorPaymentMethod = debtorProgress.steps.find((s) => s.key === "payment_method");
+      const debtorStep = debtorProgress.steps.find((s) => s.key === "active");
+      const creditorStep = creditorProgress.steps.find((s) => s.key === "active");
+
+      // Step 3 still owns the real actionable state for the debtor.
+      expect(debtorPaymentMethod?.status).toBe("action_required");
+      expect(debtorPaymentMethod?.statusText).toBe("Payment setup required");
+
+      // Step 5 never repeats it — same truthful, non-actionable wording for both parties.
+      expect(debtorStep?.status).toBe("waiting");
+      expect(debtorStep?.statusText).toBe("Waiting for payment setup");
+      expect(debtorStep?.cta).toBeNull();
       expect(creditorStep?.status).toBe("waiting");
-      expect(creditorStep?.statusText).toBe("Waiting for debtor payment setup");
+      expect(creditorStep?.statusText).toBe("Waiting for payment setup");
       expect(creditorStep?.cta).toBeNull();
     });
 
-    it("STATE C — creditor payout missing: creditor sees 'Payout setup required', debtor sees 'Waiting for creditor payout setup' and is never asked to fix the creditor's account", async () => {
+    it("Production defect remediation (canonical connection) — Correction 2: STATE C (creditor payout missing) — Step 3 is action_required for the creditor, but Step 5 never duplicates that CTA for either party", async () => {
       const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
       const relationshipId = randomUUID();
       ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
@@ -433,12 +455,20 @@ describe("AgreementProgressService", () => {
       mandates.active.add(agreementId);
       await signBoth(agreementId, creditorUserId, debtorUserId);
 
-      const creditorStep = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "active");
-      const debtorStep = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
-      expect(creditorStep?.status).toBe("action_required");
-      expect(creditorStep?.statusText).toBe("Payout setup required");
+      const creditorProgress = await progressService.getProgress(agreementId, creditorUserId);
+      const debtorProgress = await progressService.getProgress(agreementId, debtorUserId);
+      const creditorPaymentMethod = creditorProgress.steps.find((s) => s.key === "payment_method");
+      const creditorStep = creditorProgress.steps.find((s) => s.key === "active");
+      const debtorStep = debtorProgress.steps.find((s) => s.key === "active");
+
+      expect(creditorPaymentMethod?.status).toBe("action_required");
+      expect(creditorPaymentMethod?.statusText).toBe("Payout setup required");
+
+      expect(creditorStep?.status).toBe("waiting");
+      expect(creditorStep?.statusText).toBe("Waiting for payment setup");
+      expect(creditorStep?.cta).toBeNull();
       expect(debtorStep?.status).toBe("waiting");
-      expect(debtorStep?.statusText).toBe("Waiting for creditor payout setup");
+      expect(debtorStep?.statusText).toBe("Waiting for payment setup");
       expect(debtorStep?.cta).toBeNull();
     });
 
@@ -559,6 +589,53 @@ describe("AgreementProgressService", () => {
       const step = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "active");
       expect(step?.status).toBe("complete");
       expect(step?.statusText).toBe("Agreement paid in full");
+    });
+
+    it("Correction 2, test 3 — an active agreement with a real next-due payment reports a truthful in-progress lifecycle state (never not_started/blocked/a connection state)", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+      await signBoth(agreementId, creditorUserId, debtorUserId);
+
+      const step = (await progressService.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "active");
+      expect(step?.status).not.toBe("not_started");
+      expect(step?.status).not.toBe("blocked");
+      expect(step?.statusText).toMatch(/payment/i);
+      expect(step?.statusText).not.toMatch(/connection/i);
+    });
+
+    it("Correction 2, tests 6/7 — Step 5 never renders 'Connection required' or 'Resolve connection' in any state exercised above", async () => {
+      const scenarios: Array<() => Promise<{ agreementId: string; userId: string }>> = [
+        async () => {
+          const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+          await signBoth(agreementId, creditorUserId, debtorUserId);
+          return { agreementId, userId: creditorUserId };
+        },
+        async () => {
+          const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+          const relationshipId = randomUUID();
+          ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+          relationshipPaymentMethods.byRelationship.set(relationshipId, [
+            { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+            { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+          ]);
+          mandates.active.add(agreementId);
+          await signBoth(agreementId, creditorUserId, debtorUserId);
+          return { agreementId, userId: debtorUserId };
+        },
+      ];
+      for (const scenario of scenarios) {
+        const { agreementId, userId } = await scenario();
+        const step = (await progressService.getProgress(agreementId, userId)).steps.find((s) => s.key === "active");
+        expect(step?.statusText ?? "").not.toMatch(/connection required/i);
+        expect(step?.description ?? "").not.toMatch(/connection required/i);
+        expect(step?.cta?.label ?? "").not.toMatch(/resolve connection/i);
+      }
     });
   });
 
@@ -720,5 +797,153 @@ describe("AgreementProgressService", () => {
       const progress = await progressService.getProgress(agreementId, creditorUserId);
       expect(progress.primaryAction.label).toBe("Waiting for other party");
     });
+  });
+});
+
+/**
+ * Production defect remediation (canonical connection + party name display) — Fix 1/Fix 2, tests 10-12:
+ * a separate harness with a REAL `connectionEstablisher` (backed by a real `RelationshipService`, via
+ * the shared `createTestAgreementRelationshipEstablisher` box-wiring precedent from
+ * agreementInvitations/testFakes.ts) wired into `AgreementService`, so `ensureRelationshipLinked`'s
+ * self-heal path can be exercised end to end — proving a legacy agreement (accepted before centralized
+ * auto-establishment, or whose accept-time attempt failed) self-repairs its `relationship_id` on the
+ * very next progress read, with no manual connection selection, and that Step 3 recomputes immediately
+ * within that same read rather than requiring a second page load.
+ */
+describe("AgreementProgressService — legacy self-repair (production defect remediation, real connectionEstablisher)", () => {
+  let ctx: ReturnType<typeof createTestAgreementService>;
+  let relationshipCtx: ReturnType<typeof createTestAgreementRelationshipEstablisher>;
+  let relationshipPaymentMethods: FakeRelationshipPaymentMethodReader;
+  let mandates: FakeAgreementMandateReader;
+  let installments: FakeAgreementInstallmentStatusReader;
+  let paymentAttempts: FakeAgreementPaymentAttemptsReader;
+  let balance: FakeAgreementBalanceReader;
+  let progressService: AgreementProgressService;
+
+  beforeEach(() => {
+    // Decision 3 box pattern: `ctx` needs a connectionEstablisher at construction time, but the real
+    // RelationshipService (relationshipCtx) needs `ctx` first — defer the real target to first call.
+    const connectionEstablisherBox: { target: import("./agreementService").AgreementConnectionEstablisher | null } = { target: null };
+    const connectionEstablisher: import("./agreementService").AgreementConnectionEstablisher = {
+      establishAgreementRelationship: (input) => {
+        if (!connectionEstablisherBox.target) throw new Error("test connectionEstablisher not wired yet");
+        return connectionEstablisherBox.target.establishAgreementRelationship(input);
+      },
+      proposeAgreementRelationship: (input) => {
+        if (!connectionEstablisherBox.target) throw new Error("test connectionEstablisher not wired yet");
+        return connectionEstablisherBox.target.proposeAgreementRelationship(input);
+      },
+      confirmAgreementRelationship: (input) => {
+        if (!connectionEstablisherBox.target) throw new Error("test connectionEstablisher not wired yet");
+        return connectionEstablisherBox.target.confirmAgreementRelationship(input);
+      },
+    };
+    ctx = createTestAgreementService(undefined, undefined, connectionEstablisher);
+    relationshipCtx = createTestAgreementRelationshipEstablisher(ctx);
+    connectionEstablisherBox.target = relationshipCtx.relationshipService;
+
+    relationshipPaymentMethods = new FakeRelationshipPaymentMethodReader();
+    mandates = new FakeAgreementMandateReader();
+    installments = new FakeAgreementInstallmentStatusReader(ctx);
+    paymentAttempts = new FakeAgreementPaymentAttemptsReader();
+    balance = new FakeAgreementBalanceReader();
+    progressService = new AgreementProgressService({
+      agreementService: ctx.agreementService,
+      relationshipPaymentMethods,
+      cancellation: new FakeAgreementCancellationReader(ctx.auditRepo),
+      mandates,
+      installments,
+      paymentAttempts,
+      balance,
+    });
+  });
+
+  async function createAgreement(overrides: Partial<DraftTermsInput> = {}) {
+    const creditorUserId = randomUUID();
+    const debtorUserId = randomUUID();
+    const creditorProfileId = randomUUID();
+    const debtorProfileId = randomUUID();
+    ctx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+    ctx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+    const created = await ctx.agreementService.createDraft({
+      creatorUserId: debtorUserId,
+      creditor: { kind: "personal", id: creditorProfileId },
+      debtor: { kind: "personal", id: debtorProfileId },
+      ...baseTerms(overrides),
+    });
+    return { agreementId: created.agreement.id, creditorUserId, debtorUserId, creditorProfileId, debtorProfileId };
+  }
+
+  async function advanceToAwaitingSignatures(agreementId: string, creditorUserId: string, debtorUserId: string) {
+    await ctx.agreementService.submitDraft(agreementId, creditorUserId);
+    await ctx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
+    await ctx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" });
+  }
+
+  it("test 10/11 — a legacy agreement accepted with relationship_id left null self-repairs via the explicit remediation method (AgreementService.ensureRelationshipLinked — the same method POST /api/agreements/ensure-relationship invokes): no manual selection, relationship_id becomes non-null. getProgress() itself never mutates it (Correction 1)", async () => {
+    const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+    await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+
+    // Simulate a legacy/failed accept-time attempt: force relationship_id back to null, as if this
+    // record predates centralized auto-establishment or the original attempt silently failed.
+    ctx.agreements.byId.get(agreementId)!.relationshipId = null;
+    expect(ctx.agreements.byId.get(agreementId)!.relationshipId).toBeNull();
+
+    // A plain progress read must NOT repair it — getProgress() is a pure read (Correction 1).
+    await progressService.getProgress(agreementId, creditorUserId);
+    expect(ctx.agreements.byId.get(agreementId)!.relationshipId).toBeNull();
+
+    // The explicit, separate mutation does.
+    const repairedId = await ctx.agreementService.ensureRelationshipLinked(agreementId, creditorUserId);
+    expect(repairedId).toBeTruthy();
+    expect(ctx.agreements.byId.get(agreementId)!.relationshipId).toBe(repairedId);
+  });
+
+  it("test 12 — once the explicit remediation has run, the very next progress read immediately reflects the repaired Step 3 state: payment_method reports readiness, never 'Setup incomplete'", async () => {
+    const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+    await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+    ctx.agreements.byId.get(agreementId)!.relationshipId = null;
+
+    await ctx.agreementService.ensureRelationshipLinked(agreementId, creditorUserId);
+    const relationshipId = ctx.agreements.byId.get(agreementId)!.relationshipId!;
+    expect(relationshipId).toBeTruthy();
+
+    const progress = await progressService.getProgress(agreementId, creditorUserId);
+    const step = progress.steps.find((s) => s.key === "payment_method");
+    expect(step?.statusText).not.toBe("Setup incomplete");
+    expect(step?.statusText).not.toMatch(/connection/i);
+  });
+
+  it("test 2/3 (self-heal reuses the canonical relationship, never creates a duplicate for the same exact pair)", async () => {
+    const { agreementId, creditorUserId, debtorUserId, creditorProfileId, debtorProfileId } = await createAgreement();
+    await advanceToAwaitingSignatures(agreementId, creditorUserId, debtorUserId);
+    const firstRelationshipId = ctx.agreements.byId.get(agreementId)!.relationshipId;
+    expect(firstRelationshipId).toBeTruthy();
+
+    // A second agreement between the exact same two parties.
+    const second = await ctx.agreementService.createDraft({
+      creatorUserId: debtorUserId,
+      creditor: { kind: "personal", id: creditorProfileId },
+      debtor: { kind: "personal", id: debtorProfileId },
+      ...baseTerms(),
+    });
+    await advanceToAwaitingSignatures(second.agreement.id, creditorUserId, debtorUserId);
+    const secondRelationshipId = ctx.agreements.byId.get(second.agreement.id)!.relationshipId;
+
+    expect(secondRelationshipId).toBe(firstRelationshipId);
+  });
+
+  it("Correction 3 — Step 1 establishes/reuses the canonical relationship immediately at draft creation, before Step 2 has run", async () => {
+    const { agreementId } = await createAgreement();
+    expect(ctx.agreements.byId.get(agreementId)!.relationshipId).toBeTruthy();
+  });
+
+  it("the explicit remediation method never acts on a still-pre-acceptance (draft) agreement, even if relationship_id is somehow null on it", async () => {
+    const { agreementId, creditorUserId } = await createAgreement();
+    // Force back to null, as if Step 1's own establishment attempt had failed for this draft.
+    ctx.agreements.byId.get(agreementId)!.relationshipId = null;
+    const result = await ctx.agreementService.ensureRelationshipLinked(agreementId, creditorUserId);
+    expect(result).toBeNull();
+    expect(ctx.agreements.byId.get(agreementId)!.relationshipId).toBeNull();
   });
 });

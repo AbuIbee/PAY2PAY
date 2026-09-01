@@ -606,29 +606,29 @@ describe("AgreementDetail", () => {
     });
   });
 
-  describe("Missing-connection remediation (mandatory command)", () => {
-    const CONNECTION_REQUIRED_PROGRESS_STEPS = [
+  describe("Production defect remediation (canonical connection): zero manual connection workflow after Step 2", () => {
+    const SETUP_INCOMPLETE_PROGRESS_STEPS = [
       ...READY_PROGRESS_STEPS.slice(0, 2),
       {
         key: "payment_method",
         label: "Payment method",
         status: "action_required",
-        statusText: "Connection required",
-        description: "This agreement isn't linked to a connection yet, so a funding account can't be assigned. Link or create a connection to continue.",
-        cta: { label: "Resolve connection", href: "/agreements/detail?id=agreement-1#connection-required" },
+        statusText: "Setup incomplete",
+        description: "We couldn't finish setting up this agreement. Try again.",
+        cta: { label: "Try again", href: "/agreements/detail?id=agreement-1#payment-setup-retry" },
       },
       READY_PROGRESS_STEPS[3],
       {
         key: "active",
         label: "Agreement active",
         status: "action_required",
-        statusText: "Connection required",
-        description: "This agreement isn't linked to a connection yet, so a funding account can't be assigned. Link or create a connection to continue.",
-        cta: { label: "Resolve connection", href: "/agreements/detail?id=agreement-1#connection-required" },
+        statusText: "Setup incomplete",
+        description: "We couldn't finish setting up this agreement. Try again.",
+        cta: { label: "Try again", href: "/agreements/detail?id=agreement-1#payment-setup-retry" },
       },
     ];
 
-    it("offers both 'Create New Connection' and 'Choose Existing Connection' — never 'Contact support' — when a matching, unattached connection already exists", async () => {
+    it("test 13/14/17 — zero 'Resolve connection', zero 'Create New Connection', zero 'Next: Resolve connection' ever render for an accepted agreement; shows only the single 'Try again' technical-recovery action when automatic repair has failed", async () => {
       vi.stubGlobal(
         "fetch",
         mockFetchByUrl({
@@ -645,40 +645,73 @@ describe("AgreementDetail", () => {
               agreementId: "agreement-1",
               myRole: "debtor",
               status: "active",
-              steps: CONNECTION_REQUIRED_PROGRESS_STEPS,
-              primaryAction: { label: "Resolve connection", description: "x", cta: { label: "Resolve connection", href: "/agreements/detail?id=agreement-1#connection-required" } },
+              steps: SETUP_INCOMPLETE_PROGRESS_STEPS,
+              primaryAction: { label: "Try again", description: "x", cta: { label: "Try again", href: "/agreements/detail?id=agreement-1#payment-setup-retry" } },
               actionableForMeCount: 2,
             },
           },
           "/api/agreements/payment-setup/next-payment": {
             body: { nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 }, remainingBalanceMinorUnits: 90000, fundingAccountLabel: null, recipientDisplayName: null },
           },
-          "/api/agreements/link-candidates": { body: { relationships: [{ id: "rel-eligible-1", status: "financial_accounts_ready" }] } },
         }),
       );
 
       render(<AgreementDetail />);
 
-      expect(await screen.findByRole("heading", { name: "Connection required" })).toBeInTheDocument();
-      const createLink = screen.getByRole("link", { name: "Create New Connection" });
-      expect(createLink).toHaveAttribute("href", "/connections/invite");
-      expect(await screen.findByLabelText("Choose an existing connection")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /link connection/i })).toBeDisabled();
-      // "Contact support" must never appear for this condition — a missing connection is a normal,
-      // self-serve recoverable state, never a support case. Covers both the progress step's own CTA
-      // (Step 3 row and the "Next: ..." primary-action bar) and the recovery panel itself. (The page's
-      // own unrelated, always-present generic "Support" footer link is untouched by this defect and
-      // is deliberately not asserted against here.)
+      expect(await screen.findByText("We couldn't finish setting up this agreement")).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(0);
+
+      // The four removed connection actions must never appear anywhere on the page.
+      expect(screen.queryByText(/resolve connection/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /create new connection/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Connection required" })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/choose an existing connection/i)).not.toBeInTheDocument();
+      // Never a support dead-end either.
       expect(screen.queryByRole("link", { name: /contact support/i })).not.toBeInTheDocument();
-      expect(screen.queryByText(/contact support/i)).not.toBeInTheDocument();
     });
 
-    it("omits 'Choose Existing Connection' (no dead picker) when no eligible connection exists yet, but 'Create New Connection' still works, and 'Contact support' never appears", async () => {
+    it("the 'Try again' button re-fetches agreement progress (retrying the same automatic server-side repair), not a manual connection action", async () => {
       const user = userEvent.setup();
+      const fetchMock = mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/progress": {
+          body: {
+            agreementId: "agreement-1",
+            myRole: "debtor",
+            status: "active",
+            steps: SETUP_INCOMPLETE_PROGRESS_STEPS,
+            primaryAction: { label: "Try again", description: "x", cta: null },
+            actionableForMeCount: 2,
+          },
+        },
+        "/api/agreements/payment-setup/next-payment": { body: {} },
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<AgreementDetail />);
+      await screen.findByText("We couldn't finish setting up this agreement");
+      const callsBefore = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes("/api/agreements/progress")).length;
+
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+
+      await waitFor(() => {
+        const callsAfter = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes("/api/agreements/progress")).length;
+        expect(callsAfter).toBeGreaterThan(callsBefore);
+      });
+    });
+
+    it("test 15/16 — once setup succeeds, Step 3 shows a real payment-method state (never 'Connection required') and Step 5 never independently shows a connection gate", async () => {
       vi.stubGlobal(
         "fetch",
         mockFetchByUrl({
-          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/agreements/detail": { body: detailBody({ status: "awaiting_signatures" }) },
           "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
           "/api/agreements/evidence?": { body: { evidence: [] } },
           "/api/agreements/witnesses?": { body: { witnesses: [] } },
@@ -690,27 +723,25 @@ describe("AgreementDetail", () => {
             body: {
               agreementId: "agreement-1",
               myRole: "debtor",
-              status: "active",
-              steps: CONNECTION_REQUIRED_PROGRESS_STEPS,
-              primaryAction: { label: "Resolve connection", description: "x", cta: { label: "Resolve connection", href: "/agreements/detail?id=agreement-1#connection-required" } },
-              actionableForMeCount: 2,
+              status: "awaiting_signatures",
+              steps: [
+                ...READY_PROGRESS_STEPS.slice(0, 2),
+                { key: "payment_method", label: "Payment method", status: "action_required", statusText: "Payment setup required", description: "Add a payment method.", cta: { label: "Set up payment method", href: "/payment-methods" } },
+                READY_PROGRESS_STEPS[3],
+                { key: "active", label: "Agreement active", status: "not_started", description: "Not yet reached.", cta: null },
+              ],
+              primaryAction: { label: "Set up payment method", description: "x", cta: { label: "Set up payment method", href: "/payment-methods" } },
+              actionableForMeCount: 1,
             },
           },
-          "/api/agreements/payment-setup/next-payment": {
-            body: { nextInstallment: { id: "installment-1", sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 }, remainingBalanceMinorUnits: 90000, fundingAccountLabel: null, recipientDisplayName: null },
-          },
-          "/api/agreements/link-candidates": { body: { relationships: [] } },
         }),
       );
 
       render(<AgreementDetail />);
-      await screen.findByRole("heading", { name: "Connection required" });
-      expect(screen.queryByLabelText("Choose an existing connection")).not.toBeInTheDocument();
-      const createLink = screen.getByRole("link", { name: "Create New Connection" });
-      expect(createLink).toHaveAttribute("href", "/connections/invite");
-      await user.click(createLink); // a real, working navigable link — not a dead click.
-      expect(screen.queryByRole("link", { name: /contact support/i })).not.toBeInTheDocument();
-      expect(screen.queryByText(/contact support/i)).not.toBeInTheDocument();
+
+      expect(await screen.findByText("Payment setup required")).toBeInTheDocument();
+      expect(screen.queryByText(/connection required/i)).not.toBeInTheDocument();
+      expect(screen.queryByText("We couldn't finish setting up this agreement")).not.toBeInTheDocument();
     });
   });
 

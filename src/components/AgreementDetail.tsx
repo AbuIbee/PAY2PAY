@@ -274,6 +274,7 @@ export function AgreementDetail() {
   const [cancellationRequests, setCancellationRequests] = useState<CancellationRequestItem[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState<AgreementProgressData | null>(null);
+  const [remediationState, setRemediationState] = useState<"idle" | "running" | "failed">("idle");
   const [nextPayment, setNextPayment] = useState<NextPaymentData | null>(null);
   const [versions, setVersions] = useState<VersionHistoryItem[]>([]);
   const [profileReadiness, setProfileReadiness] = useState<{ ready: boolean; missingFields: string[] } | null>(null);
@@ -350,6 +351,46 @@ export function AgreementDetail() {
       setLoadStatus("error");
     }
   }, [agreementId]);
+
+  /**
+   * Production defect remediation (canonical connection) — Correction 1: the ONE automatic, idempotent
+   * remediation the Agreement page performs when it observes Step 2 complete + relationship_id still
+   * null (payment_method's statusText reads "Setup incomplete" — see agreementProgressService.ts's own
+   * doc comment). Invokes the explicit POST mutation (never the removed getProgress()-side mutation),
+   * then re-reads progress directly to decide the truthful outcome: resolved (statusText clears) or
+   * genuinely failed (statusText still "Setup incomplete" after the attempt) — never a manual
+   * connection picker either way. `load()` also runs, best-effort, to refresh the rest of the page.
+   */
+  const runRemediation = useCallback(async () => {
+    if (!agreementId) return;
+    setRemediationState("running");
+    try {
+      await apiFetch("/api/agreements/ensure-relationship", { method: "POST", body: JSON.stringify({ agreementId }) });
+    } catch {
+      // The repair attempt itself failed (network/server error) — the progress re-check below still
+      // determines the truthful outcome rather than assuming failure here.
+    }
+    try {
+      const fresh = await apiFetch<AgreementProgressData>(`/api/agreements/progress?id=${encodeURIComponent(agreementId)}`);
+      setProgress(Array.isArray(fresh?.steps) ? fresh : null);
+      const stillIncomplete = fresh?.steps?.find((s) => s.key === "payment_method")?.statusText === "Setup incomplete";
+      setRemediationState(stillIncomplete ? "failed" : "idle");
+    } catch {
+      setRemediationState("failed");
+    }
+    void load();
+  }, [agreementId, load]);
+
+  const needsSetupRemediation = progress?.steps.find((s) => s.key === "payment_method")?.statusText === "Setup incomplete";
+
+  useEffect(() => {
+    if (needsSetupRemediation && remediationState === "idle") {
+      // Deferred a microtask out: `runRemediation` itself calls setState as its first synchronous
+      // step (needed for the "Try again" button's own immediate feedback) — invoking it directly here
+      // would trip react-hooks/set-state-in-effect's "no synchronous setState in an effect body" rule.
+      void Promise.resolve().then(() => runRemediation());
+    }
+  }, [needsSetupRemediation, remediationState, runRemediation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -548,8 +589,8 @@ export function AgreementDetail() {
 
       {progress && <AgreementProgress data={progress} />}
 
-      {progress?.steps.find((s) => s.key === "payment_method")?.statusText === "Connection required" && (
-        <MissingConnectionPanel agreementId={data.id} onLinked={() => void load()} />
+      {needsSetupRemediation && (
+        <AgreementSetupRetryPanel state={remediationState} onRetry={() => void runRemediation()} />
       )}
 
       {myRole === "debtor" &&
@@ -1239,91 +1280,40 @@ function ProfileCompletionPanel({ returnTo }: { returnTo: string }) {
   );
 }
 
-interface LinkCandidate {
-  id: string;
-  status: string;
-}
-
 /**
- * Missing-connection remediation (mandatory command): shown whenever Step 3/5's payment_method step
- * reads "Connection required" — the truthful, recoverable state for an agreement with no linked
- * relationship (a legacy agreement predating AgreementInvitationService's auto-link fix, or one from
- * a creation path that doesn't yet auto-link — see agreementProgressService.ts's own doc comment).
- * Never a dead end: this offers the two real, working entry points a user actually needs — creating a
- * brand-new connection, or — when one with the agreement's exact counterparty already exists and
- * isn't governing another agreement — linking it directly via the pre-existing POST
- * /api/relationships/link-agreement (the same call AgreementCreateWizard itself uses). Deliberately no
- * "Contact support" — this is a normal, self-serve workflow state, not a support case.
+ * Production defect remediation (canonical connection) — Correction 1: shown whenever Step 3's
+ * payment_method step reports "Setup incomplete" — meaning Step 2 has genuinely completed and
+ * `relationship_id` is still null. AgreementDetail's own `runRemediation` effect fires the ONE explicit
+ * server-side repair (POST /api/agreements/ensure-relationship) automatically the moment this state is
+ * observed — the user never chooses or confirms anything. While that attempt (automatic or a manual
+ * retry) is in flight, this shows a neutral "Finalizing…" message; only once an attempt has genuinely
+ * failed (the state is still unresolved after retrying) does this offer the one technical recovery
+ * action: "Try again", which re-invokes the exact same automatic repair. There is no manual connection
+ * workflow here — never "Create New Connection", never a relationship picker, never "Contact support".
  */
-function MissingConnectionPanel({ agreementId, onLinked }: { agreementId: string; onLinked: () => void }) {
-  const [candidates, setCandidates] = useState<LinkCandidate[] | null>(null);
-  const [selectedId, setSelectedId] = useState("");
-  const [status, setStatus] = useState<"idle" | "linking" | "error">("idle");
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const body = await apiFetch<{ relationships: LinkCandidate[] }>(`/api/agreements/link-candidates?agreementId=${agreementId}`);
-        if (!cancelled) setCandidates(body.relationships);
-      } catch {
-        if (!cancelled) setCandidates([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [agreementId]);
-
-  async function handleLink() {
-    if (!selectedId) return;
-    setStatus("linking");
-    setError(null);
-    try {
-      await apiFetch("/api/relationships/link-agreement", {
-        method: "POST",
-        body: JSON.stringify({ relationshipId: selectedId, agreementId }),
-      });
-      onLinked();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not link this connection. Please try again.");
-      setStatus("idle");
-    }
-  }
-
-  return (
-    <div className="card" id="connection-required">
-      <div className="card__header">
-        <h3>Connection required</h3>
-      </div>
-      <p style={{ margin: 0 }}>
-        This agreement isn&apos;t linked to a connection, so a funding or payout account can&apos;t be assigned yet.
-      </p>
-      {error && (
-        <p className="field-error" role="alert">
-          {error}
+function AgreementSetupRetryPanel({ state, onRetry }: { state: "idle" | "running" | "failed"; onRetry: () => void }) {
+  if (state !== "failed") {
+    return (
+      <div className="card" id="payment-setup-retry">
+        <div className="card__header">
+          <h3>Finalizing agreement setup&hellip;</h3>
+        </div>
+        <p style={{ margin: 0 }} role="status">
+          Please wait a moment.
         </p>
-      )}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
-        <a href="/connections/invite" className="button button--primary">
-          Create New Connection
-        </a>
-        {candidates && candidates.length > 0 && (
-          <>
-            <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)} aria-label="Choose an existing connection">
-              <option value="">Choose Existing Connection…</option>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.id.slice(0, 8)} — {c.status.replaceAll("_", " ")}
-                </option>
-              ))}
-            </select>
-            <button type="button" className="button button--ghost" disabled={!selectedId || status === "linking"} onClick={() => void handleLink()}>
-              {status === "linking" ? "Linking…" : "Link connection"}
-            </button>
-          </>
-        )}
+      </div>
+    );
+  }
+  return (
+    <div className="card" id="payment-setup-retry">
+      <div className="card__header">
+        <h3>We couldn&apos;t finish setting up this agreement</h3>
+      </div>
+      <p style={{ margin: 0 }}>Try again.</p>
+      <div className="hero__actions">
+        <button type="button" className="button button--primary" onClick={onRetry}>
+          Try again
+        </button>
       </div>
     </div>
   );

@@ -86,6 +86,13 @@ export interface RelationshipParticipantRepository {
     joinedAt: Date | null;
   }): Promise<RelationshipParticipantRecord>;
   listForRelationship(relationshipId: string): Promise<RelationshipParticipantRecord[]>;
+  /**
+   * Production defect remediation (canonical connection) — Step-1/Step-2 lifecycle correction:
+   * transitions a still-`invited` participant (inserted at Step 1 for a counterparty who has not yet
+   * confirmed) to `active`, setting `joinedAt`. The unique `(relationship_id, role)` index means this
+   * is always an UPDATE of the one existing row for that role, never a second insert.
+   */
+  activate(id: string): Promise<RelationshipParticipantRecord>;
 }
 
 /**
@@ -163,6 +170,25 @@ export interface AgreementRelationshipLinker {
  */
 export interface RelationshipPairResolver {
   resolveForExactParties(input: {
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatorUserId: string;
+  }): Promise<{ relationshipId: string }>;
+  /**
+   * Production defect remediation (canonical connection) — Step-1/Step-2 lifecycle correction: the
+   * Step 1 (agreement-creation-time) counterpart to `resolveForExactParties` above. Reuses ANY
+   * existing, non-terminal relationship for this exact pair exactly as-is (whether its counterparty is
+   * already `active` or still `invited` — never a status regression, never a second relationship for a
+   * retried/abandoned draft). Only when NO relationship exists at all does it create one: the
+   * INITIATOR's own participant row is inserted `active`; the COUNTERPARTY's is inserted `invited` —
+   * the counterparty has not yet confirmed anything at Step 1, so they must never appear as a fully
+   * confirmed connection merely because a draft was created. Same advisory-lock serialization
+   * (identical unordered-pair lock key) as `resolveForExactParties`, so the two methods can never race
+   * each other into creating duplicate relationships for the same pair.
+   */
+  resolveOrCreatePendingForExactParties(input: {
     creditor: PartyRef;
     creditorUserId: string;
     debtor: PartyRef;
@@ -366,7 +392,16 @@ export class RelationshipService {
 
     await this.deps.relationships.setCurrentAgreementId(relationship.id, agreementId);
     await this.deps.agreements.linkRelationship(agreementId, relationship.id);
-    const updated = await this.deps.relationships.updateStatus(relationship.id, "agreement_pending");
+    // Production defect remediation (canonical connection) — Step-1/Step-2 lifecycle correction: a
+    // relationship whose counterparty has not yet confirmed (still `invited` — the Step 1 pending
+    // case) must not advance past its own "not yet confirmed" status merely because an agreement got
+    // linked to it. Every existing caller of this method reaches this line with both participants
+    // already `active` (the only way to have reached here before this change), so
+    // `hasUnconfirmedParticipant` is always false for them — this is purely additive, no regression.
+    // `confirmAgreementRelationship` (Step 2 acceptance) is the one place that both activates the
+    // pending participant and advances this status afterward.
+    const hasUnconfirmedParticipant = participants.some((p) => p.status === "invited");
+    const updated = hasUnconfirmedParticipant ? relationship : await this.deps.relationships.updateStatus(relationship.id, "agreement_pending");
     await this.recordAudit(relationship.id, actingUserId, "AGREEMENT_LINKED", { agreementId });
 
     const funding = await this.deps.financialAccounts.findActiveAssignment(relationship.id, "funding");
@@ -456,6 +491,83 @@ export class RelationshipService {
 
     const updated = await this.linkAgreement(relationshipId, input.agreementId, input.initiatingUserId);
     return { relationshipId: updated.id };
+  }
+
+  /**
+   * Production defect remediation (canonical connection) — Step-1/Step-2 lifecycle correction: the
+   * Step 1 (agreement-creation-time) counterpart to `establishAgreementRelationship` above. Idempotent
+   * (a no-op once linked, same first line), and uses `resolveOrCreatePendingForExactParties` instead
+   * of `resolveForExactParties` — the ONLY behavioral difference: reuses any existing relationship for
+   * this exact pair exactly as-is (never elevates or downgrades its status), and creates a new one
+   * with the counterparty left `invited` (not yet confirmed) rather than `active` if none exists.
+   * `linkAgreement`'s own status-write is already conditional on this (see its own doc comment) — a
+   * newly-created pending relationship's top-level status therefore correctly stays `invited`, never
+   * advancing to `agreement_pending` until `confirmAgreementRelationship` (Step 2) explicitly does so.
+   */
+  async proposeAgreementRelationship(input: {
+    agreementId: string;
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatingUserId: string;
+  }): Promise<{ relationshipId: string }> {
+    const { agreement } = await this.deps.agreementService.getAgreement(input.agreementId, input.initiatingUserId);
+    if (agreement.relationshipId) return { relationshipId: agreement.relationshipId };
+
+    const { relationshipId } = await this.deps.pairResolver.resolveOrCreatePendingForExactParties({
+      creditor: input.creditor,
+      creditorUserId: input.creditorUserId,
+      debtor: input.debtor,
+      debtorUserId: input.debtorUserId,
+      initiatorUserId: input.initiatingUserId,
+    });
+
+    const updated = await this.linkAgreement(relationshipId, input.agreementId, input.initiatingUserId);
+    return { relationshipId: updated.id };
+  }
+
+  /**
+   * Production defect remediation (canonical connection) — Step-1/Step-2 lifecycle correction: the
+   * Step 2 (acceptance-time) confirmation counterpart to `proposeAgreementRelationship`. Acceptance of
+   * Step 2 IS the confirmation — there is no separate connection-confirmation UI. First ensures the
+   * relationship is established at all (reusing `establishAgreementRelationship` UNCHANGED — this
+   * covers the rare fallback where Step 1's own attempt never ran/failed: at ACCEPT time both parties
+   * have definitively, mutually engaged, so creating fresh here still means immediately `active`,
+   * exactly as this method already did before this correction). Then activates any participant still
+   * left `invited` from a Step 1 proposal, and advances the relationship's own status forward from
+   * `invited`/`counterparty_linked` to `agreement_pending` — the same status `linkAgreement` would have
+   * set immediately had both participants been active from the start. A relationship with no pending
+   * participant (the common case: reused an already-confirmed connection) is a no-op past the first
+   * line — never re-activates an already-active participant, never re-advances an already-advanced
+   * status.
+   */
+  async confirmAgreementRelationship(input: {
+    agreementId: string;
+    creditor: PartyRef;
+    creditorUserId: string;
+    debtor: PartyRef;
+    debtorUserId: string;
+    initiatingUserId: string;
+  }): Promise<{ relationshipId: string }> {
+    const { relationshipId } = await this.establishAgreementRelationship(input);
+
+    const participants = await this.deps.participants.listForRelationship(relationshipId);
+    const pending = participants.filter((p) => p.status === "invited");
+    for (const participant of pending) {
+      await this.deps.participants.activate(participant.id);
+    }
+    if (pending.length > 0) {
+      const relationship = await this.requireRelationship(relationshipId);
+      if (relationship.status === "invited" || relationship.status === "counterparty_linked") {
+        await this.deps.relationships.updateStatus(relationship.id, "agreement_pending");
+      }
+      await this.recordAudit(relationshipId, input.initiatingUserId, "RELATIONSHIP_PARTICIPANT_CONFIRMED", {
+        agreementId: input.agreementId,
+        confirmedParticipantIds: pending.map((p) => p.id),
+      });
+    }
+    return { relationshipId };
   }
 
   /**
