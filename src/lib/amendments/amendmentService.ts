@@ -6,6 +6,7 @@ import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import {
   buildTerms,
+  type AgreementIdentitySnapshotter,
   type AgreementRecord,
   type AgreementService,
   type AgreementTerms,
@@ -129,6 +130,32 @@ export interface AmendmentServiceDeps {
   profileOwners: ProfileOwnerReader;
   /** Optional — mirrors AgreementServiceDeps's own identical `notifications?` precedent; every notification call here is wrapped in its own try/catch, so a notification-layer failure can never fail the amendment transition it's reporting on. */
   notifications?: NotificationService;
+  /**
+   * Decision 7: optional, same best-effort pattern as AgreementServiceDeps's own identical
+   * `identitySnapshotter?` — a fully-signed amendment produces a new agreement_version (see
+   * `applyAmendment`), which needs its own frozen party-identity snapshot (never overwriting the
+   * prior version's, per Decision 7's own explicit instruction). The FK from
+   * agreement_party_snapshot.agreement_version_id means this can only run *after* the new version
+   * row exists — freezeSnapshot is called immediately once `applyAtomically` returns, before the
+   * caller of `signAmendment` gets control back, so there is no window for the new version to be
+   * read before its snapshot exists.
+   */
+  identitySnapshotter?: AgreementIdentitySnapshotter;
+  /**
+   * Blocker 2 (amendment PDF lifecycle): optional, same best-effort pattern as `identitySnapshotter?`
+   * above — a fully-signed amendment's new agreement_version must get its OWN immutable executed PDF
+   * (never overwriting the prior version's — `agreement_pdf_version_unique`, unchanged, already
+   * enforces one PDF per version), so the stored PDF can never lag behind what the screen/snapshot
+   * show for that version. Called AFTER `identitySnapshotter.freezeSnapshot` succeeds — the PDF reads
+   * the snapshot it needs already frozen, mirroring the required lifecycle order (version created ->
+   * snapshot frozen -> signatures already complete by construction -> PDF generated).
+   */
+  pdfGenerator?: AmendmentPdfGenerator;
+}
+
+/** Real implementation: SignatureService.generatePdfForAppliedAmendment. */
+export interface AmendmentPdfGenerator {
+  generatePdfForAppliedAmendment(agreementId: string, agreementVersionId: string, actingUserId: string): Promise<void>;
 }
 
 export interface ProposeAmendmentInput {
@@ -386,6 +413,40 @@ export class AmendmentService {
     });
 
     const auditId = await this.recordAudit(applied, actingUserId, "amendment_applied", { resultingVersionId: agreementVersionId, versionNumber });
+
+    if (this.deps.identitySnapshotter) {
+      try {
+        await this.deps.identitySnapshotter.freezeSnapshot({
+          agreementId: amendment.agreementId,
+          agreementVersionId,
+          creditor: { kind: detail.agreement.creditorProfileKind, id: detail.agreement.creditorProfileId },
+          debtor: { kind: detail.agreement.debtorProfileKind, id: detail.agreement.debtorProfileId },
+        });
+      } catch (error) {
+        logger.error("agreement_identity_snapshot_failed", {
+          agreementId: amendment.agreementId,
+          agreementVersionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Blocker 2: runs AFTER the snapshot above so the PDF's own party-identity read (which prefers
+    // the snapshot — see SignatureService.resolvePartyDisplays) finds it already frozen. Best-effort,
+    // same non-blocking pattern as identitySnapshotter above — a PDF-generation failure must never
+    // undo or fail the amendment that has already, correctly, applied.
+    if (this.deps.pdfGenerator) {
+      try {
+        await this.deps.pdfGenerator.generatePdfForAppliedAmendment(amendment.agreementId, agreementVersionId, actingUserId);
+      } catch (error) {
+        logger.error("amendment_pdf_generation_failed", {
+          agreementId: amendment.agreementId,
+          agreementVersionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     await Promise.all([
       this.notifyParty(detail.agreement, "creditor", "amendment_decided", { decision: "applied" }, auditId),
       this.notifyParty(detail.agreement, "debtor", "amendment_decided", { decision: "applied" }, auditId),

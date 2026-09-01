@@ -6,6 +6,7 @@ import { AuditService, type AuditEventRecord, type AuditEventRepository } from "
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
 import { hashPdfContent } from "@/lib/documents/agreementPdf";
+import { extractPdfText } from "@/lib/documents/pdfTextTestHelper";
 import { createTestSignatureService, grantStepUp, markFullyVerified, seedPersonalParty } from "./testFakes";
 
 /** Minimal local fake — this test file's amendment-interaction test is the only caller. */
@@ -425,6 +426,21 @@ describe("SignatureService", () => {
       ).rejects.toThrow();
     });
 
+    it("test 26 (Decision 9): the generated PDF's actual rendered text contains zero raw internal profile/user UUIDs", async () => {
+      const setup = await signBothParties();
+      const pdfRecord = await ctx.agreementPdfs.findByVersion(setup.versionId);
+      const bytes = ctx.storage.read(pdfRecord!.storagePath)!;
+      const text = extractPdfText(bytes);
+
+      expect(text).not.toContain(setup.creditorProfileId);
+      expect(text).not.toContain(setup.debtorProfileId);
+      expect(text).not.toContain(setup.creditorUserId);
+      expect(text).not.toContain(setup.debtorUserId);
+      // Sanity: the extraction actually found real printed content (not silently empty/broken).
+      expect(text).toContain("Creditor:");
+      expect(text).toContain("Debtor:");
+    });
+
     it("document access isolation: both parties can retrieve a signed URL; a stranger cannot", async () => {
       const setup = await signBothParties();
       const creditorUrl = await ctx.signatureService.getSignedPdfUrl(setup.agreementId, setup.creditorUserId);
@@ -433,6 +449,66 @@ describe("SignatureService", () => {
       expect(debtorUrl).toContain("signed");
 
       await expect(ctx.signatureService.getSignedPdfUrl(setup.agreementId, randomUUID())).rejects.toThrow(ForbiddenError);
+    });
+  });
+
+  /**
+   * Item 2 (legacy agreements without snapshots) — the PDF half of the mandatory rule: an old
+   * executed agreement's ALREADY-STORED PDF must never be regenerated/overwritten, no matter what
+   * happens to the parties' live profile data afterward, and no matter how many times a retry-capable
+   * read (getSignedPdfUrl, ensurePdfForVersion) is called against it.
+   */
+  describe("test B/C — legacy executed agreement with an existing PDF and no snapshot", () => {
+    it("the existing PDF is never regenerated after profile edits, even across repeated getSignedPdfUrl/ensurePdfForVersion calls", async () => {
+      const setup = await setupPersonalAwaitingSignatures();
+      // Simulate a pre-Decision-7 agreement: strip out the snapshot creditorDecide(accept) just froze,
+      // so this version has none — exactly the legacy shape (a version that predates snapshot capture).
+      ctx.agreementCtx.snapshotRepo.rows = ctx.agreementCtx.snapshotRepo.rows.filter((r) => r.agreementVersionId !== setup.versionId);
+
+      const creditorSession = randomUUID();
+      const debtorSession = randomUUID();
+      await readySigner(setup.creditorUserId, creditorSession, setup.creditorProfileId);
+      await readySigner(setup.debtorUserId, debtorSession, setup.debtorProfileId);
+      await ctx.signatureService.sign({
+        agreementId: setup.agreementId,
+        actingUserId: setup.creditorUserId,
+        actingSessionId: creditorSession,
+        authMethod: "totp",
+        consentVersion: CONSENT,
+        timezone: TZ,
+        deviceInfo: null,
+        ipAddress: "203.0.113.10",
+      });
+      await ctx.signatureService.sign({
+        agreementId: setup.agreementId,
+        actingUserId: setup.debtorUserId,
+        actingSessionId: debtorSession,
+        authMethod: "sms",
+        consentVersion: CONSENT,
+        timezone: TZ,
+        deviceInfo: null,
+        ipAddress: "203.0.113.20",
+      });
+
+      const pdfRecord = await ctx.agreementPdfs.findByVersion(setup.versionId);
+      expect(pdfRecord).not.toBeNull();
+      const bytesBefore = ctx.storage.read(pdfRecord!.storagePath)!;
+      const textBefore = extractPdfText(bytesBefore);
+      expect(textBefore).toContain("Creditor:"); // rendered fine — legacy_live fallback, display-name only
+
+      // The user edits their profile display name well after execution.
+      ctx.profileDisplay.set("personal", setup.creditorProfileId, "A Totally Different Name After Editing");
+
+      // A retry-capable read (getSignedPdfUrl) must NEVER regenerate the already-stored PDF.
+      await ctx.signatureService.getSignedPdfUrl(setup.agreementId, setup.creditorUserId);
+      // A direct, defensive retry call must also be a no-op.
+      await ctx.signatureService.ensurePdfForVersion(setup.agreementId, setup.versionId, setup.creditorUserId);
+
+      const pdfRecordAfter = await ctx.agreementPdfs.findByVersion(setup.versionId);
+      expect(pdfRecordAfter).toEqual(pdfRecord); // same row, not regenerated
+      const bytesAfter = ctx.storage.read(pdfRecordAfter!.storagePath)!;
+      expect(bytesAfter).toEqual(bytesBefore); // byte-for-byte identical — the edited name never appears
+      expect(extractPdfText(bytesAfter)).not.toContain("A Totally Different Name After Editing");
     });
   });
 

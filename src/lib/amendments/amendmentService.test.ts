@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AuditService } from "@/lib/audit/auditService";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
+import { hashPdfContent } from "@/lib/documents/agreementPdf";
+import { extractPdfText } from "@/lib/documents/pdfTextTestHelper";
+import { grantStepUp } from "@/lib/signatures/testFakes";
 import { AmendmentService } from "./amendmentService";
 import { createTestAmendmentService } from "./testFakes";
 
@@ -167,6 +170,61 @@ describe("AmendmentService", () => {
     expect(newVersion?.terms.installmentAmountMinorUnits).toBe(15_000);
     expect(newVersion?.signedAt).not.toBeNull();
     expect(newVersion?.documentHash).toBeTruthy();
+  });
+
+  it("test 24 (Decision 7): the original agreement's identity snapshot is frozen at creditorDecide(accept) — before either signature exists", async () => {
+    // The suite's own beforeEach already carried the original agreement through creditorDecide(accept)
+    // and both signatures. Re-derive the snapshot repo's state by proposing/accepting/signing a SECOND,
+    // fresh agreement so the accept-but-not-yet-signed moment can be observed directly.
+    const localCtx = createTestAmendmentService();
+    const localCreditor = randomUUID();
+    const localDebtor = randomUUID();
+    const localCreditorProfileId = randomUUID();
+    const localDebtorProfileId = randomUUID();
+    localCtx.agreementCtx.profileOwners.set("personal", localCreditorProfileId, localCreditor);
+    localCtx.agreementCtx.profileOwners.set("personal", localDebtorProfileId, localDebtor);
+    const created = await localCtx.agreementCtx.agreementService.createDraft({
+      creatorUserId: localDebtor,
+      creditor: { kind: "personal", id: localCreditorProfileId },
+      debtor: { kind: "personal", id: localDebtorProfileId },
+      ...baseTerms(),
+    });
+    await localCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, localCreditor);
+    await localCtx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, localDebtor);
+    await localCtx.agreementCtx.agreementService.creditorDecide({
+      agreementId: created.agreement.id,
+      actingUserId: localCreditor,
+      decision: "accept",
+    });
+
+    const rowsBeforeSigning = localCtx.agreementCtx.snapshotRepo.rows.filter((r) => r.agreementVersionId === created.version.id);
+    expect(rowsBeforeSigning).toHaveLength(2); // creditor + debtor, frozen at accept — not deferred until signing
+
+    const agreement = await localCtx.agreementCtx.agreements.findById(created.agreement.id);
+    expect(agreement?.status).toBe("awaiting_signatures"); // proves this froze strictly before either signature
+  });
+
+  it("test 25 (Decision 7): a fully-signed amendment gets its OWN new immutable snapshot, without overwriting the prior version's", async () => {
+    const originalRows = [...ctx.agreementCtx.snapshotRepo.rows.filter((r) => r.agreementVersionId === originalVersionId)];
+    expect(originalRows).toHaveLength(2);
+
+    const amendment = await ctx.amendmentService.proposeAmendment({
+      agreementId,
+      changeType: "reduced_installment",
+      reason: "Lost overtime hours",
+      proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+      actingUserId: debtorUserId,
+    });
+    await ctx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+    await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+    const applied = await ctx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+
+    const newRows = ctx.agreementCtx.snapshotRepo.rows.filter((r) => r.agreementVersionId === applied.resultingVersionId);
+    expect(newRows).toHaveLength(2);
+
+    // The prior version's rows are byte-for-byte unchanged — an amendment never overwrites them.
+    const originalRowsAfter = ctx.agreementCtx.snapshotRepo.rows.filter((r) => r.agreementVersionId === originalVersionId);
+    expect(originalRowsAfter).toEqual(originalRows);
   });
 
   /**
@@ -574,6 +632,291 @@ describe("AmendmentService", () => {
         actingUserId: debtor,
       });
       expect(amendment.status).toBe("proposed");
+    });
+  });
+
+  /**
+   * Blocker 2 (amendment PDF lifecycle): proves the required lifecycle end to end — original version
+   * accepted -> snapshot frozen -> signed -> PDF #1 stored; amended version accepted -> NEW version
+   * created -> NEW snapshot frozen (not overwriting V1's) -> signatures already complete by
+   * construction -> PDF #2 stored — and that PDF #1 remains byte-for-byte untouched throughout. Builds
+   * its own local context (rather than the shared `ctx`/`beforeEach` above) because those sign the
+   * original agreement directly via AgreementService.signAgreement, bypassing SignatureService
+   * entirely — no PDF is ever generated on that path, so it can't exercise PDF #1.
+   */
+  describe("Blocker 2: amendment PDF lifecycle", () => {
+    async function setupSignedOriginalWithPdf() {
+      const localCtx = createTestAmendmentService();
+      const creditorUserId = randomUUID();
+      const debtorUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      const debtorProfileId = randomUUID();
+      localCtx.agreementCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+      localCtx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+      // Distinct identities per version, set BEFORE each version's own snapshot freezes — proves PDF
+      // #2 reads V2's own (later) snapshot, never V1's frozen-earlier one (tests 7/8).
+      localCtx.agreementCtx.identitySource.set("personal", creditorProfileId, {
+        displayName: "Creditor V1 Name",
+        firstName: "Creditor V1",
+        lastName: "Name",
+        preferredEmail: "creditor-v1@example.com",
+        city: "Austin",
+        state: "TX",
+        postalCode: "78701",
+        country: "US",
+      });
+      localCtx.agreementCtx.identitySource.set("personal", debtorProfileId, {
+        displayName: "Debtor Name",
+        firstName: "Debtor",
+        lastName: "Name",
+        preferredEmail: "debtor@example.com",
+        city: "Dallas",
+        state: "TX",
+        postalCode: "75201",
+        country: "US",
+      });
+
+      const created = await localCtx.agreementCtx.agreementService.createDraft({
+        creatorUserId: debtorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      const agreementId = created.agreement.id;
+      const originalVersionId = created.version.id;
+
+      await localCtx.agreementCtx.agreementService.submitDraft(agreementId, creditorUserId);
+      await localCtx.agreementCtx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
+      await localCtx.agreementCtx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" });
+
+      // Sign via SignatureService (not AgreementService.signAgreement directly) so generatePdf
+      // actually runs — the real production path (AgreementDetail.tsx's Sign button -> POST
+      // /api/agreements/sign -> SignatureService.sign).
+      const creditorSession = randomUUID();
+      const debtorSession = randomUUID();
+      await grantStepUp({ mfaCredentials: localCtx.pdfCtx.mfaCredentials, stepUps: localCtx.pdfCtx.stepUps }, creditorUserId, creditorSession);
+      await grantStepUp({ mfaCredentials: localCtx.pdfCtx.mfaCredentials, stepUps: localCtx.pdfCtx.stepUps }, debtorUserId, debtorSession);
+      await localCtx.pdfCtx.signatureService.sign({
+        agreementId,
+        actingUserId: creditorUserId,
+        actingSessionId: creditorSession,
+        authMethod: "totp",
+        consentVersion: "v1",
+        timezone: "America/New_York",
+        deviceInfo: null,
+        ipAddress: "203.0.113.10",
+      });
+      await localCtx.pdfCtx.signatureService.sign({
+        agreementId,
+        actingUserId: debtorUserId,
+        actingSessionId: debtorSession,
+        authMethod: "sms",
+        consentVersion: "v1",
+        timezone: "America/New_York",
+        deviceInfo: null,
+        ipAddress: "203.0.113.20",
+      });
+
+      return { localCtx, agreementId, originalVersionId, creditorUserId, debtorUserId, creditorProfileId, debtorProfileId };
+    }
+
+    it("tests 1,2,3,4,5,6,7,8,9,10,11 — full original+amendment PDF lifecycle", async () => {
+      const { localCtx, agreementId, originalVersionId, creditorUserId, debtorUserId, creditorProfileId, debtorProfileId } =
+        await setupSignedOriginalWithPdf();
+
+      // Test 1: original executed version gets PDF #1.
+      const pdf1Record = await localCtx.pdfCtx.agreementPdfs.findByVersion(originalVersionId);
+      expect(pdf1Record).not.toBeNull();
+      const pdf1BytesBefore = localCtx.pdfCtx.storage.read(pdf1Record!.storagePath)!;
+      expect(hashPdfContent(pdf1BytesBefore)).toBe(pdf1Record!.documentHash);
+      const pdf1TextBefore = extractPdfText(pdf1BytesBefore);
+      expect(pdf1TextBefore).toContain("Creditor V1 Name");
+
+      // Change the creditor's identity AFTER V1's snapshot/PDF exist, BEFORE the amendment applies —
+      // proves V1's already-generated PDF never reflects a later identity change (immutability).
+      localCtx.agreementCtx.identitySource.set("personal", creditorProfileId, {
+        displayName: "Creditor V2 Name",
+        firstName: "Creditor V2",
+        lastName: "Name",
+        preferredEmail: "creditor-v2@example.com",
+        city: "Houston",
+        state: "TX",
+        postalCode: "77002",
+        country: "US",
+      });
+
+      // Test 2: amendment creates Version 2.
+      const amendment = await localCtx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "Lost overtime hours",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+        actingUserId: debtorUserId,
+      });
+      await localCtx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+      await localCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+      const applied = await localCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+      const v2Id = applied.resultingVersionId!;
+      expect(v2Id).not.toBe(originalVersionId);
+
+      // Test 3: Version 2 receives its own snapshot. Test 4: it does NOT overwrite Version 1's.
+      const v1SnapshotAfter = localCtx.agreementCtx.snapshotRepo.rows.filter((r) => r.agreementVersionId === originalVersionId);
+      const v2Snapshot = localCtx.agreementCtx.snapshotRepo.rows.filter((r) => r.agreementVersionId === v2Id);
+      expect(v2Snapshot).toHaveLength(2);
+      expect(v1SnapshotAfter.find((r) => r.role === "creditor")?.displayName).toBe("Creditor V1 Name"); // unchanged
+      expect(v2Snapshot.find((r) => r.role === "creditor")?.displayName).toBe("Creditor V2 Name"); // the new one
+
+      // Test 5: once Version 2 execution/signatures are complete, it gets PDF #2.
+      const pdf2Record = await localCtx.pdfCtx.agreementPdfs.findByVersion(v2Id);
+      expect(pdf2Record).not.toBeNull();
+      expect(pdf2Record!.id).not.toBe(pdf1Record!.id);
+      expect(pdf2Record!.storagePath).not.toBe(pdf1Record!.storagePath);
+
+      // Test 6: PDF #1 remains unchanged.
+      const pdf1BytesAfter = localCtx.pdfCtx.storage.read(pdf1Record!.storagePath)!;
+      expect(pdf1BytesAfter).toEqual(pdf1BytesBefore);
+      const pdf1RecordAfter = await localCtx.pdfCtx.agreementPdfs.findByVersion(originalVersionId);
+      expect(pdf1RecordAfter).toEqual(pdf1Record);
+
+      // Test 7: PDF #2 reflects Version 2 terms. Test 8: PDF #2 uses Version 2 identity snapshot.
+      const pdf2Bytes = localCtx.pdfCtx.storage.read(pdf2Record!.storagePath)!;
+      const pdf2Text = extractPdfText(pdf2Bytes);
+      expect(pdf2Text).toContain("150.00 USD"); // the amended installment amount ($150.00 = 15,000 minor units)
+      expect(pdf2Text).toContain("Creditor V2 Name");
+      expect(pdf2Text).not.toContain("Creditor V1 Name"); // never the stale, pre-amendment identity
+
+      // Test 9: PDF #2 contains no raw profile/user UUIDs.
+      expect(pdf2Text).not.toContain(creditorProfileId);
+      expect(pdf2Text).not.toContain(debtorProfileId);
+      expect(pdf2Text).not.toContain(creditorUserId);
+      expect(pdf2Text).not.toContain(debtorUserId);
+
+      // Test 10: fetching/printing the current executed agreement selects the correct CURRENT
+      // version's PDF (V2), not V1's, now that the agreement has moved on.
+      const signedUrl = await localCtx.pdfCtx.signatureService.getSignedPdfUrl(agreementId, creditorUserId);
+      expect(signedUrl).toContain(encodeURIComponent(pdf2Record!.storagePath));
+      expect(signedUrl).not.toContain(encodeURIComponent(pdf1Record!.storagePath));
+
+      // Test 11: the historical (V1) PDF remains independently retrievable via the same
+      // version-scoped repository read a future version-history UI would use.
+      const historicalPdf = await localCtx.pdfCtx.agreementPdfs.findByVersion(originalVersionId);
+      expect(historicalPdf).toEqual(pdf1Record);
+      expect(extractPdfText(localCtx.pdfCtx.storage.read(historicalPdf!.storagePath)!)).toContain("Creditor V1 Name");
+    });
+
+    it("is idempotent — calling generatePdfForAppliedAmendment again never regenerates or overwrites the stored PDF", async () => {
+      const { localCtx, agreementId, creditorUserId, debtorUserId } = await setupSignedOriginalWithPdf();
+      const amendment = await localCtx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "Lost overtime hours",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+        actingUserId: debtorUserId,
+      });
+      await localCtx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+      await localCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+      const applied = await localCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+      const v2Id = applied.resultingVersionId!;
+
+      const first = await localCtx.pdfCtx.agreementPdfs.findByVersion(v2Id);
+      // A defensive re-call (e.g. a retry) must never throw or produce a second row — the DB's own
+      // agreement_pdf_version_unique index is a second guarantee of the same thing in production.
+      await localCtx.pdfCtx.signatureService.generatePdfForAppliedAmendment(agreementId, v2Id, creditorUserId);
+      const second = await localCtx.pdfCtx.agreementPdfs.findByVersion(v2Id);
+      expect(second).toEqual(first);
+    });
+
+    it("a PDF-generation failure never fails the already-applied amendment (best-effort, non-blocking)", async () => {
+      const { localCtx, agreementId, creditorUserId, debtorUserId } = await setupSignedOriginalWithPdf();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (localCtx.amendmentService as any).deps.pdfGenerator = {
+        generatePdfForAppliedAmendment: async () => {
+          throw new Error("simulated_pdf_outage");
+        },
+      };
+      const amendment = await localCtx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "Lost overtime hours",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+        actingUserId: debtorUserId,
+      });
+      await localCtx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+      await localCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+      const applied = await localCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+      expect(applied.status).toBe("applied"); // the amendment itself is unaffected by the PDF failure
+      expect(applied.resultingVersionId).toBeTruthy();
+    });
+
+    /**
+     * Blocker 1 (amendment PDF failure must not be silent): the full recovery story, points 1-8.
+     */
+    it("full recovery: a failed Version 2 PDF generation is detectable, Version 1 is untouched, and a later retry (via getSignedPdfUrl's lazy regeneration) succeeds without duplicating", async () => {
+      const { localCtx, agreementId, originalVersionId, creditorUserId, debtorUserId } = await setupSignedOriginalWithPdf();
+
+      // Point 4 baseline: capture Version 1's PDF before touching anything.
+      const pdf1Before = await localCtx.pdfCtx.agreementPdfs.findByVersion(originalVersionId);
+      const pdf1BytesBefore = localCtx.pdfCtx.storage.read(pdf1Before!.storagePath)!;
+
+      // Simulate PDF generation failing exactly once, at the moment the amendment applies.
+      const realPdfGenerator = localCtx.pdfCtx.signatureService;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (localCtx.amendmentService as any).deps.pdfGenerator = {
+        generatePdfForAppliedAmendment: async () => {
+          throw new Error("simulated_pdf_outage");
+        },
+      };
+
+      // Point 1: the amendment applies successfully regardless.
+      const amendment = await localCtx.amendmentService.proposeAmendment({
+        agreementId,
+        changeType: "reduced_installment",
+        reason: "Lost overtime hours",
+        proposedTerms: baseTerms({ installmentAmountMinorUnits: 15_000 }),
+        actingUserId: debtorUserId,
+      });
+      await localCtx.amendmentService.decideAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId, decision: "accept" });
+      await localCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: creditorUserId });
+      const applied = await localCtx.amendmentService.signAmendment({ amendmentId: amendment.id, actingUserId: debtorUserId });
+      expect(applied.status).toBe("applied");
+      const v2Id = applied.resultingVersionId!;
+
+      // Point 2: Version 2's identity snapshot exists and is immutable regardless of the PDF failure
+      // — freezeSnapshot runs (and succeeds) BEFORE the pdfGenerator call, independently of it.
+      const v2Snapshot = localCtx.agreementCtx.snapshotRepo.rows.filter((r) => r.agreementVersionId === v2Id);
+      expect(v2Snapshot).toHaveLength(2);
+
+      // Point 3 (already happened above) / Point 5: Version 2 is detectably missing its PDF, using
+      // only EXISTING state — no new column. Both the raw repository read and the dedicated
+      // getDocumentStatus read agree.
+      expect(await localCtx.pdfCtx.agreementPdfs.findByVersion(v2Id)).toBeNull();
+      const v2Version = await localCtx.agreementCtx.versions.findById(v2Id);
+      expect(v2Version?.signedAt).not.toBeNull(); // fully executed...
+      const statusWhileMissing = await realPdfGenerator.getDocumentStatus(agreementId, creditorUserId);
+      expect(statusWhileMissing).toEqual({ agreementVersionId: v2Id, isFullyExecuted: true, hasStoredPdf: false }); // ...but no PDF
+
+      // Point 4: Version 1's PDF is completely untouched by the failure.
+      const pdf1After = await localCtx.pdfCtx.agreementPdfs.findByVersion(originalVersionId);
+      expect(pdf1After).toEqual(pdf1Before);
+      expect(localCtx.pdfCtx.storage.read(pdf1After!.storagePath)).toEqual(pdf1BytesBefore);
+
+      // Point 6/8: retrying via the real, non-throwing SignatureService (mirroring what the "View
+      // signed PDF" action already does automatically) succeeds and resolves to Version 2.
+      const signedUrl = await realPdfGenerator.getSignedPdfUrl(agreementId, creditorUserId);
+      const v2PdfAfterRetry = await localCtx.pdfCtx.agreementPdfs.findByVersion(v2Id);
+      expect(v2PdfAfterRetry).not.toBeNull();
+      expect(signedUrl).toContain(encodeURIComponent(v2PdfAfterRetry!.storagePath));
+
+      const statusAfterRetry = await realPdfGenerator.getDocumentStatus(agreementId, creditorUserId);
+      expect(statusAfterRetry).toEqual({ agreementVersionId: v2Id, isFullyExecuted: true, hasStoredPdf: true });
+
+      // Point 7: a second, redundant retry never duplicates — still exactly one PDF row for Version 2.
+      await realPdfGenerator.ensurePdfForVersion(agreementId, v2Id, creditorUserId);
+      const v2PdfAfterSecondRetry = await localCtx.pdfCtx.agreementPdfs.findByVersion(v2Id);
+      expect(v2PdfAfterSecondRetry).toEqual(v2PdfAfterRetry);
+
+      // Version 1's PDF is STILL untouched after all of the above.
+      expect(await localCtx.pdfCtx.agreementPdfs.findByVersion(originalVersionId)).toEqual(pdf1Before);
     });
   });
 });

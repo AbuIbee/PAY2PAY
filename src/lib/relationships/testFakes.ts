@@ -47,6 +47,7 @@ import type {
   FinancialAccountRepository,
   FinancialAccountType,
   FinancialAccountUsage,
+  RelationshipCurrentAgreementRoleReader,
   RelationshipFinancialAccountAssignmentRecord,
   RelationshipFinancialAccountAssignmentWithAccount,
   RelationshipFinancialAccountRepository,
@@ -224,18 +225,20 @@ export class InMemoryRelationshipPairResolver implements RelationshipPairResolve
     debtorUserId: string;
     initiatorUserId: string;
   }): Promise<{ relationshipId: string }> {
+    // Decision 1 (reversed-role safety): identity-only matching, deliberately ignoring stored role —
+    // see DrizzleRelationshipPairResolver's own doc comment for why. Decision 2 (canonical
+    // connection): current_agreement_id is no longer part of "is this candidate reusable" — only a
+    // terminal relationship status excludes it.
     const TERMINAL_STATUSES: RelationshipStatus[] = ["restricted", "suspended", "closed", "cancelled"];
     const matches = (party: PartyRef, p: RelationshipParticipantRecord) =>
       party.kind === "personal" ? p.individualProfileId === party.id : p.organizationId === party.id;
 
     const candidate = this.participants.rows
-      .filter((p) => p.role === "creditor" && p.status === "active" && matches(input.creditor, p))
+      .filter((p) => p.status === "active" && matches(input.creditor, p))
       .map((p) => this.relationships.byId.get(p.relationshipId))
-      .filter((r): r is RelationshipRecord => !!r && !r.currentAgreementId && !TERMINAL_STATUSES.includes(r.status))
+      .filter((r): r is RelationshipRecord => !!r && !TERMINAL_STATUSES.includes(r.status))
       .find((r) =>
-        this.participants.rows.some(
-          (p) => p.relationshipId === r.id && p.role === "debtor" && p.status === "active" && matches(input.debtor, p),
-        ),
+        this.participants.rows.some((p) => p.relationshipId === r.id && p.status === "active" && matches(input.debtor, p)),
       );
 
     if (candidate) return { relationshipId: candidate.id };
@@ -377,6 +380,33 @@ export class InMemoryRelationshipInvitationRepository implements RelationshipInv
     const record = this.byId.get(id);
     if (!record) throw new Error("relationship_invitation not found");
     return record;
+  }
+}
+
+/**
+ * Decision 1 (reversed-role safety): test-only in-memory double for `RelationshipCurrentAgreementRoleReader`
+ * — mirrors `DrizzleRelationshipCurrentAgreementRoleReader`'s real logic against the shared
+ * `InMemoryRelationshipRepository`/`AgreementService` instances a `createTestRelationshipServices()`
+ * harness already uses.
+ */
+export class InMemoryRelationshipCurrentAgreementRoleReader implements RelationshipCurrentAgreementRoleReader {
+  constructor(
+    private readonly relationships: InMemoryRelationshipRepository,
+    private readonly agreementService: AgreementService,
+  ) {}
+
+  async getCurrentAgreementRoles(relationshipId: string): Promise<{ creditor: PartyRef; debtor: PartyRef } | null> {
+    const relationship = await this.relationships.findById(relationshipId);
+    if (!relationship?.currentAgreementId) return null;
+    try {
+      const { agreement } = await this.agreementService.getAgreement(relationship.currentAgreementId, relationship.initiatorUserId);
+      return {
+        creditor: { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId },
+        debtor: { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId },
+      };
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -687,6 +717,13 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
     audit: new AuditService(evidenceAuditRepo),
   });
 
+  // current_agreement_id / relationship_participant.role audit (item 3): built before
+  // relationshipService so getRelationship's own effectiveRole resolution shares the identical
+  // instance RelationshipFinancialAccountService already uses — one source of truth in tests, exactly
+  // as production shares one DrizzleRelationshipCurrentAgreementRoleReader-shaped read via
+  // getAgreementService()/getRelationshipService().
+  const agreementRoles = new InMemoryRelationshipCurrentAgreementRoleReader(relationships, agreementService);
+
   const relationshipAuditRepo = new InMemoryAuditEventRepositoryForRelationships();
   const relationshipService = new RelationshipService({
     relationships,
@@ -702,6 +739,7 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
     staffService: staffCtx.staffService,
     notifications: notifyCtx.notificationService,
     audit: new AuditService(relationshipAuditRepo),
+    agreementRoles,
   });
 
   const invitationAuditRepo = new InMemoryAuditEventRepositoryForRelationships();
@@ -725,6 +763,7 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
     relationships,
     participants,
     relationshipSync: relationshipService,
+    agreementRoles,
     profileOwners,
     staffService: staffCtx.staffService,
     notifications: notifyCtx.notificationService,
@@ -760,5 +799,6 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
     relationshipService,
     relationshipInvitationService,
     relationshipFinancialAccountService,
+    agreementRoles,
   };
 }

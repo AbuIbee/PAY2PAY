@@ -3,6 +3,7 @@ import { AuditService, type AuditEventRecord, type AuditEventRepository } from "
 import { InMemoryPersonalProfileRepository } from "@/lib/auth/testFakes";
 import { createTestMfaService } from "@/lib/auth/mfaTestFakes";
 import { grantStepUp } from "@/lib/staff/testFakes";
+import { AgreementIdentitySnapshotService } from "@/lib/agreements/agreementIdentitySnapshotService";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { InMemoryDocumentStorage, InMemoryProfileDisplayReader } from "@/lib/documents/testFakes";
 import { InMemoryIdentityVerificationRecordRepository } from "@/lib/profiles/testFakes";
@@ -56,6 +57,64 @@ class InMemoryAuditEventRepositoryForSignatures implements AuditEventRepository 
 }
 
 /**
+ * Blocker 2 (amendment PDF lifecycle): builds a real SignatureService test double sharing an
+ * ALREADY-CONSTRUCTED agreement test context, instead of creating its own — so a caller like
+ * AmendmentService's own testFakes.ts (which needs a working `AmendmentPdfGenerator` sharing the
+ * exact same `agreementCtx`/identity-snapshot state its amendment applies through) can get one.
+ * `createTestSignatureService` below is a thin wrapper around this for its own, independent
+ * agreementCtx — extracted with no behavior change to that existing, already-tested function.
+ */
+export function createSignatureServiceForAgreementContext(
+  agreementCtx: ReturnType<typeof createTestAgreementService>,
+  options?: {
+    signatureEvents?: InMemorySignatureEventRepository;
+    notifications?: import("@/lib/notify/notificationService").NotificationService;
+  },
+) {
+  const signatureEvents = options?.signatureEvents ?? new InMemorySignatureEventRepository();
+  const { mfaService, credentials: mfaCredentials, stepUps } = createTestMfaService();
+  const agreementPdfs = new InMemoryAgreementPdfRepository();
+  const profileDisplay = new InMemoryProfileDisplayReader();
+  const storage = new InMemoryDocumentStorage();
+  const auditRepo = new InMemoryAuditEventRepositoryForSignatures();
+  const audit = new AuditService(auditRepo);
+  // Decision 9 / Blocker 2: shares agreementCtx's own snapshotRepo/identitySource so SignatureService
+  // reads the exact same frozen rows AgreementService.creditorDecide / AmendmentService.applyAmendment
+  // freeze — mirroring production's shared getAgreementIdentitySnapshotService() singleton.
+  const partySnapshots = new AgreementIdentitySnapshotService({
+    snapshots: agreementCtx.snapshotRepo,
+    identitySource: agreementCtx.identitySource,
+  });
+
+  const signatureService = new SignatureService({
+    agreementService: agreementCtx.agreementService,
+    mfa: mfaService,
+    staffService: agreementCtx.staffCtx.staffService,
+    profileOwners: agreementCtx.profileOwners,
+    signatureEvents,
+    agreementPdfs,
+    profileDisplay,
+    storage,
+    audit,
+    notifications: options?.notifications,
+    partySnapshots,
+  });
+
+  return {
+    signatureService,
+    mfaService,
+    mfaCredentials,
+    stepUps,
+    agreementPdfs,
+    profileDisplay,
+    storage,
+    auditRepo,
+    partySnapshots,
+    signatureEvents,
+  };
+}
+
+/**
  * Builds a full SignatureService test context, sharing the same underlying AgreementService,
  * profileOwners, and staffService/staffMembers instances the returned agreementService uses —
  * exactly as production does (getSignatureService() and getAgreementService() both resolve through
@@ -70,45 +129,19 @@ export function createTestSignatureService(notifications?: import("@/lib/notify/
   // the evidence the atomic apply wrote, matching how production's SignatureService and
   // AgreementService resolve through the same singletons.
   const agreementCtx = createTestAgreementService(signatureEvents.events);
-  const { mfaService, credentials: mfaCredentials, stepUps } = createTestMfaService();
   // Production follow-up (Remove Step 4 — Identity Verification): SignatureService no longer reads
   // verification state before signing, but verificationRecords/personalProfiles are kept here —
   // markFullyVerified/seedPersonalParty (used by other, unrelated test files for general party
   // setup) still operate on them directly.
   const verificationRecords = new InMemoryIdentityVerificationRecordRepository();
   const personalProfiles = new InMemoryPersonalProfileRepository();
-  const agreementPdfs = new InMemoryAgreementPdfRepository();
-  const profileDisplay = new InMemoryProfileDisplayReader();
-  const storage = new InMemoryDocumentStorage();
-  const auditRepo = new InMemoryAuditEventRepositoryForSignatures();
-  const audit = new AuditService(auditRepo);
-
-  const signatureService = new SignatureService({
-    agreementService: agreementCtx.agreementService,
-    mfa: mfaService,
-    staffService: agreementCtx.staffCtx.staffService,
-    profileOwners: agreementCtx.profileOwners,
-    signatureEvents,
-    agreementPdfs,
-    profileDisplay,
-    storage,
-    audit,
-    notifications,
-  });
+  const shared = createSignatureServiceForAgreementContext(agreementCtx, { signatureEvents, notifications });
 
   return {
-    signatureService,
+    ...shared,
     agreementCtx,
-    mfaService,
-    mfaCredentials,
-    stepUps,
     verificationRecords,
     personalProfiles,
-    signatureEvents,
-    agreementPdfs,
-    profileDisplay,
-    storage,
-    auditRepo,
   };
 }
 

@@ -4,12 +4,12 @@ import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { isAdminRole } from "@/lib/admin/capabilities";
 import type { PlatformRole } from "@/lib/auth/authService";
 import { generateRelationshipReferenceCode } from "@/lib/auth/token";
-import type { PartyRole, AgreementService } from "@/lib/agreements/agreementService";
+import type { AgreementStatus, PartyRole, AgreementService } from "@/lib/agreements/agreementService";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { StaffService } from "@/lib/staff/staffService";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { EvidenceRecord } from "@/lib/evidence/evidenceService";
-import type { RelationshipFinancialAccountRepository } from "./relationshipFinancialAccountService";
+import type { RelationshipFinancialAccountRepository, RelationshipCurrentAgreementRoleReader } from "./relationshipFinancialAccountService";
 import type { PartyRef } from "./relationshipInvitationService";
 
 export type RelationshipStatus =
@@ -185,6 +185,16 @@ export interface RelationshipServiceDeps {
   staffService: StaffService;
   notifications: NotificationService;
   audit: AuditService;
+  /**
+   * current_agreement_id / relationship_participant.role audit (item 3): optional, same real
+   * implementation (DrizzleRelationshipCurrentAgreementRoleReader) RelationshipFinancialAccountService
+   * already uses for role-neutral funding/payout validation. `getRelationship` uses it to compute each
+   * participant's `effectiveRole` — the CURRENT governing agreement's real creditor/debtor, never the
+   * permanent, potentially-stale `relationship_participant.role` — for display on the Connections/
+   * Connection-detail pages. Optional so a caller that omits it still works, falling back to the
+   * stored role for every participant (the same "no agreement yet" fallback the reader itself uses).
+   */
+  agreementRoles?: RelationshipCurrentAgreementRoleReader;
 }
 
 export interface ActivationCheckResult {
@@ -215,14 +225,47 @@ export interface ActivationCheckResult {
 export class RelationshipService {
   constructor(private readonly deps: RelationshipServiceDeps) {}
 
-  async getRelationship(relationshipId: string, actingUserId: string): Promise<{ relationship: RelationshipRecord; participants: RelationshipParticipantRecord[] }> {
+  /**
+   * current_agreement_id / relationship_participant.role audit (item 3): each returned participant
+   * now also carries `effectiveRole` — the CURRENT governing agreement's real creditor/debtor,
+   * resolved via `agreementRoles` (falls back to the stored `role` only when no agreement has ever
+   * governed this connection yet, or the dependency is omitted). `role` itself is left unchanged and
+   * still returned — legacy/storage state, kept for compatibility, but callers displaying "who is the
+   * creditor/debtor of this connection right now" (Connections/Connection-detail pages) must prefer
+   * `effectiveRole`, never the bare `role`, which is stale once the same canonical connection is
+   * reused with reversed agreement roles (Decision 1/2).
+   */
+  async getRelationship(
+    relationshipId: string,
+    actingUserId: string,
+  ): Promise<{ relationship: RelationshipRecord; participants: (RelationshipParticipantRecord & { effectiveRole: PartyRole })[] }> {
     let relationship = await this.requireRelationship(relationshipId);
     await this.resolveActingParticipant(relationship.id, actingUserId);
     if (!relationship.publicReference) {
       relationship = await this.deps.relationships.setPublicReference(relationship.id, generateRelationshipReferenceCode());
     }
     const participants = await this.deps.participants.listForRelationship(relationship.id);
-    return { relationship, participants };
+    const currentRoles = (await this.deps.agreementRoles?.getCurrentAgreementRoles(relationship.id)) ?? null;
+    return {
+      relationship,
+      participants: participants.map((p) => ({ ...p, effectiveRole: this.resolveParticipantEffectiveRole(p, currentRoles) })),
+    };
+  }
+
+  private resolveParticipantEffectiveRole(
+    participant: RelationshipParticipantRecord,
+    currentRoles: { creditor: PartyRef; debtor: PartyRef } | null,
+  ): PartyRole {
+    if (!currentRoles) return participant.role;
+    const ref: PartyRef | null = participant.individualProfileId
+      ? { kind: "personal", id: participant.individualProfileId }
+      : participant.organizationId
+        ? { kind: "business", id: participant.organizationId }
+        : null;
+    if (!ref) return participant.role;
+    if (currentRoles.creditor.kind === ref.kind && currentRoles.creditor.id === ref.id) return "creditor";
+    if (currentRoles.debtor.kind === ref.kind && currentRoles.debtor.id === ref.id) return "debtor";
+    return participant.role; // not a party to the current governing agreement — never fabricate a role
   }
 
   /**
@@ -255,20 +298,42 @@ export class RelationshipService {
    * happen any earlier — Sprint 11's `ach_mandate` is agreement-scoped and no agreement existed until
    * now — so this is the one place that reuses `AchMandateService.authorize` (via `MandateReader`)
    * rather than duplicating mandate logic here.
+   *
+   * Decision 2 (canonical connection): `current_agreement_id` is no longer an exclusivity lock — a
+   * relationship may govern many agreements over time (and, per the reversed-role guard below, several
+   * at once as long as their roles don't conflict). Linking a new agreement always overwrites
+   * `current_agreement_id` to point at it (the "most recently linked" cache every other read-time-sync
+   * method already expects) rather than refusing because one was already set. Idempotent: relinking an
+   * agreement that's already linked to *this exact* relationship is a no-op.
+   *
+   * Decision 1 (reversed-role safety): a relationship's funding/payout slots are a single shared pair
+   * of resources (`relationship_financial_account_active_slot_unique` allows only one active funding
+   * and one active payout assignment per relationship at a time) — they cannot simultaneously serve two
+   * non-terminal agreements whose creditor/debtor roles are reversed relative to each other. Any number
+   * of simultaneous agreements with the SAME roles is fine (no shared-slot conflict); only a live role
+   * conflict is refused, with a clear, actionable error — never silently corrupting which party's
+   * account is treated as funding vs. payout.
    */
   async linkAgreement(relationshipId: string, agreementId: string, actingUserId: string): Promise<RelationshipRecord> {
     const relationship = await this.requireRelationship(relationshipId);
     const actingParticipant = await this.resolveActingParticipant(relationship.id, actingUserId);
-    if (relationship.currentAgreementId) {
-      throw new ValidationError("This relationship already has a governing agreement linked.");
+    const { agreement } = await this.deps.agreementService.getAgreement(agreementId, actingUserId);
+
+    // Idempotent no-op — this agreement is already linked to this exact relationship (a retried
+    // request, a defensive re-call from establishAgreementRelationship, etc.).
+    if (agreement.relationshipId === relationship.id) {
+      return relationship;
     }
+    if (agreement.relationshipId) {
+      throw new ValidationError("This agreement is already linked to a different connection.");
+    }
+
     // Missing-connection remediation (mandatory command): AgreementCreateWizard always derives the
     // counterparty it links FROM this same relationship's other participant, so this check is a
     // no-op there. It exists for the "Choose Existing Connection" path (linking an *already-created*
     // agreement to a relationship picked afterward), which has no such guarantee by construction —
     // without this, a user could link an agreement to any of their own unattached relationships
     // regardless of who the agreement's actual counterparty is.
-    const { agreement } = await this.deps.agreementService.getAgreement(agreementId, actingUserId);
     const myRole = await this.deps.agreementService.resolvePartyRole(agreementId, actingUserId);
     const agreementCounterparty =
       myRole === "creditor"
@@ -284,6 +349,21 @@ export class RelationshipService {
     if (!otherParticipantRef || otherParticipantRef.kind !== agreementCounterparty.kind || otherParticipantRef.id !== agreementCounterparty.id) {
       throw new ValidationError("This connection is not with the agreement's counterparty.");
     }
+
+    const TERMINAL_AGREEMENT_STATUSES: AgreementStatus[] = ["paid_in_full", "settled_in_full", "mutually_canceled", "closed"];
+    const existingAgreements = await this.deps.agreementService.listAgreementsForRelationship(relationship.id);
+    const roleConflict = existingAgreements.find(
+      (other) =>
+        other.id !== agreementId &&
+        !TERMINAL_AGREEMENT_STATUSES.includes(other.status) &&
+        (other.creditorProfileKind !== agreement.creditorProfileKind || other.creditorProfileId !== agreement.creditorProfileId),
+    );
+    if (roleConflict) {
+      throw new ValidationError(
+        "This connection has another active agreement between the same two parties with the debtor and creditor roles reversed. Complete or cancel that agreement before creating one with swapped roles.",
+      );
+    }
+
     await this.deps.relationships.setCurrentAgreementId(relationship.id, agreementId);
     await this.deps.agreements.linkRelationship(agreementId, relationship.id);
     const updated = await this.deps.relationships.updateStatus(relationship.id, "agreement_pending");
@@ -293,7 +373,17 @@ export class RelationshipService {
     if (funding && funding.financialAccount.status === "verified") {
       const participants = await this.deps.participants.listForRelationship(relationship.id);
       const payerParticipant = participants.find((p) => p.id === funding.relationshipParticipantId);
-      if (payerParticipant) {
+      // Decision 1: only auto-authorize when the funding slot's account is actually owned by THIS
+      // agreement's real debtor — after a role-reversed reuse of this connection, a stale funding
+      // assignment left over from a prior, opposite-role agreement must never be silently authorized
+      // for the wrong party. The debtor must set up their own funding account for this agreement
+      // (blocked by the reversed-role conflict guard above until the prior agreement is terminal, and
+      // by requireUsageMatchesRole/resolveEffectiveRole once they do) before this can auto-authorize.
+      const payerMatchesDebtor =
+        payerParticipant &&
+        ((agreement.debtorProfileKind === "personal" && payerParticipant.individualProfileId === agreement.debtorProfileId) ||
+          (agreement.debtorProfileKind === "business" && payerParticipant.organizationId === agreement.debtorProfileId));
+      if (payerParticipant && payerMatchesDebtor) {
         const payer: PartyRef = payerParticipant.individualProfileId
           ? { kind: "personal", id: payerParticipant.individualProfileId }
           : { kind: "business", id: payerParticipant.organizationId! };
@@ -372,10 +462,16 @@ export class RelationshipService {
    * Missing-connection remediation (mandatory command): the acting party's own connections that
    * could legitimately be linked to this already-created agreement — i.e. "Choose Existing
    * Connection" candidates. Mirrors AgreementCreateWizard's own eligibility filter (not yet joined,
-   * not terminal, no governing agreement of its own already) plus the one check that filter can't
-   * make client-side: the relationship's *other* participant must actually be this agreement's
-   * counterparty (see `linkAgreement`'s identical check, the real enforcement boundary — this list is
-   * only ever a convenience for the picker, never itself a security check).
+   * not terminal) plus the one check that filter can't make client-side: the relationship's *other*
+   * participant must actually be this agreement's counterparty (see `linkAgreement`'s identical
+   * check, the real enforcement boundary — this list is only ever a convenience for the picker, never
+   * itself a security check).
+   *
+   * Decision 2 (canonical connection): a relationship already governing another agreement is no
+   * longer excluded here — "Connection identity = the two parties," independent of how many
+   * agreements they've already made together. `linkAgreement` itself is the real gate: it no-ops
+   * idempotently if this exact agreement is already linked, and refuses (with a clear reason) only the
+   * specific case of a live, non-terminal role conflict — never a silent duplicate connection.
    */
   async listEligibleForAgreementLink(agreementId: string, actingUserId: string): Promise<RelationshipRecord[]> {
     const myRole = await this.deps.agreementService.resolvePartyRole(agreementId, actingUserId);
@@ -395,7 +491,7 @@ export class RelationshipService {
     const all = await this.listRelationshipsForParty(actingUserId, myProfile);
     const eligible: RelationshipRecord[] = [];
     for (const relationship of all) {
-      if (relationship.currentAgreementId !== null) continue;
+      if (relationship.currentAgreementId === agreementId) continue; // already linked to this exact agreement — nothing to do
       if (relationship.status === notYetJoined || terminalStatuses.includes(relationship.status)) continue;
       const participants = await this.deps.participants.listForRelationship(relationship.id);
       const actingParticipant = await this.resolveActingParticipant(relationship.id, actingUserId);
@@ -427,6 +523,15 @@ export class RelationshipService {
    * Read-time sync (mirrors Sprint 16's `syncAmendmentProgress` precedent) — advances the
    * relationship's own status by inspecting its linked agreement's current, unmodified Sprint 5
    * status/signature state. Never mutates the agreement itself.
+   *
+   * current_agreement_id audit finding: this is a PRESENTATION/status-cache read, not a financial or
+   * authorization decision — `relationship.status` (what this method writes) is read nowhere outside
+   * this class except one UI progress-tracker label (src/components/connections/setupTracker.ts). No
+   * payment, mandate, card, or financial-account-assignment code path ever reads relationship.status.
+   * For a relationship with more than one non-terminal agreement (Decision 2), this necessarily
+   * reflects only the most-recently-linked one — there is no per-agreement variant of this relationship-
+   * scoped call, so "most recent" is the same deliberate cache semantic `current_agreement_id` itself
+   * documents, not a silent substitution for a specific agreement the caller asked about.
    */
   async syncFromAgreement(relationshipId: string, actingUserId: string): Promise<RelationshipRecord> {
     const relationship = await this.requireRelationship(relationshipId);
@@ -456,6 +561,22 @@ export class RelationshipService {
     return updated;
   }
 
+  /**
+   * current_agreement_id audit finding: reads `relationship.currentAgreementId` to check signature/
+   * mandate/card status — this is the ONE lifecycle operation (`activate`, gated by this) where
+   * current_agreement_id feeds a decision beyond pure display. It remains SAFE because: (1) the
+   * mandate/card checks below (`mandates.isActiveForAgreement`/`cards.isActiveForAgreement`) are
+   * themselves keyed by the specific agreement id passed in, never by relationship state, so a wrong
+   * `current_agreement_id` can only make THIS relationship-level readiness check look at the wrong
+   * agreement's signature/mandate — it can never make an actual mandate, card registration, or payment
+   * apply to the wrong agreement (see AchMandateService/DebitCardMethodService, which never read
+   * relationship state at all); and (2) `relationship.status === "active"` (what a successful
+   * `activate()` sets) is itself read nowhere outside this class except a UI progress-tracker label —
+   * see `syncFromAgreement`'s identical doc comment. `POST /api/relationships/activate` is inherently
+   * relationship-scoped (no agreementId parameter), so "the most recently linked agreement" is the only
+   * available definition of "the governing agreement" for this call — not a silent substitution for a
+   * specific agreement a caller identified some other way.
+   */
   async checkActivationPrerequisites(relationshipId: string): Promise<ActivationCheckResult> {
     const relationship = await this.requireRelationship(relationshipId);
     const reasons: string[] = [];
@@ -600,6 +721,15 @@ export class RelationshipService {
    * must be a current participant *of this relationship*, not merely any historical agreement party)
    * before that agreement-level check even runs — "enforce participant and organization
    * authorization" (Phase 25), applied at both layers.
+   *
+   * current_agreement_id audit finding: this relationship-scoped call (`GET /api/relationships/
+   * evidence` takes no agreementId) has no way to mean anything other than "the current governing
+   * agreement's evidence" — for a relationship with more than one non-terminal agreement it returns
+   * only the most-recently-linked one's evidence. This is a read-visibility scoping choice, not an
+   * authorization bypass: `EvidenceService.listEvidence`'s own visibility model still applies in full to
+   * whatever it returns. The agreement-scoped evidence read every agreement detail page actually uses
+   * (`GET /api/agreements/evidence?agreementId=`) is unaffected — it takes the real agreement id
+   * directly and never routes through this relationship-level convenience method at all.
    */
   async getRelationshipEvidence(relationshipId: string, actingUserId: string): Promise<EvidenceRecord[]> {
     const relationship = await this.requireRelationship(relationshipId);

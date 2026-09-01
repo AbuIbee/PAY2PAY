@@ -3,6 +3,8 @@ import { AuditService, type AuditEventRecord, type AuditEventRepository } from "
 import type { AgreementRepository, AgreementTerms, AgreementVersionRepository, FeeAllocation, InstallmentScheduleItemRepository, PartyRole } from "@/lib/agreements/agreementService";
 import type { PaymentFrequency } from "@/lib/agreements/schedule";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
+import { AgreementIdentitySnapshotService } from "@/lib/agreements/agreementIdentitySnapshotService";
+import { createSignatureServiceForAgreementContext } from "@/lib/signatures/testFakes";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
 import { AmendmentService } from "./amendmentService";
 import type { AmendmentApplicationRepository, AmendmentChangeType, AmendmentRecord, AmendmentRepository, AmendmentStatus } from "./amendmentService";
@@ -217,6 +219,20 @@ export function createTestAmendmentService(notifications?: import("@/lib/notify/
     amendments,
   });
 
+  // Decision 7: shares agreementCtx's own snapshotRepo/identitySource, mirroring production's shared
+  // getAgreementIdentitySnapshotService() singleton — so a test can read `agreementCtx.snapshotRepo.rows`
+  // to see the amendment's own frozen snapshot alongside the original version's.
+  const identitySnapshotter = new AgreementIdentitySnapshotService({
+    snapshots: agreementCtx.snapshotRepo,
+    identitySource: agreementCtx.identitySource,
+  });
+
+  // Blocker 2 (amendment PDF lifecycle): a real SignatureService sharing this SAME agreementCtx (so
+  // its `getAgreement` reads see the amendment's own applied version) and the SAME identitySnapshotter
+  // state above (so its PDF read finds the snapshot `identitySnapshotter.freezeSnapshot` just froze) —
+  // mirrors production's shared getSignatureService()/getAgreementIdentitySnapshotService() singletons.
+  const pdfCtx = createSignatureServiceForAgreementContext(agreementCtx);
+
   const amendmentService = new AmendmentService({
     agreementService: agreementCtx.agreementService,
     amendments,
@@ -225,7 +241,9 @@ export function createTestAmendmentService(notifications?: import("@/lib/notify/
     audit: new AuditService(auditRepo),
     profileOwners: agreementCtx.profileOwners,
     notifications,
+    identitySnapshotter,
+    pdfGenerator: pdfCtx.signatureService,
   });
 
-  return { agreementCtx, amendments, auditRepo, amendmentService };
+  return { agreementCtx, amendments, auditRepo, amendmentService, pdfCtx };
 }

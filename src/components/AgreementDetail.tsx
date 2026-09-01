@@ -50,6 +50,17 @@ interface ScheduleItem {
   amountMinorUnits: number;
 }
 
+interface PartyDisplayFields {
+  displayName: string;
+  firstName: string | null;
+  lastName: string | null;
+  preferredEmail: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  country: string | null;
+}
+
 interface AgreementDetailData {
   id: string;
   status: string;
@@ -57,6 +68,9 @@ interface AgreementDetailData {
   relationshipShape: "P2P" | "B2C" | "C2B" | "B2B";
   creditor: { kind: "personal" | "business"; id: string };
   debtor: { kind: "personal" | "business"; id: string };
+  /** Decision 8: same shared read the PDF uses (resolveAgreementPartyDisplays) — snapshot once Step 2
+   *  has completed, live profile data before. Never phone, street address, or any raw id. */
+  partyDisplay: { creditor: PartyDisplayFields; debtor: PartyDisplayFields };
   version: {
     id: string;
     versionNumber: number;
@@ -214,6 +228,17 @@ function Chip({ label, tone }: { label: string; tone: ChipTone }) {
   return <span className={`chip chip--${tone}`}>{label}</span>;
 }
 
+/** Decision 8: "First Last / preferred email / City, State ZIP" — mirrors the PDF's own formatPartyLine, never a raw id. */
+function formatPartyLine(party: PartyDisplayFields): string {
+  const nameLine = party.firstName && party.lastName ? `${party.firstName} ${party.lastName}` : party.displayName;
+  const parts = [nameLine];
+  if (party.preferredEmail) parts.push(party.preferredEmail);
+  const cityState = [party.city, party.state].filter(Boolean).join(", ");
+  const location = [cityState, party.postalCode].filter(Boolean).join(" ").trim();
+  if (location) parts.push(party.country && party.country !== "US" ? `${location}, ${party.country}` : location);
+  return parts.join(" — ");
+}
+
 /**
  * Sprint 5/6/7/14/15/16 functional UI: agreement detail + every status-appropriate action across
  * the agreement's full lifecycle. Which buttons are shown is only a UX hint from comparing the
@@ -251,6 +276,7 @@ export function AgreementDetail() {
   const [progress, setProgress] = useState<AgreementProgressData | null>(null);
   const [nextPayment, setNextPayment] = useState<NextPaymentData | null>(null);
   const [versions, setVersions] = useState<VersionHistoryItem[]>([]);
+  const [profileReadiness, setProfileReadiness] = useState<{ ready: boolean; missingFields: string[] } | null>(null);
 
   const load = useCallback(async () => {
     if (!agreementId) {
@@ -270,6 +296,17 @@ export function AgreementDetail() {
       apiFetch<AgreementProgressData>(`/api/agreements/progress?id=${encodeURIComponent(agreementId)}`)
         .then((body) => setProgress(Array.isArray(body?.steps) ? body : null))
         .catch(() => setProgress(null));
+      // Decision 5: only a personal party has a personal_profile completeness gate — a business
+      // profile has no such requirement here, so this is skipped (and left null) for one. Tolerant
+      // fetch, same established pattern: a failure just means the gate doesn't render, never blocks
+      // the rest of the page.
+      if (activeProfile.kind === "personal") {
+        apiFetch<{ ready: boolean; missingFields: string[] }>("/api/profiles/personal/completeness")
+          .then((body) => setProfileReadiness(typeof body?.ready === "boolean" ? body : null))
+          .catch(() => setProfileReadiness(null));
+      } else {
+        setProfileReadiness(null);
+      }
       // Restore agreement payment functionality: same tolerant-fetch pattern as progress above — a
       // failure here just hides the Make Payment section rather than blocking the rest of the page.
       apiFetch<NextPaymentData>(`/api/agreements/payment-setup/next-payment?id=${encodeURIComponent(agreementId)}`)
@@ -450,6 +487,9 @@ export function AgreementDetail() {
   const iAmCreditor = !!me && me.kind === data.creditor.kind && me.id === data.creditor.id;
   const iAmDebtor = !!me && me.kind === data.debtor.kind && me.id === data.debtor.id;
   const myRole: "creditor" | "debtor" | null = iAmCreditor ? "creditor" : iAmDebtor ? "debtor" : null;
+  // Decision 5: gates only the two legally meaningful actions (accepting, signing) — never a dead
+  // end, since ProfileCompletionPanel links straight to the profile form and back.
+  const profileIncomplete = active?.kind === "personal" && profileReadiness !== null && !profileReadiness.ready;
   const { terms } = data.version;
   const isSignedOrLater = !["draft", "awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance", "awaiting_signatures"].includes(
     data.status,
@@ -496,6 +536,14 @@ export function AgreementDetail() {
             </a>
           </p>
         )}
+      </div>
+
+      <div className="card">
+        <div className="card__header">
+          <h3>Parties</h3>
+        </div>
+        <p style={{ margin: 0 }}>Creditor: {formatPartyLine(data.partyDisplay.creditor)}</p>
+        <p style={{ margin: "0.25rem 0 0" }}>Debtor: {formatPartyLine(data.partyDisplay.debtor)}</p>
       </div>
 
       {progress && <AgreementProgress data={progress} />}
@@ -752,13 +800,17 @@ export function AgreementDetail() {
         </form>
       )}
 
+      {data.status === "awaiting_creditor_acceptance" && myRole === "creditor" && profileIncomplete && (
+        <ProfileCompletionPanel returnTo={`/agreements/detail?id=${data.id}`} />
+      )}
+
       {data.status === "awaiting_creditor_acceptance" && !showCounterForm && (
         <div style={{ display: "grid", gap: "0.75rem" }}>
           <div className="hero__actions">
             <button
               type="button"
               className="button button--primary"
-              disabled={actionStatus === "working"}
+              disabled={actionStatus === "working" || (myRole === "creditor" && profileIncomplete)}
               onClick={() => void runAction(() => apiFetch("/api/agreements/decide", { method: "POST", body: JSON.stringify({ agreementId: data.id, decision: "accept" }) }))}
             >
               Accept
@@ -831,7 +883,11 @@ export function AgreementDetail() {
         </form>
       )}
 
-      {data.status === "awaiting_signatures" && myRole && (
+      {data.status === "awaiting_signatures" && myRole && profileIncomplete && (
+        <ProfileCompletionPanel returnTo={`/agreements/detail?id=${data.id}`} />
+      )}
+
+      {data.status === "awaiting_signatures" && myRole && !profileIncomplete && (
         <SignaturePanel
           agreementId={data.id}
           myRole={myRole}
@@ -1152,6 +1208,33 @@ function MakePaymentPanel({
           Review payment
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * Corrected per explicit review: shown in place of the Accept/Sign action whenever a personal
+ * party's profile is missing any field GET /api/profiles/personal/completeness requires for
+ * agreement participation — first name, last name, contact phone, a VERIFIED preferred email, and a
+ * full address (line 1, city, state, ZIP/postal code, country — line 2 is the only optional field).
+ * Never a dead end — links straight to the profile form (never to support) and carries `returnTo` so
+ * the form itself can send the user right back here once they've saved.
+ */
+function ProfileCompletionPanel({ returnTo }: { returnTo: string }) {
+  return (
+    <div className="card" id="profile-completion-required">
+      <div className="card__header">
+        <h3>Complete your profile to continue</h3>
+      </div>
+      <p style={{ margin: 0 }}>
+        Before you can accept or sign this agreement, we need your first name, last name, contact phone, a verified
+        preferred email, and your full address (address line 2 is the only optional part) on file.
+      </p>
+      <div className="hero__actions">
+        <a href={`/account/profile?returnTo=${encodeURIComponent(returnTo)}`} className="button button--primary">
+          Complete your profile
+        </a>
+      </div>
     </div>
   );
 }

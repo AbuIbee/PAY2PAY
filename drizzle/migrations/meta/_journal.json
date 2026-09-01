@@ -267,6 +267,20 @@
       "when": 1787792092335,
       "tag": "0037_loud_mojo",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1788216045799,
+      "tag": "0038_milky_hitman",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1788216535167,
+      "tag": "0039_material_namorita",
+      "breakpoints": true
     }
   ]
 }

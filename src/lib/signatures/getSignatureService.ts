@@ -1,5 +1,6 @@
 import "server-only";
 import { getAgreementService } from "@/lib/agreements/getAgreementService";
+import { getAgreementIdentitySnapshotService } from "@/lib/agreements/getAgreementIdentitySnapshotService";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getMfaService } from "@/lib/auth/getMfaService";
@@ -28,6 +29,7 @@ export function getSignatureService(): SignatureService {
       storage: getDocumentStorage(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
       notifications: getNotificationService(),
+      partySnapshots: getAgreementIdentitySnapshotService(),
     });
   }
   return cached;

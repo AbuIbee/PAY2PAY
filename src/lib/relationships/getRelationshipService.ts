@@ -14,6 +14,7 @@ import { DrizzleRelationshipParticipantRepository } from "./drizzleRelationshipP
 import { DrizzleRelationshipFinancialAccountRepository } from "./drizzleRelationshipFinancialAccountRepository";
 import { DrizzleAgreementRelationshipLinker } from "./drizzleAgreementRelationshipLinker";
 import { DrizzleRelationshipPairResolver } from "./drizzleRelationshipPairResolver";
+import { DrizzleRelationshipCurrentAgreementRoleReader } from "./relationshipCurrentAgreementRoleReader";
 import { AchMandateFinancialAccountAdapter } from "./achMandateFinancialAccountAdapter";
 import { DebitCardFinancialAccountAdapter } from "./debitCardFinancialAccountAdapter";
 
@@ -22,8 +23,9 @@ let cached: RelationshipService | null = null;
 /** Lazily creates (and memoizes) the production RelationshipService. Mirrors getAgreementService.ts's pattern. */
 export function getRelationshipService(): RelationshipService {
   if (!cached) {
+    const relationships = new DrizzleRelationshipRepository();
     cached = new RelationshipService({
-      relationships: new DrizzleRelationshipRepository(),
+      relationships,
       participants: new DrizzleRelationshipParticipantRepository(),
       financialAccounts: new DrizzleRelationshipFinancialAccountRepository(),
       agreementService: getAgreementService(),
@@ -36,6 +38,7 @@ export function getRelationshipService(): RelationshipService {
       staffService: getStaffService(),
       notifications: getNotificationService(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
+      agreementRoles: new DrizzleRelationshipCurrentAgreementRoleReader(relationships, getAgreementService()),
     });
   }
   return cached;

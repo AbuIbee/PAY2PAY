@@ -3,6 +3,8 @@ import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { DrizzleAgreementVersionRepository } from "@/lib/agreements/drizzleAgreementVersionRepository";
 import { getAgreementService } from "@/lib/agreements/getAgreementService";
+import { getAgreementIdentitySnapshotService } from "@/lib/agreements/getAgreementIdentitySnapshotService";
+import { getSignatureService } from "@/lib/signatures/getSignatureService";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { AmendmentService } from "./amendmentService";
@@ -21,6 +23,8 @@ export function getAmendmentService(): AmendmentService {
       audit: new AuditService(new DrizzleAuditEventRepository()),
       profileOwners: new DrizzleProfileOwnerReader(),
       notifications: getNotificationService(),
+      identitySnapshotter: getAgreementIdentitySnapshotService(),
+      pdfGenerator: getSignatureService(),
     });
   }
   return cached;

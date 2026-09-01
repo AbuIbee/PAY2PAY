@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { AuditService } from "@/lib/audit/auditService";
 import type { MfaMethod, MfaService } from "@/lib/auth/mfaService";
 import { generateAgreementPdf, hashPdfContent } from "@/lib/documents/agreementPdf";
+import type { AgreementPdfParty } from "@/lib/documents/agreementPdf";
+import { resolveAgreementPartyDisplays, type PartySnapshotReader, type PartyDisplaySource } from "@/lib/agreements/agreementPartyDisplay";
 import type { DocumentStorage } from "@/lib/documents/documentStorage";
 import type { ProfileDisplayReader } from "@/lib/documents/profileDisplayReader";
 import { ConfigurationError, ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
@@ -77,6 +79,14 @@ export interface SignatureServiceDeps {
    * notification-layer failure can never fail the signature it's reporting on.
    */
   notifications?: NotificationService;
+  /**
+   * Decision 9 (PDF/print fix): optional, mirroring `notifications?` above — resolved via the shared
+   * resolveAgreementPartyDisplays helper (src/lib/agreements/agreementPartyDisplay.ts), the same read
+   * the on-screen agreement view uses (AgreementDetail.tsx), so screen and PDF can never disagree. A
+   * caller that omits this dependency gets the same safe, display-name-only fallback that helper uses
+   * for a legacy agreement predating Decision 7.
+   */
+  partySnapshots?: PartySnapshotReader;
 }
 
 export interface SignInput {
@@ -311,21 +321,47 @@ export class SignatureService {
     }
   }
 
-  private async generatePdf(detail: AgreementWithDetail, ipAddress: string, deviceInfo: unknown): Promise<void> {
+  /**
+   * Decision 9: the one place both `generatePdf` and `getPreviewPdf` resolve the printed "Parties"
+   * block — always prefers the immutable snapshot (Decision 7) when one exists for this version, so
+   * the PDF and the on-screen finalized agreement (which reads the identical snapshot — see
+   * AgreementDetail.tsx) can never disagree; falls back to a live, display-name-only lookup (no raw
+   * id, ever) for a pre-Step-2 preview or a legacy agreement with no snapshot (Decision 11).
+   */
+  private async resolvePartyDisplays(
+    detail: AgreementWithDetail,
+  ): Promise<{ creditor: AgreementPdfParty; debtor: AgreementPdfParty; source: PartyDisplaySource }> {
+    return resolveAgreementPartyDisplays(detail, {
+      partySnapshots: this.deps.partySnapshots,
+      profileDisplay: this.deps.profileDisplay,
+    });
+  }
+
+  /**
+   * Blocker 2 (amendment PDF lifecycle): the one shared write path that actually renders, hashes,
+   * stores, and audits an immutable executed PDF — extracted so `generatePdf` (below, the original
+   * Sprint 6 path: both Sprint-6 signature_events exist, called once `signResult.bothSigned`) and
+   * `generatePdfForAppliedAmendment` (a fully-signed AMENDMENT's resulting version, which has no
+   * signature_event rows — see that method's own doc comment) can share IDENTICAL rendering/storage/
+   * audit behavior while supplying their own differently-sourced `signatures` list. The
+   * `agreement_pdf_version_unique` index (schema, unchanged) is this method's only enforcement against
+   * ever regenerating/overwriting an already-stored version's PDF — every caller must check
+   * `agreementPdfs.findByVersion` first (both already do).
+   */
+  private async buildAndStorePdf(
+    detail: AgreementWithDetail,
+    signatures: { role: PartyRole; signerDisplayName: string; signedAt: Date; authMethod: string }[],
+    ipAddress: string | null,
+    deviceInfo: unknown,
+  ): Promise<void> {
     const versionId = detail.version.id;
-    const [creditorName, debtorName] = await Promise.all([
-      this.deps.profileDisplay.getDisplayName(detail.agreement.creditorProfileKind, detail.agreement.creditorProfileId),
-      this.deps.profileDisplay.getDisplayName(detail.agreement.debtorProfileKind, detail.agreement.debtorProfileId),
-    ]);
-    const signatureEvents = await this.deps.signatureEvents.listForVersion(versionId);
-    const signatures = await Promise.all(
-      signatureEvents.map(async (event) => ({
-        role: event.signerRole,
-        signerDisplayName: await this.deps.profileDisplay.getDisplayName(event.signerProfileKind, event.signerProfileId),
-        signedAt: event.signedAt,
-        authMethod: event.authMethod,
-      })),
-    );
+    const { creditor: creditorParty, debtor: debtorParty, source } = await this.resolvePartyDisplays(detail);
+    // Legacy-agreement audit (item 2): purely observational — never blocks or alters generation.
+    // Structured, IDs-only, no PII: lets an operator see which agreements are printing under the
+    // safe display-name-only legacy fallback rather than an immutable structured snapshot.
+    if (source === "legacy_live") {
+      logger.info("agreement_pdf_generated_without_snapshot", { agreementId: detail.agreement.id, agreementVersionId: versionId });
+    }
 
     // PRSprint 12: generated up front so it can be printed inside the document itself (see
     // AgreementPdfRepository.insert's own doc comment), and so the "generated at" timestamp is
@@ -337,8 +373,8 @@ export class SignatureService {
       versionNumber: detail.version.versionNumber,
       relationshipShape: this.deps.agreementService.relationshipShape(detail.agreement),
       currency: detail.agreement.currency,
-      creditor: { kind: detail.agreement.creditorProfileKind, id: detail.agreement.creditorProfileId, displayName: creditorName },
-      debtor: { kind: detail.agreement.debtorProfileKind, id: detail.agreement.debtorProfileId, displayName: debtorName },
+      creditor: creditorParty,
+      debtor: debtorParty,
       terms: detail.version.terms,
       frequency: detail.version.frequency,
       feeAllocation: detail.version.feeAllocation,
@@ -352,8 +388,8 @@ export class SignatureService {
       amendmentReference: detail.version.isOriginal
         ? null
         : { versionNumber: detail.version.versionNumber, parentVersionNumber: detail.version.versionNumber - 1 },
-      // Only ever called from generatePdf, itself only called once signResult.bothSigned — this is
-      // always the immutable, fully-executed record.
+      // Both callers only ever reach this method once their respective version is fully executed
+      // (signResult.bothSigned, or the amendment's own both-signatures-collected gate).
       isFullyExecuted: true,
     });
     const documentHash = hashPdfContent(bytes);
@@ -380,18 +416,143 @@ export class SignatureService {
     });
   }
 
+  private async generatePdf(detail: AgreementWithDetail, ipAddress: string, deviceInfo: unknown): Promise<void> {
+    const signatureEvents = await this.deps.signatureEvents.listForVersion(detail.version.id);
+    const signatures = await Promise.all(
+      signatureEvents.map(async (event) => ({
+        role: event.signerRole,
+        signerDisplayName: await this.deps.profileDisplay.getDisplayName(event.signerProfileKind, event.signerProfileId),
+        signedAt: event.signedAt,
+        authMethod: event.authMethod,
+      })),
+    );
+    await this.buildAndStorePdf(detail, signatures, ipAddress, deviceInfo);
+  }
+
+  /**
+   * Blocker 2/Blocker 1 (amendment PDF lifecycle + failure recovery): the general "ensure this
+   * fully-executed version has its immutable PDF" entry point — required so that "screen shows
+   * Version 2, snapshot represents Version 2, but stored PDF still represents Version 1" can never
+   * happen, AND so a PDF-generation failure is recoverable rather than a silent, permanent gap.
+   *
+   * Two callers: (1) AmendmentService (via the `AmendmentPdfGenerator` interface it declares, still
+   * named `generatePdfForAppliedAmendment` there for clarity at that call site) immediately after a
+   * fully-signed amendment atomically creates its new agreement_version — see
+   * AmendmentService.applyAmendment's own doc comment for why this always runs AFTER the new version
+   * row (and its identity snapshot) already exist; (2) `getSignedPdfUrl` below, as a lazy retry — if
+   * that first attempt failed (logged as `amendment_pdf_generation_failed`), the very next attempt to
+   * view/download the agreement's current version regenerates it on the spot, so "once regeneration
+   * succeeds, the correct version's PDF becomes the current printable document" without a separate
+   * retry UI/route.
+   *
+   * Idempotent and safe to call any number of times: `agreementPdfs.findByVersion` is checked first,
+   * so a retried request never regenerates or overwrites an already-stored PDF — the unique index on
+   * agreement_version_id (`agreement_pdf_version_unique`, unchanged) is a second, DB-level guarantee
+   * of the same thing, so even two concurrent retries can produce at most one stored row.
+   *
+   * Signatures: prefers Sprint 6 signature_event rows when present (the original agreement path,
+   * richer per-signer authMethod/IP/device evidence); falls back to the VERSION's own
+   * creditor/debtor_signed_at (Sprint 5's primitive, present on every version regardless of origin)
+   * when none exist — every amendment-produced version, since AmendmentService.signAmendment
+   * deliberately does not create signature_event evidence (see that method's own doc comment for why).
+   */
+  async ensurePdfForVersion(agreementId: string, agreementVersionId: string, actingUserId: string): Promise<void> {
+    const existing = await this.deps.agreementPdfs.findByVersion(agreementVersionId);
+    if (existing) return;
+
+    const detail = await this.deps.agreementService.getAgreement(agreementId, actingUserId);
+    if (detail.version.id !== agreementVersionId || !detail.version.signedAt) {
+      return; // not (yet) this agreement's current, fully-executed version — nothing to print yet
+    }
+
+    const signatureEvents = await this.deps.signatureEvents.listForVersion(agreementVersionId);
+    let signatures: { role: PartyRole; signerDisplayName: string; signedAt: Date; authMethod: string }[];
+    if (signatureEvents.length > 0) {
+      signatures = await Promise.all(
+        signatureEvents.map(async (event) => ({
+          role: event.signerRole,
+          signerDisplayName: await this.deps.profileDisplay.getDisplayName(event.signerProfileKind, event.signerProfileId),
+          signedAt: event.signedAt,
+          authMethod: event.authMethod,
+        })),
+      );
+    } else {
+      signatures = [];
+      if (detail.version.creditorSignedAt) {
+        signatures.push({
+          role: "creditor",
+          signerDisplayName: await this.deps.profileDisplay.getDisplayName(detail.agreement.creditorProfileKind, detail.agreement.creditorProfileId),
+          signedAt: detail.version.creditorSignedAt,
+          authMethod: "amendment_signature",
+        });
+      }
+      if (detail.version.debtorSignedAt) {
+        signatures.push({
+          role: "debtor",
+          signerDisplayName: await this.deps.profileDisplay.getDisplayName(detail.agreement.debtorProfileKind, detail.agreement.debtorProfileId),
+          signedAt: detail.version.debtorSignedAt,
+          authMethod: "amendment_signature",
+        });
+      }
+    }
+
+    await this.buildAndStorePdf(detail, signatures, null, null);
+  }
+
+  /** Back-compat name AmendmentService's `AmendmentPdfGenerator` interface calls — same method. */
+  async generatePdfForAppliedAmendment(agreementId: string, agreementVersionId: string, actingUserId: string): Promise<void> {
+    return this.ensurePdfForVersion(agreementId, agreementVersionId, actingUserId);
+  }
+
+  /**
+   * Blocker 1 (amendment PDF failure recovery): "detectably missing its PDF" — uses only EXISTING
+   * state (agreement_version.signed_at, agreement_pdf.findByVersion), no new schema/column. Read-only;
+   * never generates anything itself (see `ensurePdfForVersion` for that, which `getSignedPdfUrl`
+   * already calls automatically on every access).
+   */
+  async getDocumentStatus(
+    agreementId: string,
+    actingUserId: string,
+  ): Promise<{ agreementVersionId: string | null; isFullyExecuted: boolean; hasStoredPdf: boolean }> {
+    const detail = await this.deps.agreementService.getAgreement(agreementId, actingUserId);
+    if (!detail.agreement.currentVersionId) {
+      return { agreementVersionId: null, isFullyExecuted: false, hasStoredPdf: false };
+    }
+    const isFullyExecuted = detail.version.id === detail.agreement.currentVersionId && !!detail.version.signedAt;
+    const pdf = await this.deps.agreementPdfs.findByVersion(detail.agreement.currentVersionId);
+    return { agreementVersionId: detail.agreement.currentVersionId, isFullyExecuted, hasStoredPdf: !!pdf };
+  }
+
   /**
    * Both parties (and only both parties) may retrieve the signed PDF — AgreementService.
    * getAgreement's own authorizeEitherParty is the sole authorization check here (this sprint's
    * "document access isolation" requirement); a signed URL is short-lived and freshly issued on
    * every call, never cached or handed out once and reused indefinitely.
+   *
+   * Blocker 1: attempts a lazy, best-effort `ensurePdfForVersion` retry first — if an earlier
+   * generation attempt failed (e.g. right after an amendment applied), this is what makes the failure
+   * recoverable: the very next view/download attempt regenerates the missing PDF on the spot. Never
+   * blocks or corrupts anything if the retry itself fails again (logged distinctly from the original
+   * failure) — the existing "No signed PDF exists yet" error below is still the honest outcome.
    */
   async getSignedPdfUrl(agreementId: string, actingUserId: string): Promise<string> {
     const detail = await this.deps.agreementService.getAgreement(agreementId, actingUserId);
     if (!detail.agreement.currentVersionId) {
       throw new ValidationError("This agreement has no current version.");
     }
-    const pdf = await this.deps.agreementPdfs.findByVersion(detail.agreement.currentVersionId);
+    let pdf = await this.deps.agreementPdfs.findByVersion(detail.agreement.currentVersionId);
+    if (!pdf) {
+      try {
+        await this.ensurePdfForVersion(agreementId, detail.agreement.currentVersionId, actingUserId);
+        pdf = await this.deps.agreementPdfs.findByVersion(detail.agreement.currentVersionId);
+      } catch (error) {
+        logger.error("agreement_pdf_retry_failed", {
+          agreementId,
+          agreementVersionId: detail.agreement.currentVersionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     if (!pdf) {
       throw new ValidationError("No signed PDF exists yet for this agreement.");
     }
@@ -408,10 +569,7 @@ export class SignatureService {
    */
   async getPreviewPdf(agreementId: string, actingUserId: string): Promise<Uint8Array> {
     const detail = await this.deps.agreementService.getAgreement(agreementId, actingUserId);
-    const [creditorName, debtorName] = await Promise.all([
-      this.deps.profileDisplay.getDisplayName(detail.agreement.creditorProfileKind, detail.agreement.creditorProfileId),
-      this.deps.profileDisplay.getDisplayName(detail.agreement.debtorProfileKind, detail.agreement.debtorProfileId),
-    ]);
+    const { creditor: creditorParty, debtor: debtorParty } = await this.resolvePartyDisplays(detail);
     const signatureEvents = await this.deps.signatureEvents.listForVersion(detail.version.id);
     const signatures = await Promise.all(
       signatureEvents.map(async (event) => ({
@@ -427,8 +585,8 @@ export class SignatureService {
       versionNumber: detail.version.versionNumber,
       relationshipShape: this.deps.agreementService.relationshipShape(detail.agreement),
       currency: detail.agreement.currency,
-      creditor: { kind: detail.agreement.creditorProfileKind, id: detail.agreement.creditorProfileId, displayName: creditorName },
-      debtor: { kind: detail.agreement.debtorProfileKind, id: detail.agreement.debtorProfileId, displayName: debtorName },
+      creditor: creditorParty,
+      debtor: debtorParty,
       terms: detail.version.terms,
       frequency: detail.version.frequency,
       feeAllocation: detail.version.feeAllocation,

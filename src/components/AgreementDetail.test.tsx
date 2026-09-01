@@ -36,6 +36,28 @@ function detailBody(overrides: Partial<Record<string, unknown>> = {}) {
     relationshipShape: "P2P",
     creditor: { kind: "personal", id: "profile-creditor" },
     debtor: { kind: "personal", id: "profile-debtor" },
+    partyDisplay: {
+      creditor: {
+        displayName: "Creditor Test",
+        firstName: "Creditor",
+        lastName: "Test",
+        preferredEmail: "creditor@example.com",
+        city: "Austin",
+        state: "TX",
+        postalCode: "78701",
+        country: "US",
+      },
+      debtor: {
+        displayName: "Debtor Test",
+        firstName: "Debtor",
+        lastName: "Test",
+        preferredEmail: "debtor@example.com",
+        city: "Dallas",
+        state: "TX",
+        postalCode: "75201",
+        country: "US",
+      },
+    },
     version: {
       id: "version-1",
       versionNumber: 1,
@@ -216,6 +238,33 @@ describe("AgreementDetail", () => {
     await waitFor(() => expect(screen.getByText(/verify it's you/i)).toBeInTheDocument());
   });
 
+  it("Decision 5: shows 'Complete your profile to continue' instead of the sign button when the personal-profile completeness gate reports not ready, with a direct CTA to the profile form", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        "/api/agreements/detail": {
+          body: detailBody({ status: "awaiting_signatures", version: { ...detailBody().version, creditorSignedAt: null, debtorSignedAt: null } }),
+        },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/profiles/personal/completeness": { body: { ready: false, missingFields: ["preferredEmail"] } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+      }),
+    );
+
+    render(<AgreementDetail />);
+
+    expect(await screen.findByText("Complete your profile to continue")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /sign this agreement/i })).not.toBeInTheDocument();
+    const cta = screen.getByRole("link", { name: /complete your profile/i });
+    expect(cta).toHaveAttribute("href", expect.stringContaining("/account/profile?returnTo="));
+    expect(cta).toHaveAttribute("href", expect.stringContaining(encodeURIComponent("agreement-1")));
+  });
+
   it("Problem 2 remediation: shows an inline schedule-revision form (not a dead-end error) when signing fails because the first payment date has already passed, and successfully proposing a new date returns to normal signing", async () => {
     const user = userEvent.setup();
     let revised = false;
@@ -313,6 +362,31 @@ describe("AgreementDetail", () => {
 
     expect(await screen.findByText("Agreement progress")).toBeInTheDocument();
     expect(screen.getByText("Step 4 — Review & signatures")).toBeInTheDocument();
+  });
+
+  it("Decision 8: renders the party identity block from partyDisplay (name, email, city/state/ZIP) with no raw profile id anywhere on the page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody() },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+      }),
+    );
+
+    render(<AgreementDetail />);
+
+    expect(await screen.findByText(/Creditor Test/)).toBeInTheDocument();
+    expect(screen.getByText(/creditor@example.com/)).toBeInTheDocument();
+    expect(screen.getByText(/Austin, TX 78701/)).toBeInTheDocument();
+    expect(screen.getByText(/Debtor Test/)).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain("profile-creditor");
+    expect(document.body.innerHTML).not.toContain("profile-debtor");
   });
 
   const READY_PROGRESS_STEPS = [

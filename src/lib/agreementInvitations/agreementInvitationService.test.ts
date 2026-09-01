@@ -597,7 +597,15 @@ describe("AgreementInvitationService", () => {
       expect(participants.map((p) => p.individualProfileId).sort()).toEqual([INVITER_PROFILE.id, recipientProfile.id].sort());
     });
 
-    it("never reuses a connection where the same two people hold reversed roles — role must match exactly, not just identity, so a funding/payout account can never end up assigned to the wrong side", async () => {
+    /**
+     * Decision 1 (reversed-role safety): a connection is role-neutral — matching by party identity
+     * alone, regardless of which role each party's relationship_participant row happens to still say.
+     * "Do NOT solve reversed roles by creating a second Connection": with no conflicting non-terminal
+     * agreement already on it, the existing connection is reused, not duplicated. The narrower safety
+     * property (never assign the wrong side's account) is `RelationshipService.linkAgreement`'s own
+     * reversed-role CONFLICT guard, proven directly in relationshipService.test.ts.
+     */
+    it("reuses a connection where the same two people hold reversed roles, when there is no conflicting non-terminal agreement already on it — never creates a second connection", async () => {
       const { recipientUserId, recipientProfile } = acceptAsNewRecipient();
 
       // Existing connection between the SAME two people, but with roles reversed relative to the
@@ -626,10 +634,17 @@ describe("AgreementInvitationService", () => {
       const { agreementId } = await ctx.invitationService.acceptPlan({ rawToken, actingUserId: recipientUserId, actingProfile: recipientProfile });
 
       const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
-      expect(agreement?.relationshipId).not.toBe(reversed.id);
+      expect(agreement?.relationshipId).toBe(reversed.id); // the SAME canonical connection — never a second one
+      expect(ctx.relationshipCtx.relationships.byId.size).toBe(1);
+
+      // The connection's own participant rows are untouched (still exactly the two original rows, no
+      // duplicate, no mutation) — the connection stays role-neutral. The agreement's OWN creditor/
+      // debtor fields (never the stale relationship_participant.role) are the authoritative source for
+      // this agreement's actual roles.
       const newParticipants = await ctx.relationshipCtx.participants.listForRelationship(agreement!.relationshipId!);
-      expect(newParticipants.find((p) => p.role === "creditor")?.individualProfileId).toBe(INVITER_PROFILE.id);
-      expect(newParticipants.find((p) => p.role === "debtor")?.individualProfileId).toBe(recipientProfile.id);
+      expect(newParticipants).toHaveLength(2);
+      expect(agreement?.creditorProfileId).toBe(INVITER_PROFILE.id);
+      expect(agreement?.debtorProfileId).toBe(recipientProfile.id);
     });
 
     it("never blocks or fails an already-accepted agreement if connection linking hits an error — best-effort only, recoverable later through the agreement page's own 'Connection required' UI", async () => {

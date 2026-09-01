@@ -30,4 +30,23 @@ describe("participantLabel", () => {
     expect(individual).toContain("Individual");
     expect(business).toContain("Business");
   });
+
+  it("current_agreement_id / relationship_participant.role audit (item 3): prefers effectiveRole over the permanent, potentially-stale relationship_participant.role", () => {
+    // Stored role says "creditor" (the connection's ORIGINAL role), but the current governing
+    // agreement's real role — effectiveRole — says "debtor" (a later, role-reversed reuse of the same
+    // canonical connection). The label must reflect the CURRENT agreement, never the stale storage.
+    const label = participantLabel(
+      { id: "p1", individualProfileId: "profile-1", organizationId: null, role: "creditor", effectiveRole: "debtor", representedByUserId: "me" },
+      "me",
+    );
+    expect(label).toBe("You (Debtor)");
+  });
+
+  it("falls back to the stored role when effectiveRole is absent (no governing agreement yet, or an older caller)", () => {
+    const label = participantLabel(
+      { id: "p1", individualProfileId: "profile-1", organizationId: null, role: "creditor", representedByUserId: "me" },
+      "me",
+    );
+    expect(label).toBe("You (Creditor)");
+  });
 });

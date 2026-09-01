@@ -34,3 +34,5 @@ export * from "./smsOptOut";
 export * from "./cardIssuing";
 export * from "./compliance";
 export * from "./riskSignal";
+export * from "./agreementPartySnapshot";
+export * from "./preferredEmailVerification";
