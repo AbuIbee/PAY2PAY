@@ -21,6 +21,7 @@ export function getAgreementProgressService(): AgreementProgressService {
       installments: new DrizzleAgreementInstallmentStatusReader(),
       paymentAttempts: new DrizzlePaymentAttemptRepository(),
       balance: getBalanceService(),
+      partyAccounts: getRelationshipFinancialAccountService(),
     });
   }
   return cached;

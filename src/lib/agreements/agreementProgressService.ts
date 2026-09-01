@@ -1,8 +1,9 @@
 import "server-only";
 import { PRE_ACCEPTANCE_STATUSES } from "./agreementService";
-import type { AgreementService, AgreementStatus, PartyRole } from "./agreementService";
+import type { AgreementRecord, AgreementService, AgreementStatus, PartyRole } from "./agreementService";
 import { isPastDate } from "./schedule";
 import { formatMoney } from "@/lib/ui/money";
+import type { ProfileKind } from "@/lib/profiles/verificationService";
 
 export type AgreementProgressStepKey =
   | "details_terms"
@@ -126,6 +127,20 @@ export interface AgreementPaymentAttemptsReader {
   listByAgreementId(agreementId: string): Promise<AgreementPaymentAttemptRecord[]>;
 }
 
+/**
+ * Production defect remediation (existing payment methods must be recognized): narrow view onto
+ * RelationshipFinancialAccountService.listAccountsForParty — the real implementation already enforces
+ * the required ownership model (a personal profile's own owner, or an authorized business staff
+ * member; see that method's own `authorizeParty`). Used ONLY to check whether the acting party already
+ * owns a verified financial account eligible for their own role's slot (debtor -> funding, creditor ->
+ * payout) BEFORE telling them to "set up" a new one — never to read or expose the counterparty's
+ * accounts, and never to bypass `requireUsageMatchesRole`/`requireAccountBelongsToParticipant`, which
+ * remain the sole authority over which account may actually be assigned (this reader is read-only).
+ */
+export interface AgreementPartyAccountsReader {
+  listAccountsForParty(actingUserId: string, party: { kind: ProfileKind; id: string }): Promise<Array<{ status: string }>>;
+}
+
 export interface AgreementProgressServiceDeps {
   agreementService: AgreementService;
   relationshipPaymentMethods: RelationshipPaymentMethodReader;
@@ -134,6 +149,12 @@ export interface AgreementProgressServiceDeps {
   installments: AgreementInstallmentStatusReader;
   paymentAttempts: AgreementPaymentAttemptsReader;
   balance: AgreementBalanceReader;
+  /**
+   * Optional, matching this class's own established best-effort dependency pattern (a caller that
+   * omits it — most existing tests — is unaffected; a read failure degrades to "no eligible accounts
+   * known" rather than failing the whole progress read, same as every other optional read here).
+   */
+  partyAccounts?: AgreementPartyAccountsReader;
 }
 
 /**
@@ -243,7 +264,8 @@ export class AgreementProgressService {
     // mandate — see PaymentReadiness's doc comment for why this is computed once and shared with
     // Step 5 below.
     const readiness = await this.computePaymentReadiness(relationshipId, agreementId, actingUserId);
-    steps.push(this.paymentMethodStep(readiness, myRole, agreementId, relationshipId, agreement.status));
+    const eligibleAccountCount = await this.computeMyEligibleAccountCount(agreement, myRole, readiness, actingUserId);
+    steps.push(this.paymentMethodStep(readiness, myRole, agreementId, relationshipId, agreement.status, eligibleAccountCount));
 
     // Step 4 — signatures: dependency-aware only on the schedule not being stale — never invites a
     // signature attempt that would just fail server-side. Also Originator/Counterparty aware
@@ -430,6 +452,35 @@ export class AgreementProgressService {
   }
 
   /**
+   * Production defect remediation (existing payment methods must be recognized): how many verified
+   * financial accounts the acting party already owns for their OWN role's slot (debtor -> funding,
+   * creditor -> payout) — never the counterparty's. Only read when that slot genuinely isn't ready yet
+   * (an already-ready slot has nothing to recognize), and only ever the acting party's own profile —
+   * `AgreementPartyAccountsReader`'s real implementation independently re-enforces this ownership
+   * check server-side regardless. Best-effort: a read failure reports zero eligible accounts, which
+   * simply preserves today's "Set up..." wording rather than claiming an account exists that couldn't
+   * be confirmed.
+   */
+  private async computeMyEligibleAccountCount(
+    agreement: AgreementRecord,
+    myRole: PartyRole,
+    readiness: PaymentReadiness | null,
+    actingUserId: string,
+  ): Promise<number> {
+    if (!this.deps.partyAccounts) return 0;
+    const alreadyReady = myRole === "debtor" ? (readiness?.debtorFundingAssigned ?? false) : (readiness?.creditorPayoutReady ?? false);
+    if (alreadyReady) return 0;
+    const profileKind = myRole === "creditor" ? agreement.creditorProfileKind : agreement.debtorProfileKind;
+    const profileId = myRole === "creditor" ? agreement.creditorProfileId : agreement.debtorProfileId;
+    try {
+      const accounts = await this.deps.partyAccounts.listAccountsForParty(actingUserId, { kind: profileKind, id: profileId });
+      return accounts.filter((a) => a.status === "verified").length;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
    * Step 3 — payment method. Its ONLY purpose is payment method — never a connection step, never a
    * bare "Optional": once a relationship is linked, each party sees only their own actionable item
    * (debtor funding-source setup vs. creditor payout-destination setup) — a party is never sent into
@@ -469,6 +520,7 @@ export class AgreementProgressService {
     agreementId: string,
     relationshipId: string | null,
     agreementStatus: AgreementStatus,
+    eligibleAccountCount: number,
   ): AgreementProgressStep {
     if (!readiness) {
       if (!relationshipId) {
@@ -512,6 +564,9 @@ export class AgreementProgressService {
     }
     if (myRole === "debtor") {
       if (!debtorReady) {
+        if (!readiness.debtorFundingAssigned && eligibleAccountCount > 0) {
+          return this.eligibleAccountStep(agreementId, "Select a payment method", eligibleAccountCount);
+        }
         return {
           key: "payment_method",
           label: "Payment method",
@@ -537,6 +592,9 @@ export class AgreementProgressService {
     }
     // myRole === "creditor"
     if (!readiness.creditorPayoutReady) {
+      if (eligibleAccountCount > 0) {
+        return this.eligibleAccountStep(agreementId, "Select a payout account", eligibleAccountCount);
+      }
       return {
         key: "payment_method",
         label: "Payment method",
@@ -553,6 +611,31 @@ export class AgreementProgressService {
       statusText: "Waiting for debtor payment setup",
       description: "Your payout account is ready. Waiting for the debtor to set up a payment method.",
       cta: null,
+    };
+  }
+
+  /**
+   * Production defect remediation (existing payment methods must be recognized): the acting party
+   * already owns one or more verified accounts eligible for their own role's slot — never invite them
+   * to "set up" (add) another one. Points at the agreement page's own inline selector (never
+   * /payment-methods, a generic add-new-account page) so choosing/confirming an existing account never
+   * leaves the agreement, and AgreementDetail's own `load()` after a successful assignment immediately
+   * recomputes this exact step.
+   */
+  private eligibleAccountStep(agreementId: string, statusText: string, eligibleAccountCount: number): AgreementProgressStep {
+    return {
+      key: "payment_method",
+      label: "Payment method",
+      status: "action_required",
+      statusText,
+      description:
+        eligibleAccountCount === 1
+          ? "You already have a verified account. Confirm it below to complete setup."
+          : "You have multiple verified accounts. Choose which one to use for this agreement.",
+      cta: {
+        label: eligibleAccountCount === 1 ? "Use this account" : "Choose account",
+        href: `/agreements/detail?id=${agreementId}#payment-method-select`,
+      },
     };
   }
 

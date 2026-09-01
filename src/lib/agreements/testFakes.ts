@@ -13,6 +13,7 @@ import type {
 } from "./agreementIdentitySnapshotService";
 import { computeVersionHash } from "./documentHash";
 import type {
+  AgreementPartyNameReader,
   AgreementPartyRepository,
   AgreementRecord,
   AgreementRepository,
@@ -347,6 +348,28 @@ export class InMemoryPartyIdentitySource implements PartyIdentitySource {
 }
 
 /**
+ * Production defect remediation (agreement participation requires a usable name): test-only double for
+ * `AgreementPartyNameReader`. `complete` defaults to `true` (every existing test that wires this in but
+ * never calls `setIncomplete` keeps passing) — call `setIncomplete(userId)` to simulate a specific
+ * user's own personal profile missing first/last name.
+ */
+export class FakeAgreementPartyNameReader implements AgreementPartyNameReader {
+  incompleteUserIds = new Set<string>();
+
+  setIncomplete(userId: string): void {
+    this.incompleteUserIds.add(userId);
+  }
+
+  setComplete(userId: string): void {
+    this.incompleteUserIds.delete(userId);
+  }
+
+  async hasRequiredName(actingUserId: string): Promise<boolean> {
+    return !this.incompleteUserIds.has(actingUserId);
+  }
+}
+
+/**
  * `signatureEvents`: optional shared sink for signature_event-shaped evidence rows written by the
  * atomic signing path — signatures/testFakes.ts's own createTestSignatureService passes its
  * InMemorySignatureEventRepository.events array here so SignatureService's reads (generatePdf's
@@ -360,6 +383,7 @@ export function createTestAgreementService(
   notifications?: import("@/lib/notify/notificationService").NotificationService,
   connectionEstablisher?: import("./agreementService").AgreementConnectionEstablisher,
   identitySnapshotter?: import("./agreementService").AgreementIdentitySnapshotter,
+  partyNames?: import("./agreementService").AgreementPartyNameReader,
 ) {
   const agreements = new InMemoryAgreementRepository();
   const versions = new InMemoryAgreementVersionRepository();
@@ -390,6 +414,7 @@ export function createTestAgreementService(
     notifications,
     connectionEstablisher,
     identitySnapshotter: identitySnapshotter ?? defaultIdentitySnapshotter,
+    partyNames,
   });
 
   return {

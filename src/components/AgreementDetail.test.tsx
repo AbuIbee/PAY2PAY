@@ -34,6 +34,7 @@ function detailBody(overrides: Partial<Record<string, unknown>> = {}) {
     status: "active",
     currency: "USD",
     relationshipShape: "P2P",
+    relationshipId: "relationship-1",
     creditor: { kind: "personal", id: "profile-creditor" },
     debtor: { kind: "personal", id: "profile-debtor" },
     partyDisplay: {
@@ -263,6 +264,60 @@ describe("AgreementDetail", () => {
     const cta = screen.getByRole("link", { name: /complete your profile/i });
     expect(cta).toHaveAttribute("href", expect.stringContaining("/account/profile?returnTo="));
     expect(cta).toHaveAttribute("href", expect.stringContaining(encodeURIComponent("agreement-1")));
+  });
+
+  it("Production defect remediation (agreement participation requires a usable name): shows 'Complete your profile to continue' instead of an enabled acknowledge button when the debtor's own first/last name is missing, with a direct Complete Profile CTA", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "awaiting_debtor_acknowledgment" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+        "/api/profiles/personal/completeness": { body: { ready: false, missingFields: ["firstName", "lastName"] } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+      }),
+    );
+
+    render(<AgreementDetail />);
+
+    expect(await screen.findByText("Complete your profile to continue")).toBeInTheDocument();
+    const acknowledgeButton = screen.getByRole("button", { name: "I acknowledge this obligation is owed" });
+    expect(acknowledgeButton).toBeDisabled();
+    const cta = screen.getByRole("link", { name: /complete your profile/i });
+    expect(cta).toHaveAttribute("href", expect.stringContaining("/account/profile?returnTo="));
+    expect(cta).toHaveAttribute("href", expect.stringContaining(encodeURIComponent("agreement-1")));
+  });
+
+  it("Production defect remediation (agreement participation requires a usable name): the debtor may still acknowledge once their own name is complete, even if other profile fields (e.g. address) remain missing — the narrower name-only gate, not the broader completeness gate", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetchByUrl({
+      "/api/agreements/detail": { body: detailBody({ status: "awaiting_debtor_acknowledgment" }) },
+      "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+      "/api/profiles/personal/completeness": { body: { ready: false, missingFields: ["contactPhone", "line1"] } },
+      "/api/agreements/evidence?": { body: { evidence: [] } },
+      "/api/agreements/witnesses?": { body: { witnesses: [] } },
+      "/api/agreements/amendments?": { body: { amendments: [] } },
+      "/api/agreements/partial-payments?": { body: { requests: [] } },
+      "/api/agreements/settlements?": { body: { proposals: [] } },
+      "/api/agreements/disputes?": { body: { disputes: [] } },
+      "/api/agreements/acknowledge": { body: { status: "ok" } },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AgreementDetail />);
+
+    const acknowledgeButton = await screen.findByRole("button", { name: "I acknowledge this obligation is owed" });
+    expect(acknowledgeButton).toBeEnabled();
+    expect(screen.queryByText("Complete your profile to continue")).not.toBeInTheDocument();
+
+    await user.click(acknowledgeButton);
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes("/api/agreements/acknowledge"))).toBe(true);
+    });
   });
 
   it("Problem 2 remediation: shows an inline schedule-revision form (not a dead-end error) when signing fails because the first payment date has already passed, and successfully proposing a new date returns to normal signing", async () => {
@@ -1191,6 +1246,147 @@ describe("AgreementDetail", () => {
         const [, init] = call!;
         expect(JSON.parse((init as RequestInit).body as string)).toMatchObject({ cancellationRequestId: "cancel-1", decision: "reject", rejectedReason: "We agreed to keep going" });
       });
+    });
+  });
+
+  describe("Production defect remediation (existing payment methods must be recognized)", () => {
+    const SELECT_PROGRESS_STEPS = (statusText: string, cta: { label: string; href: string }) => [
+      { key: "details_terms", label: "Agreement details & terms", status: "complete", description: "x", cta: null },
+      { key: "acceptance", label: "Review & acceptance", status: "complete", description: "x", cta: null },
+      { key: "payment_method", label: "Payment method", status: "action_required", statusText, description: "x", cta },
+      { key: "signatures", label: "Review & signatures", status: "complete", description: "x", cta: null },
+      { key: "active", label: "Agreement active", status: "waiting", statusText: "Waiting for payment setup", description: "x", cta: null },
+    ];
+
+    it("a single eligible account renders as one pre-selected 'Use this account' confirmation — never sends the creditor to /payment-methods", async () => {
+      const fetchMock = mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/progress": {
+          body: {
+            agreementId: "agreement-1",
+            myRole: "creditor",
+            status: "active",
+            steps: SELECT_PROGRESS_STEPS("Select a payout account", { label: "Use this account", href: "/agreements/detail?id=agreement-1#payment-method-select" }),
+            primaryAction: { label: "Use this account", description: "x", cta: { label: "Use this account", href: "/agreements/detail?id=agreement-1#payment-method-select" } },
+            actionableForMeCount: 1,
+          },
+        },
+        "/api/agreements/payment-setup/next-payment": { body: {} },
+        "/api/relationships/accounts/party": {
+          body: { accounts: [{ id: "account-1", accountType: "bank_account", maskedLast4: "4242", institutionDisplayName: "Test Bank", status: "verified" }] },
+        },
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<AgreementDetail />);
+
+      expect(await screen.findByText("Use an existing payout account")).toBeInTheDocument();
+      await screen.findByText(/Test Bank ending 4242/);
+      expect(screen.queryByLabelText("Choose an account")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Use this account" })).toBeEnabled();
+
+      // Never the generic "add a new account" destination for a party who already has one.
+      expect(screen.queryByRole("link", { name: /set up payout account/i })).not.toBeInTheDocument();
+    });
+
+    it("multiple eligible accounts render a selector scoped to only the acting party's own accounts; confirming assigns and immediately reloads agreement progress", async () => {
+      const user = userEvent.setup();
+      const fetchMock = mockFetchByUrl({
+        "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+        "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-debtor" } },
+        "/api/agreements/evidence?": { body: { evidence: [] } },
+        "/api/agreements/witnesses?": { body: { witnesses: [] } },
+        "/api/agreements/amendments?": { body: { amendments: [] } },
+        "/api/agreements/partial-payments?": { body: { requests: [] } },
+        "/api/agreements/settlements?": { body: { proposals: [] } },
+        "/api/agreements/disputes?": { body: { disputes: [] } },
+        "/api/agreements/progress": {
+          body: {
+            agreementId: "agreement-1",
+            myRole: "debtor",
+            status: "active",
+            steps: SELECT_PROGRESS_STEPS("Select a payment method", { label: "Choose account", href: "/agreements/detail?id=agreement-1#payment-method-select" }),
+            primaryAction: { label: "Choose account", description: "x", cta: { label: "Choose account", href: "/agreements/detail?id=agreement-1#payment-method-select" } },
+            actionableForMeCount: 1,
+          },
+        },
+        "/api/agreements/payment-setup/next-payment": { body: {} },
+        "/api/relationships/accounts/party": {
+          body: {
+            accounts: [
+              { id: "account-1", accountType: "bank_account", maskedLast4: "1111", institutionDisplayName: "First Bank", status: "verified" },
+              { id: "account-2", accountType: "bank_account", maskedLast4: "2222", institutionDisplayName: "Second Bank", status: "verified" },
+            ],
+          },
+        },
+        "/api/relationships/accounts/assign": { body: { assignment: { id: "assignment-1" } } },
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<AgreementDetail />);
+
+      const select = await screen.findByLabelText("Choose an account");
+      const confirmButton = screen.getByRole("button", { name: "Use selected account" });
+      expect(confirmButton).toBeDisabled();
+
+      await user.selectOptions(select, "account-2");
+      expect(confirmButton).toBeEnabled();
+
+      const progressCallsBefore = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes("/api/agreements/progress")).length;
+      await user.click(confirmButton);
+
+      await waitFor(() => {
+        const assignCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes("/api/relationships/accounts/assign"));
+        expect(assignCall).toBeTruthy();
+        const [, init] = assignCall!;
+        expect(JSON.parse((init as RequestInit).body as string)).toEqual({ relationshipId: "relationship-1", financialAccountId: "account-2", usage: "funding" });
+      });
+
+      // Production defect remediation requirement: after assignment, the user stays on the agreement
+      // and progress is immediately recomputed — never a navigation away.
+      await waitFor(() => {
+        const progressCallsAfter = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes("/api/agreements/progress")).length;
+        expect(progressCallsAfter).toBeGreaterThan(progressCallsBefore);
+      });
+      expect(mockRouterPush).not.toHaveBeenCalled();
+    });
+
+    it("does not render the panel once payment_method no longer needs a selection", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchByUrl({
+          "/api/agreements/detail": { body: detailBody({ status: "active" }) },
+          "/api/profiles/active": { body: { kind: "personal", personalProfileId: "profile-creditor" } },
+          "/api/agreements/evidence?": { body: { evidence: [] } },
+          "/api/agreements/witnesses?": { body: { witnesses: [] } },
+          "/api/agreements/amendments?": { body: { amendments: [] } },
+          "/api/agreements/partial-payments?": { body: { requests: [] } },
+          "/api/agreements/settlements?": { body: { proposals: [] } },
+          "/api/agreements/disputes?": { body: { disputes: [] } },
+          "/api/agreements/progress": {
+            body: {
+              agreementId: "agreement-1",
+              myRole: "creditor",
+              status: "active",
+              steps: READY_PROGRESS_STEPS,
+              primaryAction: { label: "x", description: "x", cta: null },
+              actionableForMeCount: 0,
+            },
+          },
+          "/api/agreements/payment-setup/next-payment": { body: {} },
+        }),
+      );
+
+      render(<AgreementDetail />);
+      await screen.findByText("Payment method — Complete");
+      expect(screen.queryByText(/Use an existing/)).not.toBeInTheDocument();
     });
   });
 });

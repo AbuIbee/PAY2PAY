@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AmendmentService } from "@/lib/amendments/amendmentService";
 import { InMemoryAmendmentApplicationRepository, InMemoryAmendmentRepository } from "@/lib/amendments/testFakes";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { ForbiddenError, ProfileIncompleteError, ValidationError } from "@/lib/errors";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
+import { FakeAgreementPartyNameReader } from "@/lib/agreements/testFakes";
 import { hashPdfContent } from "@/lib/documents/agreementPdf";
 import { extractPdfText } from "@/lib/documents/pdfTextTestHelper";
 import { createTestSignatureService, grantStepUp, markFullyVerified, seedPersonalParty } from "./testFakes";
@@ -779,5 +780,111 @@ describe("SignatureService", () => {
       });
       expect(result.signatureEvent.signerRole).toBe("creditor");
     });
+  });
+});
+
+describe("Production defect remediation (agreement participation requires a usable name) — SignatureService", () => {
+  async function setupWithPartyNames(partyNames: FakeAgreementPartyNameReader) {
+    const localCtx = createTestSignatureService(undefined, partyNames);
+    const creditorUserId = randomUUID();
+    const debtorUserId = randomUUID();
+    const creditorProfileId = await seedPersonalParty(localCtx, creditorUserId);
+    const debtorProfileId = await seedPersonalParty(localCtx, debtorUserId);
+
+    const created = await localCtx.agreementCtx.agreementService.createDraft({
+      creatorUserId: debtorUserId,
+      creditor: { kind: "personal", id: creditorProfileId },
+      debtor: { kind: "personal", id: debtorProfileId },
+      ...baseTerms(),
+    });
+    await localCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, debtorUserId);
+    await localCtx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+    await localCtx.agreementCtx.agreementService.creditorDecide({
+      agreementId: created.agreement.id,
+      actingUserId: creditorUserId,
+      decision: "accept",
+    });
+
+    const sessionId = randomUUID();
+    await grantStepUp({ mfaCredentials: localCtx.mfaCredentials, stepUps: localCtx.stepUps }, creditorUserId, sessionId);
+    await markFullyVerified(localCtx, "personal", creditorProfileId);
+
+    return { localCtx, agreementId: created.agreement.id, creditorUserId, sessionId };
+  }
+
+  it("blocks signing with ProfileIncompleteError when the signer's own personal profile has no first/last name", async () => {
+    const partyNames = new FakeAgreementPartyNameReader();
+    const { localCtx, agreementId, creditorUserId, sessionId } = await setupWithPartyNames(partyNames);
+    partyNames.setIncomplete(creditorUserId);
+
+    await expect(
+      localCtx.signatureService.sign({
+        agreementId,
+        actingUserId: creditorUserId,
+        actingSessionId: sessionId,
+        authMethod: "totp",
+        consentVersion: CONSENT,
+        timezone: TZ,
+        deviceInfo: null,
+        ipAddress: "203.0.113.10",
+      }),
+    ).rejects.toThrow(ProfileIncompleteError);
+  });
+
+  it("allows signing once the signer's own profile has a first and last name", async () => {
+    const partyNames = new FakeAgreementPartyNameReader();
+    const { localCtx, agreementId, creditorUserId, sessionId } = await setupWithPartyNames(partyNames);
+    // partyNames defaults to "complete" for every user until setIncomplete is called.
+
+    const result = await localCtx.signatureService.sign({
+      agreementId,
+      actingUserId: creditorUserId,
+      actingSessionId: sessionId,
+      authMethod: "totp",
+      consentVersion: CONSENT,
+      timezone: TZ,
+      deviceInfo: null,
+      ipAddress: "203.0.113.10",
+    });
+    expect(result.signatureEvent.signerRole).toBe("creditor");
+  });
+
+  it("a caller that omits partyNames (the default ctx, most existing tests) never gates signing — purely additive, opt-in dependency", async () => {
+    const partyNames = new FakeAgreementPartyNameReader();
+    partyNames.setIncomplete("irrelevant-since-not-wired");
+    const noGateCtx = createTestSignatureService(); // partyNames omitted entirely
+    const creditorUserId = randomUUID();
+    const debtorUserId = randomUUID();
+    const creditorProfileId = await seedPersonalParty(noGateCtx, creditorUserId);
+    const debtorProfileId = await seedPersonalParty(noGateCtx, debtorUserId);
+    const created = await noGateCtx.agreementCtx.agreementService.createDraft({
+      creatorUserId: debtorUserId,
+      creditor: { kind: "personal", id: creditorProfileId },
+      debtor: { kind: "personal", id: debtorProfileId },
+      ...baseTerms(),
+    });
+    await noGateCtx.agreementCtx.agreementService.submitDraft(created.agreement.id, debtorUserId);
+    await noGateCtx.agreementCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+    await noGateCtx.agreementCtx.agreementService.creditorDecide({
+      agreementId: created.agreement.id,
+      actingUserId: creditorUserId,
+      decision: "accept",
+    });
+    const sessionId = randomUUID();
+    await grantStepUp({ mfaCredentials: noGateCtx.mfaCredentials, stepUps: noGateCtx.stepUps }, creditorUserId, sessionId);
+    await markFullyVerified(noGateCtx, "personal", creditorProfileId);
+
+    await expect(
+      noGateCtx.signatureService.sign({
+        agreementId: created.agreement.id,
+        actingUserId: creditorUserId,
+        actingSessionId: sessionId,
+        authMethod: "totp",
+        consentVersion: CONSENT,
+        timezone: TZ,
+        deviceInfo: null,
+        ipAddress: "203.0.113.10",
+      }),
+    ).resolves.toBeTruthy();
   });
 });

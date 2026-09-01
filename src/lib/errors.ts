@@ -155,6 +155,22 @@ export class CounterpartyMustSignFirstError extends ForbiddenError {
   }
 }
 
+/**
+ * Production defect remediation (agreement participation requires a usable name): a personal party
+ * attempted to acknowledge, accept, or sign an agreement while their own personal_profile has no
+ * first_name/last_name on file. Still an instanceof ForbiddenError (an authorization-shaped rule, not
+ * a data-validation one — the request itself is well-formed), with its own code so the client can
+ * reliably show the "Complete your profile" CTA/returnTo flow instead of a generic error, mirroring
+ * StepUpRequiredError's identical "distinct code for a distinct guided recovery flow" precedent. Never
+ * thrown for a business party — see AgreementPartyNameReader's own doc comment.
+ */
+export class ProfileIncompleteError extends ForbiddenError {
+  constructor(message = "Complete your profile before reviewing and signing this agreement.") {
+    super(message, "PROFILE_INCOMPLETE");
+    this.name = "ProfileIncompleteError";
+  }
+}
+
 export class RateLimitedError extends AppError {
   constructor(message = "Too many requests. Please try again later.") {
     super(message, {

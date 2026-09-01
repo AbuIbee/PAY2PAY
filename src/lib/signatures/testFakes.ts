@@ -8,6 +8,7 @@ import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { InMemoryDocumentStorage, InMemoryProfileDisplayReader } from "@/lib/documents/testFakes";
 import { InMemoryIdentityVerificationRecordRepository } from "@/lib/profiles/testFakes";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
+import type { AgreementPartyNameReader } from "@/lib/agreements/agreementService";
 import { SignatureService } from "./signatureService";
 import type { AgreementPdfRecord, AgreementPdfRepository, SignatureEventRecord, SignatureEventRepository } from "./signatureService";
 
@@ -69,6 +70,7 @@ export function createSignatureServiceForAgreementContext(
   options?: {
     signatureEvents?: InMemorySignatureEventRepository;
     notifications?: import("@/lib/notify/notificationService").NotificationService;
+    partyNames?: AgreementPartyNameReader;
   },
 ) {
   const signatureEvents = options?.signatureEvents ?? new InMemorySignatureEventRepository();
@@ -98,6 +100,7 @@ export function createSignatureServiceForAgreementContext(
     audit,
     notifications: options?.notifications,
     partySnapshots,
+    partyNames: options?.partyNames,
   });
 
   return {
@@ -121,7 +124,10 @@ export function createSignatureServiceForAgreementContext(
  * the same singletons) — so a party/staff member seeded once is visible to both services.
  */
 /** `notifications`: optional (PRSprint 13, docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md) — SignatureServiceDeps.notifications is itself optional; most callers omit it. */
-export function createTestSignatureService(notifications?: import("@/lib/notify/notificationService").NotificationService) {
+export function createTestSignatureService(
+  notifications?: import("@/lib/notify/notificationService").NotificationService,
+  partyNames?: AgreementPartyNameReader,
+) {
   const signatureEvents = new InMemorySignatureEventRepository();
   // PRSprint 12: shares its own `.events` array with the AgreementService context's atomic signing
   // path (InMemorySigningApplicationRepository) — see createTestAgreementService's own doc comment —
@@ -135,7 +141,7 @@ export function createTestSignatureService(notifications?: import("@/lib/notify/
   // setup) still operate on them directly.
   const verificationRecords = new InMemoryIdentityVerificationRecordRepository();
   const personalProfiles = new InMemoryPersonalProfileRepository();
-  const shared = createSignatureServiceForAgreementContext(agreementCtx, { signatureEvents, notifications });
+  const shared = createSignatureServiceForAgreementContext(agreementCtx, { signatureEvents, notifications, partyNames });
 
   return {
     ...shared,

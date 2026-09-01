@@ -66,6 +66,7 @@ interface AgreementDetailData {
   status: string;
   currency: string;
   relationshipShape: "P2P" | "B2C" | "C2B" | "B2B";
+  relationshipId: string | null;
   creditor: { kind: "personal" | "business"; id: string };
   debtor: { kind: "personal" | "business"; id: string };
   /** Decision 8: same shared read the PDF uses (resolveAgreementPartyDisplays) — snapshot once Step 2
@@ -382,6 +383,10 @@ export function AgreementDetail() {
   }, [agreementId, load]);
 
   const needsSetupRemediation = progress?.steps.find((s) => s.key === "payment_method")?.statusText === "Setup incomplete";
+  // Production defect remediation (existing payment methods must be recognized): the server already
+  // determined the acting party owns at least one verified account eligible for their own role's slot
+  // — see agreementProgressService.ts's own eligibleAccountStep. Never re-derived client-side.
+  const needsPaymentMethodSelection = progress?.steps.find((s) => s.key === "payment_method")?.cta?.href?.includes("#payment-method-select") ?? false;
 
   useEffect(() => {
     if (needsSetupRemediation && remediationState === "idle") {
@@ -531,6 +536,20 @@ export function AgreementDetail() {
   // Decision 5: gates only the two legally meaningful actions (accepting, signing) — never a dead
   // end, since ProfileCompletionPanel links straight to the profile form and back.
   const profileIncomplete = active?.kind === "personal" && profileReadiness !== null && !profileReadiness.ready;
+  // Production defect remediation (agreement participation requires a usable name): the narrower,
+  // server-enforced minimum (AgreementService.requireCompleteName/SignatureService.sign) — first AND
+  // last name only, never phone/verified-email/address. Reuses the SAME already-fetched
+  // /api/profiles/personal/completeness response `profileIncomplete` above reads (missingFields shares
+  // its "firstName"/"lastName" strings with PersonalProfileService.checkAgreementParticipationReadiness,
+  // the exact method the server-side gate itself calls) — zero extra network calls. Used to gate
+  // debtor acknowledgment, the one commitment action that had no profile-completeness gate at all
+  // before this fix; accept/sign already gate on the broader `profileIncomplete` above, which — since
+  // firstName/lastName are themselves part of that broader required-field list — already implies this
+  // narrower check whenever it would fail.
+  const nameIncomplete =
+    active?.kind === "personal" &&
+    profileReadiness !== null &&
+    (profileReadiness.missingFields.includes("firstName") || profileReadiness.missingFields.includes("lastName"));
   const { terms } = data.version;
   const isSignedOrLater = !["draft", "awaiting_debtor_acknowledgment", "awaiting_creditor_acceptance", "awaiting_signatures"].includes(
     data.status,
@@ -591,6 +610,15 @@ export function AgreementDetail() {
 
       {needsSetupRemediation && (
         <AgreementSetupRetryPanel state={remediationState} onRetry={() => void runRemediation()} />
+      )}
+
+      {needsPaymentMethodSelection && data.relationshipId && myRole && (
+        <PaymentMethodSelectPanel
+          relationshipId={data.relationshipId}
+          usage={myRole === "debtor" ? "funding" : "payout"}
+          party={myRole === "debtor" ? data.debtor : data.creditor}
+          onAssigned={() => void load()}
+        />
       )}
 
       {myRole === "debtor" &&
@@ -766,12 +794,16 @@ export function AgreementDetail() {
         </div>
       )}
 
+      {data.status === "awaiting_debtor_acknowledgment" && myRole === "debtor" && nameIncomplete && (
+        <ProfileCompletionPanel returnTo={`/agreements/detail?id=${data.id}`} />
+      )}
+
       {data.status === "awaiting_debtor_acknowledgment" && !showDebtorReviseForm && (
         <div className="hero__actions">
           <button
             type="button"
             className="button button--primary"
-            disabled={actionStatus === "working"}
+            disabled={actionStatus === "working" || (myRole === "debtor" && nameIncomplete)}
             onClick={() => void runAction(() => apiFetch("/api/agreements/acknowledge", { method: "POST", body: JSON.stringify({ agreementId: data.id }) }))}
           >
             I acknowledge this obligation is owed
@@ -1315,6 +1347,140 @@ function AgreementSetupRetryPanel({ state, onRetry }: { state: "idle" | "running
           Try again
         </button>
       </div>
+    </div>
+  );
+}
+
+interface SelectablePaymentAccount {
+  id: string;
+  accountType: "bank_account" | "debit_card";
+  maskedLast4: string | null;
+  institutionDisplayName: string | null;
+  status: string;
+}
+
+/**
+ * Production defect remediation (existing payment methods must be recognized): shown ONLY when
+ * agreementProgressService.ts's own eligibleAccountStep reports the acting party already owns a
+ * verified account for their own role's slot (debtor -> funding, creditor -> payout) — never the
+ * counterparty's, and never a newly-added account. Fetches ONLY the acting party's own accounts (the
+ * exact-party-scoped GET /api/relationships/accounts/party this connection's own detail page already
+ * uses) and assigns via the exact-party/role-checked POST /api/relationships/accounts/assign — the
+ * same server-side ownership/role enforcement (requireUsageMatchesRole, requireAccountBelongsToParticipant)
+ * as every other assignment path in this codebase, never re-implemented or weakened here. A single
+ * eligible account renders as one confirm button (pre-selected, one click); more than one renders a
+ * plain selector limited to this party's own accounts. On success, `onAssigned` (wired to this page's
+ * own `load()`) immediately recomputes Step 3 and Step 5 — no navigation away from the agreement.
+ */
+function PaymentMethodSelectPanel({
+  relationshipId,
+  usage,
+  party,
+  onAssigned,
+}: {
+  relationshipId: string;
+  usage: "funding" | "payout";
+  party: { kind: "personal" | "business"; id: string };
+  onAssigned: () => void;
+}) {
+  const [accounts, setAccounts] = useState<SelectablePaymentAccount[]>([]);
+  const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [selected, setSelected] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const body = await apiFetch<{ accounts: SelectablePaymentAccount[] }>(
+          `/api/relationships/accounts/party?partyKind=${party.kind}&partyId=${party.id}`,
+        );
+        if (cancelled) return;
+        const verified = body.accounts.filter((a) => a.status === "verified");
+        setAccounts(verified);
+        if (verified.length === 1 && verified[0]) setSelected(verified[0].id);
+        setLoadStatus("ready");
+      } catch {
+        if (!cancelled) setLoadStatus("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [party.kind, party.id]);
+
+  async function handleConfirm() {
+    if (!selected || submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await apiFetch("/api/relationships/accounts/assign", {
+        method: "POST",
+        body: JSON.stringify({ relationshipId, financialAccountId: selected, usage }),
+      });
+      onAssigned();
+    } catch (error) {
+      setSubmitError(error instanceof ApiError ? error.message : "Could not use this account. Please try again.");
+      setSubmitting(false);
+    }
+  }
+
+  const label = usage === "funding" ? "payment method" : "payout account";
+
+  return (
+    <div className="card" id="payment-method-select">
+      <div className="card__header">
+        <h3>Use an existing {label}</h3>
+      </div>
+      {loadStatus === "loading" && <p style={{ margin: 0 }}>Loading your verified accounts&hellip;</p>}
+      {loadStatus === "error" && (
+        <p className="form-status form-status--error" role="alert">
+          Could not load your accounts. Please try again.
+        </p>
+      )}
+      {loadStatus === "ready" && accounts.length > 0 && (
+        <>
+          {accounts.length > 1 ? (
+            <div className="field">
+              <label htmlFor="payment-method-select-input">Choose an account</label>
+              <select
+                id="payment-method-select-input"
+                value={selected}
+                onChange={(event) => setSelected(event.target.value)}
+              >
+                <option value="">Select an account&hellip;</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.institutionDisplayName ?? "Account"} ending {account.maskedLast4 ?? "----"}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            accounts[0] && (
+              <p style={{ margin: 0 }}>
+                {accounts[0].institutionDisplayName ?? "Account"} ending {accounts[0].maskedLast4 ?? "----"}
+              </p>
+            )
+          )}
+          {submitError && (
+            <p className="form-status form-status--error" role="alert">
+              {submitError}
+            </p>
+          )}
+          <div className="hero__actions">
+            <button
+              type="button"
+              className="button button--primary"
+              disabled={!selected || submitting}
+              onClick={() => void handleConfirm()}
+            >
+              {submitting ? "Saving…" : accounts.length > 1 ? "Use selected account" : "Use this account"}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

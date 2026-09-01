@@ -11,6 +11,7 @@ import { DrizzleAgreementRepository } from "./drizzleAgreementRepository";
 import { DrizzleAgreementVersionRepository } from "./drizzleAgreementVersionRepository";
 import { DrizzleInstallmentScheduleItemRepository } from "./drizzleInstallmentScheduleItemRepository";
 import { DrizzleSigningApplicationRepository } from "./drizzleSigningApplicationRepository";
+import { getAgreementPartyNameReader } from "./getAgreementPartyNameReader";
 
 let cached: AgreementService | null = null;
 
@@ -59,6 +60,7 @@ export function getAgreementService(): AgreementService {
       notifications: getNotificationService(),
       connectionEstablisher,
       identitySnapshotter,
+      partyNames: getAgreementPartyNameReader(),
     });
   }
   return cached;

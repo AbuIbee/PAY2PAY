@@ -7,12 +7,12 @@ import type { AgreementPdfParty } from "@/lib/documents/agreementPdf";
 import { resolveAgreementPartyDisplays, type PartySnapshotReader, type PartyDisplaySource } from "@/lib/agreements/agreementPartyDisplay";
 import type { DocumentStorage } from "@/lib/documents/documentStorage";
 import type { ProfileDisplayReader } from "@/lib/documents/profileDisplayReader";
-import { ConfigurationError, ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
+import { ConfigurationError, ForbiddenError, ProfileIncompleteError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { StaffService } from "@/lib/staff/staffService";
-import type { AgreementService, AgreementWithDetail, PartyRole, ProfileRef } from "@/lib/agreements/agreementService";
+import type { AgreementPartyNameReader, AgreementService, AgreementWithDetail, PartyRole, ProfileRef } from "@/lib/agreements/agreementService";
 import { computeVersionHash } from "@/lib/agreements/documentHash";
 
 export type SigningAuthority = "account_owner" | "authorized_representative";
@@ -87,6 +87,14 @@ export interface SignatureServiceDeps {
    * for a legacy agreement predating Decision 7.
    */
   partySnapshots?: PartySnapshotReader;
+  /**
+   * Production defect remediation (agreement participation requires a usable name): optional, same
+   * established "a caller that omits it — most existing tests — is unaffected" pattern as
+   * `partySnapshots?` above. UNLIKE that dependency, this is NOT best-effort — see
+   * AgreementPartyNameReader's own doc comment (src/lib/agreements/agreementService.ts) for why a
+   * failed check genuinely blocks signing.
+   */
+  partyNames?: AgreementPartyNameReader;
 }
 
 export interface SignInput {
@@ -134,6 +142,17 @@ export class SignatureService {
       role === "creditor"
         ? { kind: detail.agreement.creditorProfileKind, id: detail.agreement.creditorProfileId }
         : { kind: detail.agreement.debtorProfileKind, id: detail.agreement.debtorProfileId };
+
+    // Production defect remediation (agreement participation requires a usable name): checked before
+    // step-up — no reason to make someone complete a fresh MFA challenge only to then tell them their
+    // profile is incomplete. Never gates a business signer (see AgreementPartyNameReader's own doc
+    // comment) or a caller that omits `partyNames` (most existing tests).
+    if (party.kind === "personal" && this.deps.partyNames) {
+      const hasName = await this.deps.partyNames.hasRequiredName(input.actingUserId);
+      if (!hasName) {
+        throw new ProfileIncompleteError();
+      }
+    }
 
     const stepUpOk = await this.deps.mfa.requireStepUp({
       userId: input.actingUserId,

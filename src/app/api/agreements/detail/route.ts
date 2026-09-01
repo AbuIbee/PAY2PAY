@@ -37,6 +37,10 @@ export function createAgreementDetailHandler(
         status: result.agreement.status,
         currency: result.agreement.currency,
         relationshipShape: agreementService.relationshipShape(result.agreement),
+        // Production defect remediation (existing payment methods must be recognized): the agreement
+        // page's own inline "use an existing verified account" panel needs this to call
+        // POST /api/relationships/accounts/assign directly — never a second, divergent lookup.
+        relationshipId: result.agreement.relationshipId,
         creditor: { kind: result.agreement.creditorProfileKind, id: result.agreement.creditorProfileId },
         debtor: { kind: result.agreement.debtorProfileKind, id: result.agreement.debtorProfileId },
         partyDisplay: { creditor: creditorDisplay, debtor: debtorDisplay },
