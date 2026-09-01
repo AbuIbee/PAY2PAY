@@ -4,6 +4,13 @@ import type { PageParams } from "@/lib/pagination";
 import { InMemoryProfileOwnerReader } from "@/lib/profiles/testFakes";
 import { createTestStaffService } from "@/lib/staff/testFakes";
 import { AgreementService } from "./agreementService";
+import { AgreementIdentitySnapshotService } from "./agreementIdentitySnapshotService";
+import type {
+  AgreementPartySnapshotRecord,
+  AgreementPartySnapshotRepository,
+  PartyIdentitySnapshotFields,
+  PartyIdentitySource,
+} from "./agreementIdentitySnapshotService";
 import { computeVersionHash } from "./documentHash";
 import type {
   AgreementPartyRepository,
@@ -105,6 +112,12 @@ export class InMemoryAgreementRepository implements AgreementRepository {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     if (!pageParams) return matches;
     return matches.slice(pageParams.offset, pageParams.offset + pageParams.limit);
+  }
+
+  async listByRelationshipId(relationshipId: string): Promise<AgreementRecord[]> {
+    return [...this.byId.values()]
+      .filter((a) => a.relationshipId === relationshipId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 }
 
@@ -290,6 +303,49 @@ class InMemoryAuditEventRepositoryForAgreements implements AuditEventRepository 
   }
 }
 
+/** Decision 7 (identity snapshot): test-only in-memory double for AgreementPartySnapshotRepository. */
+export class InMemoryAgreementPartySnapshotRepository implements AgreementPartySnapshotRepository {
+  rows: AgreementPartySnapshotRecord[] = [];
+
+  async insert(input: Omit<AgreementPartySnapshotRecord, "id" | "createdAt">): Promise<AgreementPartySnapshotRecord> {
+    const record: AgreementPartySnapshotRecord = { ...input, id: randomUUID(), createdAt: new Date() };
+    this.rows.push(record);
+    return record;
+  }
+
+  async findByVersionId(agreementVersionId: string): Promise<AgreementPartySnapshotRecord[]> {
+    return this.rows.filter((r) => r.agreementVersionId === agreementVersionId);
+  }
+}
+
+/**
+ * Decision 7: test-only in-memory double for PartyIdentitySource — defaults to plausible values for
+ * any profile a test never explicitly configures via `.set(...)`, matching resolvePersonalDisplayName's
+ * own real fallback shape.
+ */
+export class InMemoryPartyIdentitySource implements PartyIdentitySource {
+  private byProfile = new Map<string, PartyIdentitySnapshotFields>();
+
+  set(profileKind: ProfileKind, profileId: string, fields: PartyIdentitySnapshotFields): void {
+    this.byProfile.set(`${profileKind}:${profileId}`, fields);
+  }
+
+  async getPartyIdentity(profileKind: ProfileKind, profileId: string): Promise<PartyIdentitySnapshotFields> {
+    return (
+      this.byProfile.get(`${profileKind}:${profileId}`) ?? {
+        displayName: profileKind === "business" ? "A Paid2You business" : "A Paid2You member",
+        firstName: null,
+        lastName: null,
+        preferredEmail: null,
+        city: null,
+        state: null,
+        postalCode: null,
+        country: null,
+      }
+    );
+  }
+}
+
 /**
  * `signatureEvents`: optional shared sink for signature_event-shaped evidence rows written by the
  * atomic signing path — signatures/testFakes.ts's own createTestSignatureService passes its
@@ -302,6 +358,8 @@ class InMemoryAuditEventRepositoryForAgreements implements AuditEventRepository 
 export function createTestAgreementService(
   signatureEvents: InMemorySignatureEventLike[] = [],
   notifications?: import("@/lib/notify/notificationService").NotificationService,
+  connectionEstablisher?: import("./agreementService").AgreementConnectionEstablisher,
+  identitySnapshotter?: import("./agreementService").AgreementIdentitySnapshotter,
 ) {
   const agreements = new InMemoryAgreementRepository();
   const versions = new InMemoryAgreementVersionRepository();
@@ -313,6 +371,13 @@ export function createTestAgreementService(
   const audit = new AuditService(auditRepo);
   const signing = new InMemorySigningApplicationRepository(versions, agreements, signatureEvents);
 
+  // Decision 7: every test harness gets a real, working identity-snapshot mechanism by default (no
+  // circular-dependency issue, unlike connectionEstablisher below) — a test can still override it, or
+  // configure identities via `identitySource.set(...)` / read frozen rows via `snapshots.rows`.
+  const snapshotRepo = new InMemoryAgreementPartySnapshotRepository();
+  const identitySource = new InMemoryPartyIdentitySource();
+  const defaultIdentitySnapshotter = new AgreementIdentitySnapshotService({ snapshots: snapshotRepo, identitySource });
+
   const agreementService = new AgreementService({
     agreements,
     versions,
@@ -323,7 +388,21 @@ export function createTestAgreementService(
     audit,
     signing,
     notifications,
+    connectionEstablisher,
+    identitySnapshotter: identitySnapshotter ?? defaultIdentitySnapshotter,
   });
 
-  return { agreementService, agreements, versions, parties, scheduleItems, profileOwners, staffCtx, auditRepo, signing };
+  return {
+    agreementService,
+    agreements,
+    versions,
+    parties,
+    scheduleItems,
+    profileOwners,
+    staffCtx,
+    auditRepo,
+    signing,
+    snapshotRepo,
+    identitySource,
+  };
 }

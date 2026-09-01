@@ -104,7 +104,15 @@ describe("GET /api/agreements/link-candidates", () => {
     expect(body.relationships.map((r) => r.id)).toEqual([matchingRelationship.id]);
   });
 
-  it("excludes a matching connection that already governs a different agreement", async () => {
+  /**
+   * Decision 2 (canonical connection): "Connection identity = the two parties" — a connection already
+   * governing another (same-role, non-terminal) agreement remains a valid "Choose Existing Connection"
+   * candidate for a second agreement between the same two parties; `current_agreement_id` is no longer
+   * an exclusivity gate. Replaces the old "excludes a matching connection that already governs a
+   * different agreement" expectation, which asserted the pre-Decision-2 one-agreement-per-connection
+   * restriction.
+   */
+  it("includes a matching connection that already governs a different (non-terminal, same-role) agreement", async () => {
     const creditor = await signupWithProfile("creditor");
     const debtor = await signupWithProfile("debtor");
     const relationship = await connect(creditor, creditor.profileId, debtor.profileId, debtor.user.user.id, debtor.user.user.email);
@@ -126,7 +134,7 @@ describe("GET /api/agreements/link-candidates", () => {
 
     const response = await handler()(get(secondAgreement.agreement.id, creditor.user.token));
     const body = (await response.json()) as { relationships: Array<{ id: string }> };
-    expect(body.relationships).toHaveLength(0);
+    expect(body.relationships.map((r) => r.id)).toEqual([relationship.id]);
   });
 
   it("rejects an unauthenticated request with 401", async () => {

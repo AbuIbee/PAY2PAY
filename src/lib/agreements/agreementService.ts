@@ -117,6 +117,14 @@ export interface AgreementRepository {
    * pages even as new agreements are created between requests.
    */
   listForProfile(profileKind: ProfileKind, profileId: string, pageParams?: PageParams): Promise<AgreementRecord[]>;
+  /**
+   * Decision 1/2 (canonical connection, reversed-role safety): every agreement currently linked to
+   * this relationship, regardless of status — RelationshipService.linkAgreement's own reversed-role
+   * conflict guard is the sole consumer, deriving "is there another non-terminal agreement on this
+   * connection with the opposite roles" from this list rather than trusting the single
+   * `current_agreement_id` pointer, which only ever reflects the most recently linked agreement.
+   */
+  listByRelationshipId(relationshipId: string): Promise<AgreementRecord[]>;
 }
 
 /** Real implementation: DrizzleAgreementVersionRepository. */
@@ -227,6 +235,39 @@ export interface SigningApplicationRepository {
   }): Promise<SigningApplicationResult>;
 }
 
+/**
+ * Decision 3 (canonical connection — centralized auto-connection): the one capability the shared
+ * agreement-lifecycle boundary needs to stop producing agreements with `relationship_id = null`,
+ * regardless of which caller (wizard, invitation, B2B, CSV, or any future path) drove the agreement to
+ * this transition. Real implementation: RelationshipService.establishAgreementRelationship.
+ */
+export interface AgreementConnectionEstablisher {
+  establishAgreementRelationship(input: {
+    agreementId: string;
+    creditor: ProfileRef;
+    creditorUserId: string;
+    debtor: ProfileRef;
+    debtorUserId: string;
+    initiatingUserId: string;
+  }): Promise<{ relationshipId: string }>;
+}
+
+/**
+ * Decision 7 (agreement identity snapshot): freezes both parties' agreement-facing identity for one
+ * agreement version — called exactly once, at the same centralized transition as the connection
+ * establisher above. Takes the already-resolved creditor/debtor profile refs directly (this class
+ * already has them in scope at the call site) rather than requiring the real implementation to depend
+ * back on AgreementService to re-derive them. Real implementation: AgreementIdentitySnapshotService.
+ */
+export interface AgreementIdentitySnapshotter {
+  freezeSnapshot(input: {
+    agreementId: string;
+    agreementVersionId: string;
+    creditor: ProfileRef;
+    debtor: ProfileRef;
+  }): Promise<void>;
+}
+
 export interface AgreementServiceDeps {
   agreements: AgreementRepository;
   versions: AgreementVersionRepository;
@@ -244,6 +285,15 @@ export interface AgreementServiceDeps {
    * fail the agreement-lifecycle transaction it was reporting on.
    */
   notifications?: NotificationService;
+  /**
+   * Decision 3: optional, same established pattern as `notifications?` above — every caller that
+   * omits it (most existing tests) is unaffected, and every call is wrapped in its own try/catch (see
+   * `creditorDecide`'s accept branch) so a connection-establishment failure can never fail the
+   * already-persisted acceptance it follows.
+   */
+  connectionEstablisher?: AgreementConnectionEstablisher;
+  /** Decision 7: optional, same pattern as `connectionEstablisher?` above — best-effort, never blocks acceptance. */
+  identitySnapshotter?: AgreementIdentitySnapshotter;
 }
 
 export interface CreateDraftInput {
@@ -548,6 +598,54 @@ export class AgreementService {
       await this.deps.agreements.updateStatus(agreement.id, "awaiting_signatures");
       const auditId = await this.recordAudit(agreement.id, input.actingUserId, "creditor_accepted", null);
       await this.notifyParty(agreement, "debtor", "agreement_decided", { decision: "accepted" }, auditId);
+
+      // Decision 3 (centralized auto-connection) + Decision 7 (identity snapshot): Step 2 — Review &
+      // Acceptance has just completed and the agreement has entered awaiting_signatures — the single,
+      // shared lifecycle boundary every creation path (wizard, invitation, B2B, CSV, or any future
+      // one) reaches, so this is the one place either behavior needs to run. Both are optional,
+      // best-effort dependencies (see AgreementServiceDeps's own doc comments): a failure here is
+      // logged with full context and never undoes or blocks the acceptance already persisted above —
+      // exactly the partial-success contract AgreementInvitationService.acceptPlan established before
+      // this was centralized (that class no longer duplicates this call).
+      if (this.deps.connectionEstablisher) {
+        try {
+          const creditorUserId = await this.deps.profileOwners.getOwnerUserId(agreement.creditorProfileKind, agreement.creditorProfileId);
+          const debtorUserId = await this.deps.profileOwners.getOwnerUserId(agreement.debtorProfileKind, agreement.debtorProfileId);
+          if (!creditorUserId || !debtorUserId) {
+            throw new Error(`could not resolve owning user for creditor/debtor profile of agreement ${agreement.id}`);
+          }
+          await this.deps.connectionEstablisher.establishAgreementRelationship({
+            agreementId: agreement.id,
+            creditor: { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId },
+            creditorUserId,
+            debtor: { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId },
+            debtorUserId,
+            initiatingUserId: input.actingUserId,
+          });
+        } catch (error) {
+          logger.error("agreement_connection_establishment_failed", {
+            agreementId: agreement.id,
+            actingUserId: input.actingUserId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (this.deps.identitySnapshotter && agreement.currentVersionId) {
+        try {
+          await this.deps.identitySnapshotter.freezeSnapshot({
+            agreementId: agreement.id,
+            agreementVersionId: agreement.currentVersionId,
+            creditor: { kind: agreement.creditorProfileKind, id: agreement.creditorProfileId },
+            debtor: { kind: agreement.debtorProfileKind, id: agreement.debtorProfileId },
+          });
+        } catch (error) {
+          logger.error("agreement_identity_snapshot_failed", {
+            agreementId: agreement.id,
+            agreementVersionId: agreement.currentVersionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       return;
     }
 
@@ -842,6 +940,16 @@ export class AgreementService {
   async listAgreements(actingUserId: string, profile: ProfileRef, pageParams?: PageParams): Promise<AgreementRecord[]> {
     await this.authorizeParty(actingUserId, profile, null);
     return this.deps.agreements.listForProfile(profile.kind, profile.id, pageParams);
+  }
+
+  /**
+   * Decision 1/2: internal connector for RelationshipService only — no acting-user authorization here
+   * (mirrors AgreementRelationshipLinker's identical narrow-connector precedent); the caller has
+   * already established the acting user is a genuine participant of the relationship before reaching
+   * this read.
+   */
+  async listAgreementsForRelationship(relationshipId: string): Promise<AgreementRecord[]> {
+    return this.deps.agreements.listByRelationshipId(relationshipId);
   }
 
   /**

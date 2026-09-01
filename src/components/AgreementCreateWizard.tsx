@@ -41,18 +41,24 @@ type Step = "parties" | "terms" | "review";
  * means only the inviter's own side exists yet, so `/api/relationships/detail` can never resolve a
  * second (counterparty) participant for it, and selecting one silently dead-ends the wizard with
  * "This connection doesn't have two confirmed participants yet," permanently disabling Next: Terms
- * with no explanation. The prior filter checked only `currentAgreementId === null`, which correctly
- * excludes a relationship already governing an agreement but never excluded a still-pending
- * invitation or a terminal (closed/cancelled/restricted/suspended) relationship.
+ * with no explanation.
+ *
+ * Corrected per explicit review (current_agreement_id audit): this filter used to also require
+ * `currentAgreementId === null`, which was a leftover from the pre-Decision-2 one-agreement-per-
+ * relationship model — `current_agreement_id` never clears once any agreement has ever been linked,
+ * even a terminal one, so that check silently made a completed/reusable canonical connection
+ * permanently unpickable for a brand-new agreement, contradicting `RelationshipService.linkAgreement`
+ * (server-side), which has allowed exactly this since Decision 2. Now matches
+ * `listEligibleForAgreementLink`'s own already-corrected backend filter: only a still-pending
+ * invitation or a terminal *relationship* status excludes a connection. A role-reversed conflict with
+ * an existing non-terminal agreement (the one real remaining restriction) can't be evaluated here —
+ * this wizard doesn't know the new agreement's role orientation until the Parties step — so it is
+ * still enforced, with a clear error, by the server at submission time (`linkAgreement`'s own guard).
  */
 const NOT_YET_JOINED_STATUS = "invited";
 const TERMINAL_STATUSES = ["restricted", "suspended", "closed", "cancelled"];
 function isEligibleForNewAgreement(relationship: RelationshipSummary): boolean {
-  return (
-    relationship.currentAgreementId === null &&
-    relationship.status !== NOT_YET_JOINED_STATUS &&
-    !TERMINAL_STATUSES.includes(relationship.status)
-  );
+  return relationship.status !== NOT_YET_JOINED_STATUS && !TERMINAL_STATUSES.includes(relationship.status);
 }
 
 function profileRef(profile: SelectableProfile): { kind: "personal" | "business"; id: string } | null {
@@ -167,6 +173,15 @@ export function AgreementCreateWizard() {
         setSelectedRelationshipId("");
         return;
       }
+      // current_agreement_id / relationship_participant.role audit (item 3): `mine.role`/`other.role`
+      // here are `relationship_participant.role` — the connection's PERMANENT, storage-level role,
+      // meaningful only as a starting default (it's what the connection was first set up as, or what
+      // its most recent agreement left it as). It is NOT locked in for a NEW agreement: creditor/
+      // debtor belongs to the agreement being created, not to the connection, so `handleSwapRoles`
+      // below lets the user invert it — required for the fully-supported, documented case of creating
+      // a role-reversed second agreement on the same canonical connection once the first has
+      // terminated (Decision 1/2). The server (`linkAgreement`) is still the real authority: it
+      // independently rejects a role-reversed agreement while a non-terminal one already exists.
       setMyRole(mine.role);
       setCounterparty({
         kind: other.individualProfileId ? "personal" : "business",
@@ -178,6 +193,13 @@ export function AgreementCreateWizard() {
     } finally {
       setResolvingParty(false);
     }
+  }
+
+  function handleSwapRoles() {
+    if (!counterparty || !myRole) return;
+    const swappedMyRole = myRole === "creditor" ? "debtor" : "creditor";
+    setMyRole(swappedMyRole);
+    setCounterparty({ ...counterparty, role: myRole });
   }
 
   /**
@@ -315,6 +337,11 @@ export function AgreementCreateWizard() {
             <div className="confirm-banner">
               You are <strong>{partyRoleLabel(myRole)}</strong>; the counterparty is{" "}
               <strong>{partyRoleLabel(counterparty.role)}</strong> ({counterparty.kind} party).
+              <div style={{ marginTop: "0.5rem" }}>
+                <button type="button" className="button button--ghost" onClick={handleSwapRoles}>
+                  Swap roles for this agreement
+                </button>
+              </div>
             </div>
           )}
 

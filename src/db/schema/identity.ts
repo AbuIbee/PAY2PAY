@@ -68,7 +68,30 @@ export const personalProfile = pgTable("personal_profile", {
     .notNull()
     .unique()
     .references(() => userAccount.id),
+  // Kept, never removed (Decision 4 — canonical connection/profile remediation): pre-existing
+  // callers (DrizzleProfileDisplayReader's fallback chain) still read this. New code should prefer
+  // firstName + lastName; legalName remains available as a formal/legal name distinct from the
+  // casual display name, and as the display-name fallback for any profile not yet completed below.
   legalName: text("legal_name"),
+  // Decision 4: split first/last name — the actual gap `legal_name` (a single combined string) never
+  // filled. This is personal information (never described as non-PII anywhere in this codebase).
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  // Decision 5/6: the agreement-facing, counterparty-visible contact email — deliberately distinct
+  // from `user_account.email` (the authentication/login email), per Decision 6's own rule: changing
+  // one must never change the other. Defaults to the auth email (copied in at profile-completion
+  // time, never a live join) and is treated as already-verified only while it still equals the
+  // user's own verified auth email — see `preferred_email_verified_at` below and
+  // PersonalProfileService's own doc comment for the exact rule.
+  preferredEmail: text("preferred_email"),
+  // Decision 6: null until preferred_email is either (a) confirmed equal to the already-verified
+  // auth email, or (b) independently verified via its own token flow. Never fabricated — see
+  // PersonalProfileService.
+  preferredEmailVerifiedAt: timestamp("preferred_email_verified_at", { withTimezone: true }),
+  // Decision 3/4/5: contact phone number, distinct from `user_account.phone` (that column remains
+  // scoped to authentication/SMS-MFA — see auth.ts's own doc comment on it — and is never read or
+  // written by the personal-profile contact-information feature).
+  contactPhone: text("contact_phone"),
   residentialAddress: jsonb("residential_address"),
   // Sprint 3 (docs/sprints/SPRINT_03_Personal_Business_Profiles.md): the
   // Phase 0 `verification_tier` text column is removed in favor of the
@@ -80,6 +103,10 @@ export const personalProfile = pgTable("personal_profile", {
   // "verified" — see that service's doc comment for why that matters.
   currency: text("currency").notNull().default("USD"), // reserved per master spec Section 1
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // Decision 4: this table becomes user-editable for the first time — every prior column was
+  // write-once at signup. Added alongside the new editable columns, matching every other mutable
+  // table in this schema's own established `updated_at` convention.
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }).enableRLS();
 
 export const businessProfile = pgTable(

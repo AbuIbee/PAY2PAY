@@ -1,10 +1,36 @@
 import { createHash } from "node:crypto";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import type { AgreementTerms, FeeAllocation, PartyRole, ProfileRef } from "@/lib/agreements/agreementService";
+import type { AgreementTerms, FeeAllocation, PartyRole } from "@/lib/agreements/agreementService";
 import type { PaymentFrequency, ScheduleItem } from "@/lib/agreements/schedule";
 
-export interface AgreementPdfParty extends ProfileRef {
+/**
+ * Decision 9 (PDF/print fix — confirmed defect closure): deliberately carries NO profile/user id at
+ * all — the prior shape (`ProfileRef & {displayName}`) is exactly what let a raw internal profile
+ * UUID get printed into the legal document. `firstName`/`lastName`/`preferredEmail`/`city`/`state`/
+ * `postalCode`/`country` come from the immutable agreement-party snapshot (Decision 7) once one
+ * exists; `displayName` alone is the fallback for a business party or a legacy pre-snapshot
+ * agreement (Decision 11) — never phone, never a street address, never any internal identifier.
+ */
+export interface AgreementPdfParty {
   displayName: string;
+  firstName: string | null;
+  lastName: string | null;
+  preferredEmail: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  country: string | null;
+}
+
+/** Decision 8/9: "First Name Last Name / preferred email / City, State ZIP" when a full snapshot is available; falls back to just the display name otherwise — never a raw id either way. */
+function formatPartyLine(party: AgreementPdfParty): string {
+  const nameLine = party.firstName && party.lastName ? `${party.firstName} ${party.lastName}` : party.displayName;
+  const parts = [nameLine];
+  if (party.preferredEmail) parts.push(party.preferredEmail);
+  const cityState = [party.city, party.state].filter(Boolean).join(", ");
+  const location = [cityState, party.postalCode].filter(Boolean).join(" ").trim();
+  if (location) parts.push(party.country && party.country !== "US" ? `${location}, ${party.country}` : location);
+  return parts.join(" — ");
 }
 
 export interface AgreementPdfSignature {
@@ -125,8 +151,8 @@ export async function generateAgreementPdf(input: AgreementPdfInput): Promise<Ui
   y -= LINE_HEIGHT / 2;
 
   heading("Parties");
-  line(`Creditor: ${input.creditor.displayName} (${input.creditor.kind} profile ${input.creditor.id})`);
-  line(`Debtor: ${input.debtor.displayName} (${input.debtor.kind} profile ${input.debtor.id})`);
+  line(`Creditor: ${formatPartyLine(input.creditor)}`);
+  line(`Debtor: ${formatPartyLine(input.debtor)}`);
   y -= LINE_HEIGHT / 2;
 
   heading("Debt purpose and financial terms");

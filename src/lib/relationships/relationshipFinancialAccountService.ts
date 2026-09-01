@@ -161,12 +161,29 @@ export interface RelationshipStatusSyncer {
   syncFromFinancialAccounts(relationshipId: string): Promise<void>;
 }
 
+/**
+ * Decision 1 (reversed-role safety): `relationship_participant.role` is a permanent, relationship-
+ * level label — correct as a fallback for pre-agreement setup, but WRONG once the same two parties
+ * reuse this connection for a second agreement with reversed creditor/debtor roles (the connection
+ * itself is role-neutral; role is an agreement-specific concept). This narrow reader resolves the
+ * relationship's CURRENT governing agreement's real creditor/debtor profile refs, so usage-matching/
+ * slot-ownership can be validated against the agreement actually in force right now, not a stale role
+ * captured whenever this participant first joined. Returns null when the relationship has no
+ * governing agreement yet (manual pre-agreement "Create Connection" setup) — callers fall back to
+ * `relationship_participant.role` in that case, which is still meaningful pre-agreement. Real
+ * implementation: DrizzleRelationshipCurrentAgreementRoleReader.
+ */
+export interface RelationshipCurrentAgreementRoleReader {
+  getCurrentAgreementRoles(relationshipId: string): Promise<{ creditor: PartyRef; debtor: PartyRef } | null>;
+}
+
 export interface RelationshipFinancialAccountServiceDeps {
   financialAccounts: FinancialAccountRepository;
   assignments: RelationshipFinancialAccountRepository;
   relationships: RelationshipRepository;
   participants: RelationshipParticipantRepository;
   relationshipSync: RelationshipStatusSyncer;
+  agreementRoles: RelationshipCurrentAgreementRoleReader;
   profileOwners: ProfileOwnerReader;
   staffService: StaffService;
   notifications: NotificationService;
@@ -366,7 +383,7 @@ export class RelationshipFinancialAccountService {
   async getRelationshipAccountsForParticipant(relationshipId: string, actingUserId: string): Promise<RelationshipAccountSlotView[]> {
     await this.requireRelationship(relationshipId);
     const participant = await this.resolveActingParticipant(relationshipId, actingUserId);
-    const myUsage = usageForRole(participant.role);
+    const myUsage = usageForRole(await this.resolveEffectiveRole(relationshipId, participant));
     const assignments = await this.deps.assignments.listForRelationship(relationshipId);
     const usages: FinancialAccountUsage[] = ["funding", "payout"];
     return usages.map((usage) => {
@@ -425,7 +442,7 @@ export class RelationshipFinancialAccountService {
   }): Promise<RelationshipFinancialAccountAssignmentRecord> {
     await this.requireRelationship(input.relationshipId);
     const participant = await this.resolveActingParticipant(input.relationshipId, input.actingUserId);
-    this.requireUsageMatchesRole(participant, input.usage);
+    await this.requireUsageMatchesRole(input.relationshipId, participant, input.usage);
     const account = await this.requireAccount(input.financialAccountId);
     this.requireAccountBelongsToParticipant(account, participant);
     if (account.status !== "verified") {
@@ -476,7 +493,7 @@ export class RelationshipFinancialAccountService {
   }): Promise<RelationshipFinancialAccountAssignmentRecord> {
     await this.requireRelationship(input.relationshipId);
     const participant = await this.resolveActingParticipant(input.relationshipId, input.actingUserId);
-    this.requireUsageMatchesRole(participant, input.usage);
+    await this.requireUsageMatchesRole(input.relationshipId, participant, input.usage);
     const account = await this.requireAccount(input.financialAccountId);
     this.requireAccountBelongsToParticipant(account, participant);
     if (account.status !== "verified") {
@@ -615,11 +632,35 @@ export class RelationshipFinancialAccountService {
    * (see authorize-mandate's route handler, which trusts the funding slot's account to be the debtor's
    * once this invariant holds) — a payment-routing defect, not merely a display one.
    */
-  private requireUsageMatchesRole(participant: RelationshipParticipantRecord, usage: FinancialAccountUsage): void {
+  private async requireUsageMatchesRole(relationshipId: string, participant: RelationshipParticipantRecord, usage: FinancialAccountUsage): Promise<void> {
     const requiredRole: PartyRole = usage === "funding" ? "debtor" : "creditor";
-    if (participant.role !== requiredRole) {
+    const effectiveRole = await this.resolveEffectiveRole(relationshipId, participant);
+    if (effectiveRole !== requiredRole) {
       throw new ForbiddenError(`Only the ${requiredRole} may manage the ${usage} account for this relationship.`);
     }
+  }
+
+  /**
+   * Decision 1 (reversed-role safety): the role `participant` effectively plays RIGHT NOW — from the
+   * relationship's current governing agreement when one exists (agreement-specific, correct even
+   * after a role-reversed reuse of this same connection), falling back to the participant's own
+   * stored relationship-level role otherwise (pre-agreement setup, where there is no agreement yet to
+   * defer to).
+   */
+  private async resolveEffectiveRole(relationshipId: string, participant: RelationshipParticipantRecord): Promise<PartyRole> {
+    const roles = await this.deps.agreementRoles.getCurrentAgreementRoles(relationshipId);
+    if (!roles) return participant.role;
+    const participantRef: PartyRef | null = participant.individualProfileId
+      ? { kind: "personal", id: participant.individualProfileId }
+      : participant.organizationId
+        ? { kind: "business", id: participant.organizationId }
+        : null;
+    if (participantRef && roles.debtor.kind === participantRef.kind && roles.debtor.id === participantRef.id) return "debtor";
+    if (participantRef && roles.creditor.kind === participantRef.kind && roles.creditor.id === participantRef.id) return "creditor";
+    // Defensive: participant doesn't match either side of the current agreement (shouldn't happen —
+    // linkAgreement's own exact-counterparty check prevents this) — fall back to the stored role
+    // rather than silently guessing.
+    return participant.role;
   }
 
   private requireAccountBelongsToParticipant(account: FinancialAccountRecord, participant: RelationshipParticipantRecord): void {

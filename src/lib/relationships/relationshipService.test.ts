@@ -111,7 +111,11 @@ describe("RelationshipService", () => {
       expect(linked.currentAgreementId).toBe(created.agreement.id);
       expect(ctx.agreementLinker.linked.get(created.agreement.id)).toBe(relationship.id);
 
-      await expect(ctx.relationshipService.linkAgreement(relationship.id, created.agreement.id, creditorUserId)).rejects.toThrow(ValidationError);
+      // Decision 2 (canonical connection): relinking the SAME agreement to the SAME relationship is
+      // idempotent — a no-op, never an error, and never a second link.
+      const relinked = await ctx.relationshipService.linkAgreement(relationship.id, created.agreement.id, creditorUserId);
+      expect(relinked.id).toBe(relationship.id);
+      expect(relinked.currentAgreementId).toBe(created.agreement.id);
 
       await ctx.agreementService.submitDraft(created.agreement.id, creditorUserId);
       await ctx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
@@ -124,6 +128,308 @@ describe("RelationshipService", () => {
       await ctx.agreementService.signAgreement(created.agreement.id, creditorUserId);
       synced = await ctx.relationshipService.syncFromAgreement(relationship.id, creditorUserId);
       expect(synced.status).toBe("signed");
+    });
+
+    /**
+     * Decision 2 (canonical connection): "Connection identity = the two parties. Agreement identity =
+     * each individual agreement" — a relationship may govern more than one agreement, and doing so
+     * must never corrupt its own status tracking.
+     */
+    it("test 19/20 — a second agreement between the same two parties, same roles, links to the SAME connection while the first is still non-terminal, without corrupting relationship status", async () => {
+      const { relationship, creditorUserId, creditorProfileId, debtorProfileId } = await createLinkedRelationship();
+
+      const first = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      await ctx.relationshipService.linkAgreement(relationship.id, first.agreement.id, creditorUserId);
+
+      const second = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms({ description: "A second, unrelated loan between the same two people" }),
+      });
+      // First agreement is still a draft (non-terminal) — same roles, so no shared-slot conflict.
+      const linked = await ctx.relationshipService.linkAgreement(relationship.id, second.agreement.id, creditorUserId);
+      expect(linked.id).toBe(relationship.id);
+      expect(linked.currentAgreementId).toBe(second.agreement.id);
+      expect(ctx.agreementLinker.linked.get(second.agreement.id)).toBe(relationship.id);
+
+      // No duplicate connection was ever created for this pair.
+      const creditorRelationships = await ctx.relationshipService.listRelationshipsForParty(creditorUserId, {
+        kind: "personal",
+        id: creditorProfileId,
+      });
+      expect(creditorRelationships.map((r) => r.id)).toEqual([relationship.id]);
+
+      // Both agreements independently point at the one canonical relationship.
+      const bothAgreements = await ctx.agreementService.listAgreementsForRelationship(relationship.id);
+      expect(bothAgreements.map((a) => a.id).sort()).toEqual([first.agreement.id, second.agreement.id].sort());
+    });
+
+    /**
+     * current_agreement_id audit (G — same-role concurrent agreements): proves the one place
+     * `current_agreement_id` DOES feed a financial decision (RelationshipCurrentAgreementRoleReader,
+     * used by `resolveEffectiveRole` for funding/payout role validation) never lets a mandate,
+     * card registration, or funding-account assignment "jump" from one agreement to the other purely
+     * because `current_agreement_id` has moved on to the newer one. Each agreement's own mandate
+     * stays independently keyed by ITS OWN agreement id (AchMandateService never reads
+     * current_agreement_id at all — see achMandateService.ts), so A1's mandate must remain exactly
+     * as it was after A2 links and current_agreement_id advances past it.
+     */
+    it("test G — mandate/account state stays scoped to the specific agreement it belongs to; current_agreement_id moving to the newer agreement never migrates or invalidates the older agreement's mandate", async () => {
+      const { relationship, creditorUserId, creditorProfileId, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+
+      const debtorAccount = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "sandbox_bank_ref_shared",
+        maskedLast4: "5555",
+        institutionDisplayName: "Shared Funding Bank",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(debtorAccount.id, "verified");
+      await ctx.relationshipFinancialAccountService.assignAccount({
+        relationshipId: relationship.id,
+        actingUserId: debtorUserId,
+        financialAccountId: debtorAccount.id,
+        usage: "funding",
+      });
+
+      const first = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      await ctx.relationshipService.linkAgreement(relationship.id, first.agreement.id, creditorUserId);
+      expect(await ctx.mandates.isActiveForAgreement(first.agreement.id)).toBe(true);
+      const firstMandate = ctx.mandates.activeByAgreement.get(first.agreement.id);
+      expect(firstMandate?.financialAccountId).toBe(debtorAccount.id);
+
+      // Second, same-role, non-terminal agreement — current_agreement_id now advances to it.
+      const second = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms({ description: "A second, unrelated loan between the same two people" }),
+      });
+      const linked = await ctx.relationshipService.linkAgreement(relationship.id, second.agreement.id, creditorUserId);
+      expect(linked.currentAgreementId).toBe(second.agreement.id); // confirmed: current_agreement_id has moved on
+
+      // A1's own mandate is completely unaffected — still active, still pointing at the same account.
+      expect(await ctx.mandates.isActiveForAgreement(first.agreement.id)).toBe(true);
+      expect(ctx.mandates.activeByAgreement.get(first.agreement.id)?.financialAccountId).toBe(debtorAccount.id);
+
+      // A2 independently and correctly got its OWN mandate (same shared funding account, its own agreement id).
+      expect(await ctx.mandates.isActiveForAgreement(second.agreement.id)).toBe(true);
+      expect(ctx.mandates.activeByAgreement.get(second.agreement.id)?.financialAccountId).toBe(debtorAccount.id);
+
+      // Operations on A1/A2 (financial-account role reads) remain scoped to the actual current roles —
+      // resolveEffectiveRole reads current_agreement_id only to determine the CURRENT role mapping,
+      // which is identical for A1 and A2 here (same creditor/debtor), so no cross-contamination: the
+      // creditor still never owns the funding slot, even after current_agreement_id moved to A2.
+      const creditorSlots = await ctx.relationshipFinancialAccountService.getRelationshipAccountsForParticipant(relationship.id, creditorUserId);
+      const creditorFundingSlot = creditorSlots.find((s) => s.usage === "funding")!;
+      expect(creditorFundingSlot.mine).toBe(false);
+      expect(creditorFundingSlot.account).toBeNull();
+    });
+
+    /**
+     * Decision 1 (reversed-role safety) — the mandatory investigation's central finding, made
+     * concrete: a relationship's funding/payout slots are a single shared pair of resources, so two
+     * NON-TERMINAL agreements with reversed roles cannot safely share one connection at the same time.
+     */
+    it("test 18 (conflict half) — refuses to link a role-reversed second agreement while the first (opposite-role) agreement is still non-terminal, without creating a second connection", async () => {
+      const { relationship, creditorUserId, creditorProfileId, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+
+      const first = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      await ctx.relationshipService.linkAgreement(relationship.id, first.agreement.id, creditorUserId);
+
+      // Second agreement: same two people, ROLES REVERSED — the original debtor is now the creditor.
+      const reversed = await ctx.agreementService.createDraft({
+        creatorUserId: debtorUserId,
+        creditor: { kind: "personal", id: debtorProfileId },
+        debtor: { kind: "personal", id: creditorProfileId },
+        ...baseTerms({ description: "Reversed-role loan" }),
+      });
+
+      await expect(ctx.relationshipService.linkAgreement(relationship.id, reversed.agreement.id, debtorUserId)).rejects.toThrow(
+        /reversed|swapped/i,
+      );
+      expect(await ctx.agreementService.getAgreement(reversed.agreement.id, debtorUserId).then((d) => d.agreement.relationshipId)).toBeNull();
+
+      // Still exactly one connection for this pair — refusing to link never spawns a second one.
+      const relationships = await ctx.relationshipService.listRelationshipsForParty(creditorUserId, { kind: "personal", id: creditorProfileId });
+      expect(relationships.map((r) => r.id)).toEqual([relationship.id]);
+    });
+
+    /**
+     * Decision 1 (reversed-role safety) — the common, safe case: once the first (opposite-role)
+     * agreement is genuinely terminal, the SAME canonical connection may govern the role-reversed
+     * second agreement. Proves the connection itself is role-neutral (Decision 1's own requirement:
+     * "Do NOT solve reversed roles by creating a second Connection") and that financial-account role
+     * validation correctly follows the CURRENT agreement's real roles afterward, not the stale
+     * relationship_participant.role captured when the connection was first created.
+     */
+    it("test 18 (reuse half) — once the first agreement is terminal, the SAME connection safely governs a role-reversed second agreement, and funding/payout validation follows the new roles", async () => {
+      const { relationship, creditorUserId, creditorProfileId, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+
+      const first = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      await ctx.relationshipService.linkAgreement(relationship.id, first.agreement.id, creditorUserId);
+      await ctx.agreementService.submitDraft(first.agreement.id, creditorUserId);
+      await ctx.agreementService.cancelAgreement(first.agreement.id, creditorUserId, "no longer needed");
+      const firstAfterCancel = await ctx.agreementService.getAgreement(first.agreement.id, creditorUserId);
+      expect(firstAfterCancel.agreement.status).toBe("mutually_canceled");
+
+      const reversed = await ctx.agreementService.createDraft({
+        creatorUserId: debtorUserId,
+        creditor: { kind: "personal", id: debtorProfileId },
+        debtor: { kind: "personal", id: creditorProfileId },
+        ...baseTerms({ description: "Reversed-role loan, after the first is done" }),
+      });
+
+      const linked = await ctx.relationshipService.linkAgreement(relationship.id, reversed.agreement.id, debtorUserId);
+      expect(linked.id).toBe(relationship.id); // the SAME canonical connection — never a second one
+      expect(linked.currentAgreementId).toBe(reversed.agreement.id);
+
+      const relationships = await ctx.relationshipService.listRelationshipsForParty(creditorUserId, { kind: "personal", id: creditorProfileId });
+      expect(relationships.map((r) => r.id)).toEqual([relationship.id]);
+
+      // Financial-account role validation now correctly follows THIS agreement's real roles: the
+      // original debtor (now the creditor) may manage the payout slot; the original creditor (now the
+      // debtor) may manage the funding slot — the reverse of what relationship_participant.role alone
+      // would say.
+      const originalDebtorAccount = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "sandbox_bank_ref_reversed_payout",
+        maskedLast4: "9001",
+        institutionDisplayName: "New Creditor Bank",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(originalDebtorAccount.id, "verified");
+      const payoutAssignment = await ctx.relationshipFinancialAccountService.assignAccount({
+        relationshipId: relationship.id,
+        actingUserId: debtorUserId,
+        financialAccountId: originalDebtorAccount.id,
+        usage: "payout",
+      });
+      expect(payoutAssignment.usage).toBe("payout");
+
+      // The original creditor (now the debtor) attempting to manage the PAYOUT slot must be rejected —
+      // they are the debtor of the current agreement now, funding is their slot, not payout.
+      const originalCreditorAccount = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: creditorUserId,
+        actingParty: { kind: "personal", id: creditorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "sandbox_bank_ref_reversed_funding",
+        maskedLast4: "9002",
+        institutionDisplayName: "New Debtor Bank",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(originalCreditorAccount.id, "verified");
+      await expect(
+        ctx.relationshipFinancialAccountService.assignAccount({
+          relationshipId: relationship.id,
+          actingUserId: creditorUserId,
+          financialAccountId: originalCreditorAccount.id,
+          usage: "payout",
+        }),
+      ).rejects.toThrow(/only the creditor/i);
+    });
+
+    /**
+     * current_agreement_id / relationship_participant.role audit (item 3) — the full sequential
+     * reversed-role scenario end to end: same relationship id, no duplicate connection,
+     * getRelationship's effectiveRole correctly reflects Agreement #2's real (reversed) roles even
+     * though relationship_participant.role is still permanently stamped from Agreement #1, funding/
+     * payout ownership follows Agreement #2, and authorization remains correct throughout.
+     */
+    it("test G/H (item 3) — after a role-reversed reuse, getRelationship's effectiveRole reflects the CURRENT agreement, never the stale stored relationship_participant.role", async () => {
+      const { relationship, creditorUserId, creditorProfileId, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+
+      // Agreement #1: A creditor / B debtor.
+      const first = await ctx.agreementService.createDraft({
+        creatorUserId: creditorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      await ctx.relationshipService.linkAgreement(relationship.id, first.agreement.id, creditorUserId);
+
+      // Before any agreement's role has been superseded: effectiveRole still matches the stored role.
+      const beforeReversal = await ctx.relationshipService.getRelationship(relationship.id, creditorUserId);
+      const mineBeforeReversal = beforeReversal.participants.find((p) => p.individualProfileId === creditorProfileId)!;
+      expect(mineBeforeReversal.role).toBe("creditor");
+      expect(mineBeforeReversal.effectiveRole).toBe("creditor");
+
+      // Agreement #1 terminates.
+      await ctx.agreementService.submitDraft(first.agreement.id, creditorUserId);
+      await ctx.agreementService.cancelAgreement(first.agreement.id, creditorUserId, "no longer needed");
+
+      // Agreement #2: A debtor / B creditor — SAME canonical connection, roles reversed.
+      const second = await ctx.agreementService.createDraft({
+        creatorUserId: debtorUserId,
+        creditor: { kind: "personal", id: debtorProfileId },
+        debtor: { kind: "personal", id: creditorProfileId },
+        ...baseTerms({ description: "Reversed-role loan" }),
+      });
+      const linked = await ctx.relationshipService.linkAgreement(relationship.id, second.agreement.id, debtorUserId);
+      expect(linked.id).toBe(relationship.id); // same relationship id — no duplicate connection
+
+      // "Connections page still shows one connection."
+      const allRelationships = await ctx.relationshipService.listRelationshipsForParty(creditorUserId, { kind: "personal", id: creditorProfileId });
+      expect(allRelationships.map((r) => r.id)).toEqual([relationship.id]);
+
+      // getRelationship's effectiveRole now reflects Agreement #2's real roles — A is debtor, B is
+      // creditor — even though relationship_participant.role is still permanently stamped "creditor"
+      // for A from Agreement #1 (legacy/storage role, never mutated by a later agreement).
+      const afterReversal = await ctx.relationshipService.getRelationship(relationship.id, creditorUserId);
+      const aParticipant = afterReversal.participants.find((p) => p.individualProfileId === creditorProfileId)!;
+      const bParticipant = afterReversal.participants.find((p) => p.individualProfileId === debtorProfileId)!;
+      expect(aParticipant.role).toBe("creditor"); // stale legacy/storage value — unchanged, by design
+      expect(aParticipant.effectiveRole).toBe("debtor"); // correct, current-agreement value
+      expect(bParticipant.role).toBe("debtor");
+      expect(bParticipant.effectiveRole).toBe("creditor");
+
+      // Funding/payout ownership follows Agreement #2 (the new creditor, B, may manage payout).
+      const bAccount = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "sandbox",
+        providerAccountRef: "sandbox_bank_ref_g_h_payout",
+        maskedLast4: "7001",
+        institutionDisplayName: "B's Bank",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(bAccount.id, "verified");
+      const payoutAssignment = await ctx.relationshipFinancialAccountService.assignAccount({
+        relationshipId: relationship.id,
+        actingUserId: debtorUserId,
+        financialAccountId: bAccount.id,
+        usage: "payout",
+      });
+      expect(payoutAssignment.usage).toBe("payout");
+
+      // Authorization remains correct: a genuine stranger still cannot view or act on this connection.
+      const strangerUserId = randomUUID();
+      await expect(ctx.relationshipService.getRelationship(relationship.id, strangerUserId)).rejects.toThrow(ForbiddenError);
     });
 
     it("Missing-connection remediation (mandatory command): 'Choose Existing Connection' must not let a user link an agreement to a relationship with a different counterparty", async () => {

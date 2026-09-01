@@ -61,6 +61,23 @@ describe("AgreementCreateWizard", () => {
     expect(screen.queryByLabelText(/connection/i)).not.toBeInTheDocument();
   });
 
+  it("current_agreement_id audit fix: a connection whose current_agreement_id still points at a prior (e.g. now-terminal) agreement is offered again for a NEW agreement — current_agreement_id is a cache, not an exclusivity lock", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        "/api/profiles": { body: { profiles: [{ kind: "personal", personalProfileId: "p1", displayName: "Jane Doe" }] } },
+        "/api/relationships?": {
+          body: { relationships: [{ id: "rel-reusable", status: "agreement_ready", currentAgreementId: "prior-terminal-agreement" }] },
+        },
+      }),
+    );
+
+    render(<AgreementCreateWizard />);
+
+    expect(await screen.findByLabelText(/connection/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no eligible connections/i)).not.toBeInTheDocument();
+  });
+
   it("Agreement Lifecycle V2: also excludes a closed/cancelled/restricted/suspended connection from the picker", async () => {
     vi.stubGlobal(
       "fetch",
@@ -232,5 +249,41 @@ describe("AgreementCreateWizard", () => {
     await user.click(screen.getByRole("button", { name: /create draft agreement/i }));
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/agreements/detail?id=agreement-new"));
+  });
+
+  it("current_agreement_id / relationship_participant.role audit (item 3): 'Swap roles for this agreement' lets the user create a role-reversed agreement on the same connection, instead of being permanently locked to the connection's stored role", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        "/api/profiles": { body: { profiles: [{ kind: "personal", personalProfileId: "p1", displayName: "Jane Doe" }] } },
+        "/api/relationships?": { body: { relationships: [{ id: "rel-1", status: "agreement_ready", currentAgreementId: "prior-terminal-agreement" }] } },
+        "/api/relationships/detail": {
+          body: {
+            relationship: { id: "rel-1" },
+            participants: [
+              { id: "part-1", relationshipId: "rel-1", individualProfileId: "p1", organizationId: null, role: "creditor", representedByUserId: "user-1" },
+              { id: "part-2", relationshipId: "rel-1", individualProfileId: "p2", organizationId: null, role: "debtor", representedByUserId: "user-2" },
+            ],
+          },
+        },
+        "/api/agreements": { status: 201, body: { id: "agreement-new" } },
+        "/api/relationships/link-agreement": { body: { relationship: { id: "rel-1" } } },
+      }),
+    );
+
+    render(<AgreementCreateWizard />);
+
+    const select = await screen.findByLabelText(/connection/i);
+    await user.selectOptions(select, "rel-1");
+
+    // Stored connection role: the acting user is the creditor by default.
+    expect(await screen.findByText(/receiving repayment \(creditor\)/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /swap roles for this agreement/i }));
+
+    // After swapping, the acting user is now the debtor for THIS new agreement — the connection's own
+    // stored relationship_participant.role is never mutated by this (it's a per-agreement choice).
+    expect(screen.getByText(/making repayment \(debtor\)/i)).toBeInTheDocument();
   });
 });

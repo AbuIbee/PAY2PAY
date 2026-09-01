@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
+import { AgreementIdentitySnapshotService } from "@/lib/agreements/agreementIdentitySnapshotService";
+import { InMemoryProfileDisplayReader } from "@/lib/documents/testFakes";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
 import { createAgreementDetailHandler } from "./route";
 
@@ -50,6 +52,7 @@ describe("GET /api/agreements/detail", () => {
   let creditorToken: string;
   let debtorToken: string;
   let strangerToken: string;
+  let creditorProfileId: string;
 
   beforeEach(async () => {
     authCtx = createTestAuthService();
@@ -80,7 +83,7 @@ describe("GET /api/agreements/detail", () => {
     debtorToken = debtor.token;
     strangerToken = stranger.token;
 
-    const creditorProfileId = randomUUID();
+    creditorProfileId = randomUUID();
     const debtorProfileId = randomUUID();
     agreementCtx.profileOwners.set("personal", creditorProfileId, creditor.user.id);
     agreementCtx.profileOwners.set("personal", debtorProfileId, debtor.user.id);
@@ -95,9 +98,13 @@ describe("GET /api/agreements/detail", () => {
   });
 
   function handlerFor() {
+    const partySnapshots = new AgreementIdentitySnapshotService({
+      snapshots: agreementCtx.snapshotRepo,
+      identitySource: agreementCtx.identitySource,
+    });
     return withErrorHandling(
       "agreement_detail",
-      createAgreementDetailHandler(authCtx.authService, agreementCtx.agreementService),
+      createAgreementDetailHandler(authCtx.authService, agreementCtx.agreementService, partySnapshots, new InMemoryProfileDisplayReader()),
     );
   }
 
@@ -106,6 +113,15 @@ describe("GET /api/agreements/detail", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.id).toBe(agreementId);
+  });
+
+  it("Decision 8: includes a partyDisplay block for on-screen identity, with no raw profile/user id in it", async () => {
+    const response = await handlerFor()(getWithCookie(agreementId, creditorToken));
+    const body = (await response.json()) as { partyDisplay: { creditor: Record<string, unknown>; debtor: Record<string, unknown> } };
+    expect(body.partyDisplay.creditor.displayName).toBeTruthy();
+    expect(body.partyDisplay.debtor.displayName).toBeTruthy();
+    const serialized = JSON.stringify(body.partyDisplay);
+    expect(serialized).not.toContain(creditorProfileId);
   });
 
   it("lets the debtor party fetch the agreement", async () => {

@@ -115,4 +115,10 @@ export class DrizzleAgreementRepository implements AgreementRepository {
     const rows = pageParams ? await query.limit(pageParams.limit).offset(pageParams.offset) : await query;
     return rows.map(toRecord);
   }
+
+  async listByRelationshipId(relationshipId: string): Promise<AgreementRecord[]> {
+    const db = getDb();
+    const rows = await db.select().from(agreement).where(eq(agreement.relationshipId, relationshipId)).orderBy(desc(agreement.createdAt));
+    return rows.map(toRecord);
+  }
 }

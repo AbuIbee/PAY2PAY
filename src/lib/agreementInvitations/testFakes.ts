@@ -261,7 +261,18 @@ function createTestAgreementRelationshipEstablisher(agreementCtx: ReturnType<typ
  * profile-ownership tables).
  */
 export function createTestAgreementInvitationService(appUrl = "https://paid2you.example") {
-  const agreementCtx = createTestAgreementService();
+  // Decision 3 (centralized auto-connection): mirrors production's own lazy-wrapper fix for the
+  // AgreementService <-> RelationshipService circular dependency (see getAgreementService.ts's own
+  // doc comment) — `agreementCtx` needs a connectionEstablisher at construction time, but
+  // `relationshipCtx` needs `agreementCtx` first. This box defers the real target to first *call*.
+  const connectionEstablisherBox: { target: import("@/lib/agreements/agreementService").AgreementConnectionEstablisher | null } = { target: null };
+  const connectionEstablisher: import("@/lib/agreements/agreementService").AgreementConnectionEstablisher = {
+    establishAgreementRelationship: (input) => {
+      if (!connectionEstablisherBox.target) throw new Error("test connectionEstablisher not wired yet");
+      return connectionEstablisherBox.target.establishAgreementRelationship(input);
+    },
+  };
+  const agreementCtx = createTestAgreementService(undefined, undefined, connectionEstablisher);
   const notificationCtx = createTestNotificationService();
   const invitations = new InMemoryAgreementInvitationRepository();
   const users = new InMemoryUserLookupReader();
@@ -270,11 +281,11 @@ export function createTestAgreementInvitationService(appUrl = "https://paid2you.
   const auditRepo = new InMemoryAuditEventRepositoryForAgreementInvitations();
   const audit = new AuditService(auditRepo);
   const relationshipCtx = createTestAgreementRelationshipEstablisher(agreementCtx);
+  connectionEstablisherBox.target = relationshipCtx.relationshipService;
 
   const invitationService = new AgreementInvitationService({
     invitations,
     agreements: agreementCtx.agreementService,
-    relationships: relationshipCtx.relationshipService,
     profileOwners: agreementCtx.profileOwners,
     profileDisplay,
     staffService: agreementCtx.staffCtx.staffService,
