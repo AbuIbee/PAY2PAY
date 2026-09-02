@@ -17,7 +17,14 @@ let cachedDb: Database | null = null;
 export function getDb(): Database {
   if (cachedDb) return cachedDb;
   const { DATABASE_URL } = getServerEnv();
-  const queryClient = postgres(DATABASE_URL, { max: 1 });
+  // Production incident (connection-pool exhaustion): Supabase's Supavisor transaction-mode pooler
+  // does not guarantee the same backend connection persists across statements, which breaks
+  // server-side prepared statements — postgres.js's own documented requirement for connecting
+  // through a transaction pooler. Session mode (this app's prior DATABASE_URL) ties one dedicated
+  // backend connection to this client for its entire lifetime, which a small pool exhausts under
+  // ordinary serverless concurrency; transaction mode multiplexes many such clients over a much
+  // smaller set of backend connections, which is what actually fixes that exhaustion.
+  const queryClient = postgres(DATABASE_URL, { max: 1, prepare: false });
   cachedDb = drizzle(queryClient, { schema });
   return cachedDb;
 }
