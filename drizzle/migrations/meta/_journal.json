@@ -281,6 +281,13 @@
       "when": 1788216535167,
       "tag": "0039_material_namorita",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1788469353356,
+      "tag": "0040_powerful_nightcrawler",
+      "breakpoints": true
     }
   ]
 }

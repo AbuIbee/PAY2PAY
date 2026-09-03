@@ -76,6 +76,10 @@ export const personalProfile = pgTable("personal_profile", {
   // Decision 4: split first/last name — the actual gap `legal_name` (a single combined string) never
   // filled. This is personal information (never described as non-PII anywhere in this codebase).
   firstName: text("first_name"),
+  // Signup/onboarding redesign: optional, matches the personal signup field list exactly (only line2
+  // and this are optional identity fields) — never required by REQUIRED_PROFILE_FIELDS/
+  // missingRequiredFields, which deliberately omit it.
+  middleName: text("middle_name"),
   lastName: text("last_name"),
   // Decision 5/6: the agreement-facing, counterparty-visible contact email — deliberately distinct
   // from `user_account.email` (the authentication/login email), per Decision 6's own rule: changing
@@ -123,6 +127,12 @@ export const businessProfile = pgTable(
     displayName: text("display_name").notNull(),
     entityType: text("entity_type").notNull(),
     einOrSsnRef: text("ein_or_ssn_ref"), // tokenized/encrypted reference, never raw
+    // Signup/onboarding redesign: metadata only ("EIN" | "SSN" | "ITIN"), never the number itself —
+    // no full-tax-ID column exists anywhere in this table. Full tax-ID verification is deferred to a
+    // future provider-hosted/tokenized flow that would populate einOrSsnRef above; see
+    // docs/OPEN_ISSUES.md for the tracked dependency.
+    taxIdType: text("tax_id_type"),
+    businessPhone: text("business_phone"),
     businessAddress: jsonb("business_address"),
     country: text("country").notNull().default("US"), // reserved per master spec Section 1
     state: text("state").notNull(),

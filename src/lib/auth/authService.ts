@@ -1,6 +1,7 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
 import { AccountDisabledError, AuthenticationError, ConflictError, ValidationError } from "@/lib/errors";
+import { logger } from "@/lib/logger";
 import type { EmailSender } from "@/lib/notify/emailSender";
 import { UNUSABLE_PASSWORD_HASH, hashPassword, verifyPassword } from "./password";
 import { generateSessionToken, hashSessionToken } from "./session";
@@ -60,15 +61,118 @@ export interface PersonalProfileRecord {
 }
 
 /**
- * Sprint 2 (docs/sprints/SPRINT_02_Authentication.md) account architecture:
- * every user gets exactly one personal profile, created alongside signup —
- * never client-specified, always derived from the just-created user's own
- * id (see AuthService.signup — there is no parameter through which a caller
- * could request a profile for a *different* user).
+ * Pre-existing narrow read/insert-blank-row seam, kept for ProfileAccessService's own use
+ * (src/lib/profiles/profileAccessService.ts imports this exact type) — no longer used by
+ * AuthService.signup itself, which now provisions a fully-populated profile row through
+ * AccountProvisioningRepository below instead of this interface's `insert` (which just creates a
+ * blank row, the historical root cause of the "name not provided" defect).
  */
 export interface PersonalProfileRepository {
   insert(userId: string): Promise<PersonalProfileRecord>;
   findByUserId(userId: string): Promise<PersonalProfileRecord | null>;
+}
+
+/**
+ * Signup/onboarding redesign: the identity data a Personal signup (or a Business signup's authorized
+ * representative) must supply up front — line2 is the only optional field, mirroring
+ * PersonalAddress/REQUIRED_PROFILE_FIELDS in personalProfileService.ts exactly. Deliberately a plain,
+ * locally-declared shape rather than importing PersonalAddress from that module — authService.ts stays
+ * decoupled from personalProfileService.ts's own evolution (same rationale as this file's separate,
+ * narrower interfaces below), even though the two shapes are structurally identical by design.
+ */
+export interface SignupAddress {
+  line1: string;
+  line2: string | null;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+}
+
+export interface PersonalSignupIdentity {
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  contactPhone: string;
+  address: SignupAddress;
+}
+
+/**
+ * Business signup's own fields, on top of the representative's PersonalSignupIdentity above. Tax-ID
+ * number itself is deliberately absent — no compliant tokenization/verification provider exists yet
+ * (see docs/OPEN_ISSUES.md); only the type is collected, matched by KycKybProvider's current
+ * interface (src/lib/kyc/kycProvider.ts), which has no tax-ID concept either. businessAddress mirrors
+ * the exact shape POST /api/profiles/business already accepts (country/state live outside it, on
+ * BusinessProfileService.createBusinessProfile's own top-level fields) — never a second address shape.
+ */
+export interface BusinessSignupDetails {
+  legalBusinessName: string;
+  dbaName: string | null;
+  entityType: string;
+  businessPhone: string | null;
+  businessAddress: { line1: string; line2: string | null; city: string; postalCode: string };
+  state: string;
+  country: string;
+  taxIdType: string;
+}
+
+export interface ProvisionedAccount {
+  user: UserAccountRecord;
+  personalProfileId: string;
+  businessProfileId: string | null;
+}
+
+/**
+ * Signup/onboarding redesign: replaces the old "insert a blank personal_profile row" seam
+ * (PersonalProfileRepository, removed) that was the root cause of the historical
+ * "name not provided" production defect — a user could previously hold an agreement-eligible-looking
+ * account with a fully empty identity. Every implementation must create all rows a usable account
+ * needs (user_account + personal_profile, or + business_profile too) atomically: all-or-nothing, so a
+ * failure partway through (a validation error, a beta-invite claim losing a race, a DB constraint
+ * violation) can never leave a half-created account behind. See DrizzleAccountProvisioningRepository's
+ * own doc comment for the transaction/advisory-lock precedent this mirrors
+ * (DrizzleRelationshipPairResolver).
+ *
+ * `betaInviteCode`, when non-null, must be claimed atomically inside the SAME transaction as the
+ * account rows (the same `WHERE code = $1 AND used_by_user_id IS NULL` guarantee
+ * BetaInviteRepository.claimCode already uses) — an invalid/already-used/racing-away code must fail
+ * the whole provision, not just silently skip consumption. This replaces the former two-phase
+ * pre-check-then-consume design's "known limitation" race window entirely: the check-and-claim and
+ * the account creation itself now live in one atomic unit. BetaInviteService.checkCodeIsRedeemable
+ * remains as a separate, non-transactional pre-check at the route layer purely as a fast-fail UX
+ * optimization (avoid hashing a password for an obviously-dead code) — never the actual correctness
+ * guarantee anymore.
+ */
+export interface AccountProvisioningRepository {
+  provisionPersonalAccount(input: {
+    email: string;
+    authCredentialRef: string;
+    dateOfBirth: string;
+    identity: PersonalSignupIdentity;
+    betaInviteCode: string | null;
+  }): Promise<ProvisionedAccount>;
+
+  provisionBusinessAccount(input: {
+    email: string;
+    authCredentialRef: string;
+    dateOfBirth: string;
+    identity: PersonalSignupIdentity;
+    business: BusinessSignupDetails;
+    betaInviteCode: string | null;
+  }): Promise<ProvisionedAccount>;
+}
+
+/**
+ * Signup/onboarding redesign: closes the gap where a newly-signed-up user's preferred email (defaulted
+ * to their signup/auth email — see AccountProvisioningRepository) could never actually become
+ * "verified" through the ordinary auth-email verification link, since AuthService.verifyEmail
+ * previously only ever touched user_account.email_verified_at. A single, narrow purpose — never a
+ * second place a caller could mark an email verified without real proof; only called from
+ * AuthService.verifyEmail, itself only reachable via a real emailed token. No-ops (never fabricates)
+ * when the profile's preferred email has since diverged from the just-verified address.
+ */
+export interface PreferredEmailSyncTarget {
+  syncVerifiedAuthEmail(userId: string, verifiedEmail: string): Promise<void>;
 }
 
 export interface SessionRecord {
@@ -192,21 +296,39 @@ export class AuthService {
   constructor(
     private readonly users: UserAccountRepository,
     private readonly sessions: SessionRepository,
-    private readonly personalProfiles: PersonalProfileRepository,
+    private readonly accountProvisioning: AccountProvisioningRepository,
     private readonly emailVerificationTokens: EmailVerificationTokenRepository,
     private readonly passwordResetTokens: PasswordResetTokenRepository,
     private readonly audit: AuditService,
     private readonly emailSender: EmailSender,
     private readonly options: AuthServiceOptions,
+    private readonly preferredEmailSync: PreferredEmailSyncTarget,
   ) {}
 
-  async signup(input: {
-    email: string;
-    password: string;
-    dateOfBirth: string;
-    ipAddress: string | null;
-    userAgent: string | null;
-  }): Promise<AuthResult> {
+  async signup(
+    input:
+      | {
+          accountType: "personal";
+          email: string;
+          password: string;
+          dateOfBirth: string;
+          identity: PersonalSignupIdentity;
+          inviteCode: string | null;
+          ipAddress: string | null;
+          userAgent: string | null;
+        }
+      | {
+          accountType: "business";
+          email: string;
+          password: string;
+          dateOfBirth: string;
+          identity: PersonalSignupIdentity;
+          business: BusinessSignupDetails;
+          inviteCode: string | null;
+          ipAddress: string | null;
+          userAgent: string | null;
+        },
+  ): Promise<AuthResult> {
     const email = normalizeEmail(input.email);
     if (input.password.length < MIN_PASSWORD_LENGTH || input.password.length > MAX_PASSWORD_LENGTH) {
       throw new ValidationError(
@@ -219,6 +341,10 @@ export class AuthService {
     if (calculateAgeYears(input.dateOfBirth, new Date()) < MIN_AGE_YEARS) {
       throw new ValidationError("You must be at least 18 years old to create an account.");
     }
+    this.validateIdentity(input.identity);
+    if (input.accountType === "business") {
+      this.validateBusiness(input.business);
+    }
 
     const existing = await this.users.findByEmail(email);
     if (existing) {
@@ -226,13 +352,34 @@ export class AuthService {
     }
 
     const authCredentialRef = await hashPassword(input.password, this.options.pepper);
-    const user = await this.users.insert({ email, authCredentialRef, dateOfBirth: input.dateOfBirth });
+    // Signup email becomes the preferred contact email (Decision 6) — never a second typed-in field,
+    // never fabricated as already-verified (preferredEmailVerifiedAt stays null until the real
+    // auth-email verification link is used; see verifyEmail's cross-update below).
+    const identity: PersonalSignupIdentity = { ...input.identity };
 
-    // Never client-specified — always the id of the user just created above.
-    await this.personalProfiles.insert(user.id);
+    const provisioned: ProvisionedAccount =
+      input.accountType === "personal"
+        ? await this.accountProvisioning.provisionPersonalAccount({
+            email,
+            authCredentialRef,
+            dateOfBirth: input.dateOfBirth,
+            identity,
+            betaInviteCode: input.inviteCode,
+          })
+        : await this.accountProvisioning.provisionBusinessAccount({
+            email,
+            authCredentialRef,
+            dateOfBirth: input.dateOfBirth,
+            identity,
+            business: {
+              ...input.business,
+              dbaName: input.business.dbaName?.trim() || null,
+            },
+            betaInviteCode: input.inviteCode,
+          });
 
     await this.audit.record({
-      actorUserId: user.id,
+      actorUserId: provisioned.user.id,
       actorRole: "personal_user",
       profileKind: null,
       profileId: null,
@@ -242,16 +389,57 @@ export class AuthService {
       ipAddress: input.ipAddress,
       deviceInfo: input.userAgent ? { userAgent: input.userAgent } : null,
       previousValue: null,
-      newValue: { email: user.email },
+      newValue: { email: provisioned.user.email, accountType: input.accountType },
       reason: null,
       authStrength: "basic",
       relatedDocumentId: null,
       relatedCaseId: null,
     });
 
-    await this.sendVerificationEmail(user);
+    // The account and profile are already durably committed at this point (accountProvisioning's
+    // transaction above has already succeeded) — a mail-provider outage is an external, non-DB
+    // failure and must never make signup itself report failure, roll back, or leave the caller
+    // without a session. Isolated and logged safely (no provider response body/headers — see
+    // EmailDeliveryError's own "never the provider's raw response body" convention), never rethrown.
+    // The user is never left without a way to get a verification email: resendVerificationEmail
+    // remains available and does surface a real error if it fails, since that IS a user-initiated
+    // action expecting feedback.
+    try {
+      await this.sendVerificationEmail(provisioned.user);
+    } catch (error) {
+      logger.error("signup_verification_email_failed", {
+        userId: provisioned.user.id,
+        reason: error instanceof Error ? error.message : "unknown",
+      });
+    }
 
-    return this.createSession(user, input);
+    return this.createSession(provisioned.user, input);
+  }
+
+  private validateIdentity(identity: PersonalSignupIdentity): void {
+    if (!identity.firstName.trim()) throw new ValidationError("First name is required.");
+    if (!identity.lastName.trim()) throw new ValidationError("Last name is required.");
+    if (!identity.contactPhone.trim()) throw new ValidationError("A contact phone number is required.");
+    this.validateAddress(identity.address);
+  }
+
+  private validateAddress(address: { line1: string; city: string; state: string; postalCode: string; country: string }): void {
+    if (!address.line1.trim()) throw new ValidationError("Address line 1 is required.");
+    if (!address.city.trim()) throw new ValidationError("City is required.");
+    if (!address.state.trim()) throw new ValidationError("State/province is required.");
+    if (!address.postalCode.trim()) throw new ValidationError("ZIP/postal code is required.");
+    if (!address.country.trim()) throw new ValidationError("Country is required.");
+  }
+
+  private validateBusiness(business: BusinessSignupDetails): void {
+    if (!business.legalBusinessName.trim()) throw new ValidationError("Legal business name is required.");
+    if (!business.entityType.trim()) throw new ValidationError("Business/entity type is required.");
+    if (!business.businessAddress.line1.trim()) throw new ValidationError("Business address line 1 is required.");
+    if (!business.businessAddress.city.trim()) throw new ValidationError("Business city is required.");
+    if (!business.businessAddress.postalCode.trim()) throw new ValidationError("Business ZIP/postal code is required.");
+    if (!business.state.trim()) throw new ValidationError("Business state/province is required.");
+    if (!business.country.trim()) throw new ValidationError("Business country is required.");
+    if (!business.taxIdType.trim()) throw new ValidationError("A tax-ID type is required.");
   }
 
   /**
@@ -310,6 +498,15 @@ export class AuthService {
     }
     await this.emailVerificationTokens.consume(record.id);
     await this.users.markEmailVerified(record.userId);
+    // Signup/onboarding redesign: the signup email becomes the preferred contact email immediately,
+    // but never fabricated as verified — this is the one place that promise is actually fulfilled,
+    // through the same real proof-of-ownership token flow, once the profile's preferred email still
+    // matches what was just verified (never touches a preferred email the user has since changed away
+    // from). See PreferredEmailSyncTarget's own doc comment.
+    const verifiedUser = await this.users.findById(record.userId);
+    if (verifiedUser) {
+      await this.preferredEmailSync.syncVerifiedAuthEmail(verifiedUser.id, verifiedUser.email);
+    }
     await this.audit.record({
       actorUserId: record.userId,
       actorRole: "personal_user",

@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestProfileAccessService, createTestVerificationService } from "@/lib/profiles/testFakes";
 import { createVerificationGetHandler, createVerificationSubmitHandler } from "./route";
 
@@ -22,6 +22,9 @@ describe("GET/POST /api/profiles/verification", () => {
     accessCtx = createTestProfileAccessService();
     verificationCtx = createTestVerificationService();
     const result = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "verify-route@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

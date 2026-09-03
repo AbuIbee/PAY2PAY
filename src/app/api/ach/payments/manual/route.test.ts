@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAchServices } from "@/lib/ach/testFakes";
 import { createAchManualPaymentHandler } from "./route";
 
@@ -27,6 +27,9 @@ describe("POST /api/ach/payments/manual", () => {
     authCtx = createTestAuthService();
 
     const payer = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `ach-manual-payer-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

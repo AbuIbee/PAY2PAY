@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { ACTIVE_PROFILE_COOKIE_NAME } from "@/lib/profiles/activeProfileCookie";
 import { createTestProfileAccessService } from "@/lib/profiles/testFakes";
 import { createActiveProfileGetHandler, createActiveProfileSetHandler } from "./route";
@@ -43,6 +43,9 @@ describe("GET/POST /api/profiles/active", () => {
     authCtx = createTestAuthService();
     accessCtx = createTestProfileAccessService();
     const result = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "switcher@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

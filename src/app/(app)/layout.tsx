@@ -1,4 +1,5 @@
 import { AppNav } from "@/components/AppNav";
+import { OnboardingGate } from "@/components/OnboardingGate";
 import { AdminImpersonationBanner } from "@/components/admin/AdminImpersonationBanner";
 import "./app-shell.css";
 
@@ -18,6 +19,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <div className="app-authed">
       <AppNav />
       <div className="app-main-col">
+        <OnboardingGate />
         <AdminImpersonationBanner />
         <main id="main-content">{children}</main>
       </div>

@@ -4,9 +4,10 @@ import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getEmailSender } from "@/lib/notify/getEmailSender";
 import { AuthService } from "./authService";
+import { DrizzleAccountProvisioningRepository } from "./drizzleAccountProvisioningRepository";
 import { DrizzleEmailVerificationTokenRepository } from "./drizzleEmailVerificationTokenRepository";
 import { DrizzlePasswordResetTokenRepository } from "./drizzlePasswordResetTokenRepository";
-import { DrizzlePersonalProfileRepository } from "./drizzlePersonalProfileRepository";
+import { DrizzlePreferredEmailSyncTarget } from "./drizzlePreferredEmailSyncTarget";
 import { DrizzleSessionRepository } from "./drizzleSessionRepository";
 import { DrizzleUserAccountRepository } from "./drizzleUserAccountRepository";
 
@@ -32,12 +33,13 @@ export function getAuthService(): AuthService {
   cached = new AuthService(
     new DrizzleUserAccountRepository(),
     new DrizzleSessionRepository(),
-    new DrizzlePersonalProfileRepository(),
+    new DrizzleAccountProvisioningRepository(),
     new DrizzleEmailVerificationTokenRepository(),
     new DrizzlePasswordResetTokenRepository(),
     new AuditService(new DrizzleAuditEventRepository()),
     getEmailSender(),
     { pepper: AUTH_PASSWORD_PEPPER, sessionTtlMs: SESSION_TTL_MS, appUrl: APP_URL },
+    new DrizzlePreferredEmailSyncTarget(),
   );
   return cached;
 }

@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, InMemoryPersonalProfileRepository, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import type { AgreementTerms } from "@/lib/agreements/agreementService";
 import { createTestBalanceService, createTestLedgerService } from "@/lib/ledger/testFakes";
@@ -49,15 +49,21 @@ describe("GET /api/dashboard/personal", () => {
 
   beforeEach(async () => {
     authCtx = createTestAuthService();
-    // Shares authCtx's own personalProfiles store, mirroring how getAuthService()/getProfileAccessService()
-    // both ultimately read the same production `personal_profile` table.
-    profileAccessService = new ProfileAccessService(authCtx.personalProfiles, new InMemoryBusinessProfileRepository());
+    // ProfileAccessService's own narrow PersonalProfileRepository is a separate concern from
+    // AuthService's full-identity provisioning (AccountProvisioningRepository) — mirrors how
+    // getProfileAccessService() wires its own DrizzlePersonalProfileRepository independently of
+    // getAuthService(), both ultimately reading the same production `personal_profile` table.
+    const personalProfiles = new InMemoryPersonalProfileRepository();
+    profileAccessService = new ProfileAccessService(personalProfiles, new InMemoryBusinessProfileRepository());
     agreementCtx = createTestAgreementService();
     ledgerCtx = createTestLedgerService();
     balanceCtx = createTestBalanceService(ledgerCtx);
     relationshipCtx = createTestRelationshipServices();
 
     const result = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "dash-personal@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -66,8 +72,8 @@ describe("GET /api/dashboard/personal", () => {
     });
     token = result.token;
     userId = result.user.id;
-    const profile = await authCtx.personalProfiles.findByUserId(userId);
-    personalProfileId = profile!.id;
+    const profile = await personalProfiles.insert(userId);
+    personalProfileId = profile.id;
     agreementCtx.profileOwners.set("personal", personalProfileId, userId);
   });
 

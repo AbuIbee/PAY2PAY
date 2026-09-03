@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService, readSetCookie } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService, readSetCookie } from "@/lib/auth/testFakes";
 import { createRevokeSessionHandler } from "./route";
 
 const REVOKE_URL = "http://localhost/api/account/sessions/revoke";
@@ -25,6 +25,9 @@ describe("POST /api/account/sessions/revoke", () => {
   beforeEach(async () => {
     ctx = createTestAuthService();
     const result = await ctx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "revoke-session-user@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -59,6 +62,9 @@ describe("POST /api/account/sessions/revoke", () => {
 
   it("rejects revoking another user's session (IDOR) and does not clear the caller's cookie", async () => {
     const other = await ctx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "victim-session-user@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

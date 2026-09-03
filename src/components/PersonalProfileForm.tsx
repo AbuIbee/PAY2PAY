@@ -274,7 +274,7 @@ export function PersonalProfileForm() {
         </button>
         {returnTo && (
           <button type="button" className="button button--ghost" onClick={() => router.push(returnTo)}>
-            Return to agreement
+            {returnTo.startsWith("/agreements") ? "Return to agreement" : "Continue"}
           </button>
         )}
       </div>

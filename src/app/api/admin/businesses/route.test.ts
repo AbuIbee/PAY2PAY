@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { createTestAdminService } from "@/lib/admin/testFakes";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { grantStepUp } from "@/lib/staff/testFakes";
 import { createAdminBusinessesSearchHandler } from "./route";
 import { createAdminBusinessDetailHandler } from "./detail/route";
@@ -31,7 +31,7 @@ describe("/api/admin/businesses/*", () => {
   }
 
   async function signUpWithRole(email: string, role: "member" | "platform_admin" | "platform_owner") {
-    const result = await authCtx.authService.signup({ email, password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
+    const result = await authCtx.authService.signup({ accountType: "personal", identity: TEST_SIGNUP_IDENTITY, inviteCode: null, email, password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
     if (role !== "member") authCtx.users.setPlatformRole(result.user.id, role);
     return result;
   }

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAgreementCancellationService } from "@/lib/agreements/agreementCancellationTestFakes";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
 import { createAgreementCancellationListHandler, createAgreementCancellationRequestHandler } from "./route";
@@ -38,8 +38,8 @@ describe("POST/GET /api/agreements/cancellation-requests", () => {
     ctx = createTestAgreementCancellationService();
     authCtx = createTestAuthService();
 
-    const creditor = await authCtx.authService.signup({ email: `creditor-${randomUUID()}@example.com`, password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
-    const debtor = await authCtx.authService.signup({ email: `debtor-${randomUUID()}@example.com`, password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
+    const creditor = await authCtx.authService.signup({ accountType: "personal", identity: TEST_SIGNUP_IDENTITY, inviteCode: null, email: `creditor-${randomUUID()}@example.com`, password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
+    const debtor = await authCtx.authService.signup({ accountType: "personal", identity: TEST_SIGNUP_IDENTITY, inviteCode: null, email: `debtor-${randomUUID()}@example.com`, password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
     creditorToken = creditor.token;
     debtorToken = debtor.token;
 

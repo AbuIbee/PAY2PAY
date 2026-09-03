@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createListSessionsHandler } from "./route";
 
 const SESSIONS_URL = "http://localhost/api/account/sessions";
@@ -21,6 +21,9 @@ describe("GET /api/account/sessions", () => {
   beforeEach(async () => {
     ctx = createTestAuthService();
     const result = await ctx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -54,6 +57,9 @@ describe("GET /api/account/sessions", () => {
 
   it("never returns another user's sessions", async () => {
     await ctx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "other-list-sessions-user@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

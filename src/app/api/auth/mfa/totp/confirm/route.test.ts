@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestMfaService } from "@/lib/auth/mfaTestFakes";
 import { computeTotpCode } from "@/lib/auth/totp";
 import { createTotpEnrollHandler } from "../enroll/route";
@@ -26,6 +26,9 @@ describe("POST /api/auth/mfa/totp/confirm", () => {
     authCtx = createTestAuthService();
     mfaCtx = createTestMfaService();
     const result = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "totp-confirm@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

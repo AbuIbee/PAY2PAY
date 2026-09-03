@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestNotificationService } from "@/lib/notify/testFakes";
 import { createNotificationPreferencesGetHandler, createNotificationPreferencesSetHandler } from "./route";
 
@@ -41,6 +41,9 @@ describe("/api/notifications/preferences", () => {
 
     it("returns the caller's own preferences plus smsEligibility/smsProviderAvailable, never infrastructure terms", async () => {
       const result = await authCtx.authService.signup({
+        accountType: "personal",
+        identity: TEST_SIGNUP_IDENTITY,
+        inviteCode: null,
         email: "user@example.com",
         password: "a-strong-password",
         dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -65,6 +68,9 @@ describe("/api/notifications/preferences", () => {
 
     it("rejects an unrecognized notificationType (400)", async () => {
       const result = await authCtx.authService.signup({
+        accountType: "personal",
+        identity: TEST_SIGNUP_IDENTITY,
+        inviteCode: null,
         email: "user@example.com",
         password: "a-strong-password",
         dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -77,6 +83,9 @@ describe("/api/notifications/preferences", () => {
 
     it("a caller can only ever change their own preferences — userId is never accepted from the request body", async () => {
       const userA = await authCtx.authService.signup({
+        accountType: "personal",
+        identity: TEST_SIGNUP_IDENTITY,
+        inviteCode: null,
         email: "usera@example.com",
         password: "a-strong-password",
         dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -84,6 +93,9 @@ describe("/api/notifications/preferences", () => {
         userAgent: null,
       });
       const userB = await authCtx.authService.signup({
+        accountType: "personal",
+        identity: TEST_SIGNUP_IDENTITY,
+        inviteCode: null,
         email: "userb@example.com",
         password: "a-strong-password",
         dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -105,6 +117,9 @@ describe("/api/notifications/preferences", () => {
 
     it("cannot disable a critical notification type — the write is a structural no-op", async () => {
       const result = await authCtx.authService.signup({
+        accountType: "personal",
+        identity: TEST_SIGNUP_IDENTITY,
+        inviteCode: null,
         email: "user@example.com",
         password: "a-strong-password",
         dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

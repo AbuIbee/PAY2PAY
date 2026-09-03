@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestRelationshipServices } from "@/lib/relationships/testFakes";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
 import { createAgreementLinkCandidatesHandler } from "./route";
@@ -54,6 +54,9 @@ describe("GET /api/agreements/link-candidates", () => {
 
   async function signupWithProfile(label: string) {
     const user = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `${label}-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

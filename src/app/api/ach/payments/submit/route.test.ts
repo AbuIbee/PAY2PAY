@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAchServices } from "@/lib/ach/testFakes";
 import { createAchSubmitHandler } from "./route";
 
@@ -30,6 +30,9 @@ describe("POST /api/ach/payments/submit", () => {
     authCtx = createTestAuthService();
 
     const owner = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `ach-submit-owner-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -37,6 +40,9 @@ describe("POST /api/ach/payments/submit", () => {
       userAgent: null,
     });
     const stranger = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `ach-submit-stranger-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

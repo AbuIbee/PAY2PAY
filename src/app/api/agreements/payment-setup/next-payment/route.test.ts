@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestRelationshipServices } from "@/lib/relationships/testFakes";
 import { createTestLedgerService, createTestBalanceService } from "@/lib/ledger/testFakes";
 import type { AgreementInstallmentStatusReader, InstallmentWithStatus } from "@/lib/agreements/agreementProgressService";
@@ -63,6 +63,9 @@ describe("GET /api/agreements/payment-setup/next-payment", () => {
 
   async function createLinkedAgreementWithFunding() {
     const creditor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `next-payment-creditor-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -70,6 +73,9 @@ describe("GET /api/agreements/payment-setup/next-payment", () => {
       userAgent: null,
     });
     const debtor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `next-payment-debtor-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

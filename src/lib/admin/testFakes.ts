@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { AuthService } from "@/lib/auth/authService";
 import {
+  InMemoryAccountProvisioningRepository,
   InMemoryEmailSender,
   InMemoryEmailVerificationTokenRepository,
   InMemoryPasswordResetTokenRepository,
-  InMemoryPersonalProfileRepository,
   InMemorySessionRepository,
   InMemoryUserAccountRepository,
   TEST_APP_URL,
@@ -253,15 +253,17 @@ export function createTestAdminService() {
   // requestPasswordReset — shares this fake's `users`/`sessions` so the two services act on the same
   // underlying accounts, mirroring createTestAuthService's own construction in src/lib/auth/testFakes.ts.
   const emailSender = new InMemoryEmailSender();
+  const accountProvisioning = new InMemoryAccountProvisioningRepository(users);
   const authService = new AuthService(
     users,
     sessions,
-    new InMemoryPersonalProfileRepository(),
+    accountProvisioning,
     new InMemoryEmailVerificationTokenRepository(),
     new InMemoryPasswordResetTokenRepository(),
     audit,
     emailSender,
     { pepper: TEST_PEPPER, sessionTtlMs: 60 * 60 * 1000, appUrl: TEST_APP_URL },
+    accountProvisioning,
   );
 
   const adminService = new AdminService({

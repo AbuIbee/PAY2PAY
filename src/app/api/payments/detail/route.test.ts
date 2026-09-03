@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestPaymentService } from "@/lib/payments/testFakes";
 import type { ProfileKind } from "@/lib/payments/paymentProvider";
 import { createPaymentDetailHandler } from "./route";
@@ -31,6 +31,9 @@ describe("GET /api/payments/detail", () => {
     paymentCtx = createTestPaymentService();
 
     const payer = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "pay-detail-payer@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -38,6 +41,9 @@ describe("GET /api/payments/detail", () => {
       userAgent: null,
     });
     const recipient = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "pay-detail-recipient@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -45,6 +51,9 @@ describe("GET /api/payments/detail", () => {
       userAgent: null,
     });
     const stranger = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "pay-detail-stranger@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

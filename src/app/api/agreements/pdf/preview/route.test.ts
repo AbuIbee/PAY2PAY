@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestSignatureService, markFullyVerified, seedPersonalParty } from "@/lib/signatures/testFakes";
 import { createAgreementPdfPreviewHandler } from "./route";
 
@@ -64,6 +64,9 @@ describe("GET /api/agreements/pdf/preview", () => {
     });
 
     const stranger = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "stranger-preview@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -76,6 +79,9 @@ describe("GET /api/agreements/pdf/preview", () => {
 
   it("a party to a still-draft agreement receives an inline PDF (200) — the point of a live preview", async () => {
     const creditor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "creditor-preview-party@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -83,6 +89,9 @@ describe("GET /api/agreements/pdf/preview", () => {
       userAgent: null,
     });
     const debtor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "debtor-preview-party@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

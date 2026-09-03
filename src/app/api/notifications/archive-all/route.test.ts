@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestNotificationService } from "@/lib/notify/testFakes";
 import { createNotificationsArchiveAllHandler } from "./route";
 
@@ -30,6 +30,9 @@ describe("POST /api/notifications/archive-all", () => {
 
   it("archives every read, non-action-required notification, leaves action-required and unread ones in Current", async () => {
     const user = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "archive-all@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -66,6 +69,9 @@ describe("POST /api/notifications/archive-all", () => {
 
   it("reports archived: 0 when nothing is sweepable", async () => {
     const user = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "archive-all-none@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
