@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "./testFakes";
+import { TEST_ADULT_DATE_OF_BIRTH, TEST_SIGNUP_IDENTITY, createTestAuthService } from "./testFakes";
 import { createTestBusinessProfileService } from "@/lib/profiles/testFakes";
 
 /**
@@ -24,6 +24,9 @@ describe("Cross-account isolation", () => {
   it("User A cannot read User B's personal profile", async () => {
     const ctx = createTestAuthService();
     const userA = await ctx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "isolation-a@example.com",
       password: "correct horse battery staple",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -31,6 +34,9 @@ describe("Cross-account isolation", () => {
       userAgent: null,
     });
     const userB = await ctx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "isolation-b@example.com",
       password: "correct horse battery staple",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -41,14 +47,14 @@ describe("Cross-account isolation", () => {
     // The only lookup surface is findByUserId — parameterized by the id of
     // the profile's *own* owner, never by an arbitrary "give me profile X"
     // id. Looking up with A's id can never return B's row, and vice versa.
-    const profileA = await ctx.personalProfiles.findByUserId(userA.user.id);
-    const profileB = await ctx.personalProfiles.findByUserId(userB.user.id);
+    const profileA = ctx.accountProvisioning.personalProfiles.get(userA.user.id);
+    const profileB = ctx.accountProvisioning.personalProfiles.get(userB.user.id);
     expect(profileA?.userId).toBe(userA.user.id);
     expect(profileB?.userId).toBe(userB.user.id);
     expect(profileA?.id).not.toBe(profileB?.id);
 
     // Explicitly: asking for A's own id never yields B's profile.
-    expect(await ctx.personalProfiles.findByUserId(userA.user.id)).not.toEqual(profileB);
+    expect(ctx.accountProvisioning.personalProfiles.get(userA.user.id)).not.toEqual(profileB);
   });
 
   it(
@@ -80,6 +86,9 @@ describe("Cross-account isolation", () => {
   it("a user cannot create a personal profile for another authenticated user", async () => {
     const ctx = createTestAuthService();
     const userA = await ctx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "isolation-c@example.com",
       password: "correct horse battery staple",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -92,7 +101,7 @@ describe("Cross-account isolation", () => {
     // of the account signup itself just created. This is what makes
     // "create a profile for someone else" structurally unreachable, not a
     // runtime permission check that could have a bug in it.
-    const profile = await ctx.personalProfiles.findByUserId(userA.user.id);
+    const profile = ctx.accountProvisioning.personalProfiles.get(userA.user.id);
     expect(profile?.userId).toBe(userA.user.id);
   });
 

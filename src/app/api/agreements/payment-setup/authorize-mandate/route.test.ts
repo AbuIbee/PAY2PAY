@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestRelationshipServices } from "@/lib/relationships/testFakes";
 import { AchMandateService } from "@/lib/ach/achMandateService";
 import { InMemoryAchMandateRepository } from "@/lib/ach/testFakes";
@@ -66,6 +66,9 @@ describe("POST /api/agreements/payment-setup/authorize-mandate", () => {
 
   async function createLinkedAgreementWithFunding() {
     const creditor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `mandate-authorize-creditor-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -73,6 +76,9 @@ describe("POST /api/agreements/payment-setup/authorize-mandate", () => {
       userAgent: null,
     });
     const debtor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `mandate-authorize-debtor-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -165,6 +171,9 @@ describe("POST /api/agreements/payment-setup/authorize-mandate", () => {
 
   it("400s with a clear message when the debtor has no funding account assigned yet", async () => {
     const creditor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `mandate-authorize-nofund-creditor-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -172,6 +181,9 @@ describe("POST /api/agreements/payment-setup/authorize-mandate", () => {
       userAgent: null,
     });
     const debtor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `mandate-authorize-nofund-debtor-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

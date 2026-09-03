@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestNotificationService } from "@/lib/notify/testFakes";
 import { createNotificationsArchiveHandler } from "./route";
 
@@ -31,6 +31,9 @@ describe("POST /api/notifications/archive", () => {
 
   it("rejects a request missing id (400)", async () => {
     const user = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "archive-missing-id@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -43,6 +46,9 @@ describe("POST /api/notifications/archive", () => {
 
   it("archives a real notification belonging to the caller (archived: true)", async () => {
     const user = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "archive-owner@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -65,6 +71,9 @@ describe("POST /api/notifications/archive", () => {
 
   it("never archives another user's notification — cross-tenant groupId is a safe no-op (archived: false), not an error", async () => {
     const owner = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "archive-real-owner@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -72,6 +81,9 @@ describe("POST /api/notifications/archive", () => {
       userAgent: null,
     });
     const stranger = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "archive-stranger@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -92,6 +104,9 @@ describe("POST /api/notifications/archive", () => {
 
   it("a stale/unknown groupId is a safe no-op (archived: false)", async () => {
     const user = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "archive-unknown@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { resetRateLimits } from "@/lib/rate-limit";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createResendVerificationHandler } from "./route";
 
 function postWithCookie(token?: string, body?: unknown) {
@@ -25,6 +25,9 @@ describe("POST /api/auth/resend-verification", () => {
     resetRateLimits();
     ctx = createTestAuthService();
     const result = await ctx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -74,6 +77,9 @@ describe("POST /api/auth/resend-verification", () => {
   it("Agreement Lifecycle V2 UAT: the resent verification link uses the correct deployed URL, never localhost, reusing the same centralized APP_URL resolution as invitation emails", async () => {
     const deployedCtx = createTestAuthService(undefined, "https://pay-2-pay-git-some-branch-pay2-pay.vercel.app");
     const result = await deployedCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "deployed-user@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

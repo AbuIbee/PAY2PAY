@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestPaymentService } from "@/lib/payments/testFakes";
 import { createTestPaymentWebhookService } from "@/lib/payments/testFakes";
 import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
@@ -11,6 +11,9 @@ import { createSimulateSettlementHandler } from "./route";
 
 async function signupAs(authCtx: ReturnType<typeof createTestAuthService>, email: string, role: "member" | "platform_admin" | "platform_owner") {
   const user = await authCtx.authService.signup({
+    accountType: "personal",
+    identity: TEST_SIGNUP_IDENTITY,
+    inviteCode: null,
     email,
     password: "a-strong-password",
     dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

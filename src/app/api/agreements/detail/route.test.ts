@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { AgreementIdentitySnapshotService } from "@/lib/agreements/agreementIdentitySnapshotService";
 import { InMemoryProfileDisplayReader } from "@/lib/documents/testFakes";
@@ -59,6 +59,9 @@ describe("GET /api/agreements/detail", () => {
     agreementCtx = createTestAgreementService();
 
     const creditor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "detail-creditor@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -66,6 +69,9 @@ describe("GET /api/agreements/detail", () => {
       userAgent: null,
     });
     const debtor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "detail-debtor@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -73,6 +79,9 @@ describe("GET /api/agreements/detail", () => {
       userAgent: null,
     });
     const stranger = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "detail-stranger@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

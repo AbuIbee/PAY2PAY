@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { createTestAuthService, TEST_ADULT_DATE_OF_BIRTH } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, createTestAuthService, TEST_ADULT_DATE_OF_BIRTH } from "@/lib/auth/testFakes";
 import { createTestDataExportService } from "@/lib/compliance/testFakes";
 import { createAccountExportHandler } from "./route";
 
@@ -19,6 +19,9 @@ describe("GET /api/account/export", () => {
     const authCtx = createTestAuthService();
     const { dataExportService, personalProfiles, agreementCtx, accounts } = createTestDataExportService();
     const user = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "export-me@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

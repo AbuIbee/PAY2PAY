@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { createTestAuthService, TEST_ADULT_DATE_OF_BIRTH } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, createTestAuthService, TEST_ADULT_DATE_OF_BIRTH } from "@/lib/auth/testFakes";
 import { createTestStaffService } from "@/lib/staff/testFakes";
 import type { StaffDisplayInfo, StaffDisplayReader } from "@/lib/staff/staffDisplayReader";
 import { createStaffListHandler } from "./route";
@@ -34,6 +34,9 @@ describe("GET /api/staff", () => {
     const authCtx = createTestAuthService();
     const { staffService } = createTestStaffService();
     const user = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "owner@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -51,6 +54,9 @@ describe("GET /api/staff", () => {
     const authCtx = createTestAuthService();
     const { staffService, staffMembers } = createTestStaffService();
     const owner = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "owner@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -58,6 +64,9 @@ describe("GET /api/staff", () => {
       userAgent: null,
     });
     const teammate = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "teammate@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -99,6 +108,9 @@ describe("GET /api/staff", () => {
     const authCtx = createTestAuthService();
     const { staffService, staffMembers } = createTestStaffService();
     const targetOwner = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "target-owner@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -106,6 +118,9 @@ describe("GET /api/staff", () => {
       userAgent: null,
     });
     const outsider = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "outsider-owner@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

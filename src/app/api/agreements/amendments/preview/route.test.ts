@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAmendmentService } from "@/lib/amendments/testFakes";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
 import { createAmendmentPreviewHandler } from "./route";
@@ -47,6 +47,9 @@ describe("GET /api/agreements/amendments/preview", () => {
     authCtx = createTestAuthService();
 
     const creditor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `amend-preview-creditor-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -54,6 +57,9 @@ describe("GET /api/agreements/amendments/preview", () => {
       userAgent: null,
     });
     const debtor = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `amend-preview-debtor-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -61,6 +67,9 @@ describe("GET /api/agreements/amendments/preview", () => {
       userAgent: null,
     });
     const stranger = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `amend-preview-stranger-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

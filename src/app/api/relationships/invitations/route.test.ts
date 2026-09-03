@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestRelationshipServices } from "@/lib/relationships/testFakes";
 import { createRelationshipInvitationsListHandler } from "./route";
 
@@ -32,6 +32,9 @@ describe("GET /api/relationships/invitations", () => {
 
   async function seedRelationshipWithInvitation() {
     const signup = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `inviter-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -60,6 +63,9 @@ describe("GET /api/relationships/invitations", () => {
   it("rejects a caller who is not a participant in the relationship with 403", async () => {
     const { relationship } = await seedRelationshipWithInvitation();
     const outsider = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: `outsider-${randomUUID()}@example.com`,
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

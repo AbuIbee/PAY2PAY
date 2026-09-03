@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestNotificationService } from "@/lib/notify/testFakes";
 import { createNotificationsListHandler } from "./route";
 
@@ -35,6 +35,9 @@ describe("GET /api/notifications", () => {
 
   it("returns only the authenticated user's own notifications, never another user's, and in the grouped shape (not raw rows)", async () => {
     const userA = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "usera@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -42,6 +45,9 @@ describe("GET /api/notifications", () => {
       userAgent: null,
     });
     const userB = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "userb@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -66,6 +72,9 @@ describe("GET /api/notifications", () => {
   describe("Production follow-up (Notification cleanup + archive)", () => {
     it("defaults to the Current view — a newly-created notification appears with no ?view param", async () => {
       const user = await authCtx.authService.signup({
+        accountType: "personal",
+        identity: TEST_SIGNUP_IDENTITY,
+        inviteCode: null,
         email: "current-default@example.com",
         password: "a-strong-password",
         dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -82,6 +91,9 @@ describe("GET /api/notifications", () => {
 
     it("?view=archived returns only archived notifications, never a current one", async () => {
       const user = await authCtx.authService.signup({
+        accountType: "personal",
+        identity: TEST_SIGNUP_IDENTITY,
+        inviteCode: null,
         email: "archived-view@example.com",
         password: "a-strong-password",
         dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { createTestAdminService } from "@/lib/admin/testFakes";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { grantStepUp } from "@/lib/staff/testFakes";
 import { createAdminImpersonationActiveHandler } from "./route";
 
@@ -36,13 +36,13 @@ describe("GET /api/admin/impersonation/active", () => {
   });
 
   it("rejects an ordinary Member's genuine session (403)", async () => {
-    const result = await authCtx.authService.signup({ email: "member@example.com", password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
+    const result = await authCtx.authService.signup({ accountType: "personal", identity: TEST_SIGNUP_IDENTITY, inviteCode: null, email: "member@example.com", password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
     const response = await handler()(withCookie(result.token));
     expect(response.status).toBe(403);
   });
 
   it("returns { active: null } for a Platform Admin with no open support view", async () => {
-    const result = await authCtx.authService.signup({ email: "admin@example.com", password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
+    const result = await authCtx.authService.signup({ accountType: "personal", identity: TEST_SIGNUP_IDENTITY, inviteCode: null, email: "admin@example.com", password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
     authCtx.users.setPlatformRole(result.user.id, "platform_admin");
     const response = await handler()(withCookie(result.token));
     expect(response.status).toBe(200);
@@ -51,7 +51,7 @@ describe("GET /api/admin/impersonation/active", () => {
   });
 
   it("surfaces an admin's own still-open support view", async () => {
-    const authResult = await authCtx.authService.signup({ email: "admin2@example.com", password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
+    const authResult = await authCtx.authService.signup({ accountType: "personal", identity: TEST_SIGNUP_IDENTITY, inviteCode: null, email: "admin2@example.com", password: "a-strong-password", dateOfBirth: TEST_ADULT_DATE_OF_BIRTH, ipAddress: null, userAgent: null });
     authCtx.users.setPlatformRole(authResult.user.id, "platform_admin");
     const validated = await authCtx.authService.validateSession(authResult.token);
     const sessionId = validated!.sessionId;

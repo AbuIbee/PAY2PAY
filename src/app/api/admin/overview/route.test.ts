@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAdminService } from "@/lib/admin/testFakes";
 import { createAdminOverviewHandler } from "./route";
 
@@ -35,6 +35,9 @@ describe("GET /api/admin/overview — unauthorized direct API access is rejected
 
   it("rejects a real, valid session belonging to an ordinary Member (403) — even though the session itself is genuine", async () => {
     const result = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "member@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -48,6 +51,9 @@ describe("GET /api/admin/overview — unauthorized direct API access is rejected
 
   it("accepts a real session belonging to a Platform Admin (200)", async () => {
     const result = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "admin@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

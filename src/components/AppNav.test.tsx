@@ -195,7 +195,7 @@ describe("AppNav", () => {
     render(<AppNav />);
 
     await screen.findByRole("button", { name: /^menu$/i });
-    for (const label of ["Dashboard", "Connections", "Payment Arrangements", "My Cash", "Payment Methods", "Notifications", "Support"]) {
+    for (const label of ["Dashboard", "Notifications", "My Agreements", "My Cash", "Bank Info", "Connections", "Support"]) {
       expect(screen.getByRole("link", { name: new RegExp(`^${label}$`, "i") })).toBeInTheDocument();
     }
     expect(screen.getByRole("link", { name: /^settings$/i })).toHaveAttribute("href", "/account");
@@ -204,6 +204,41 @@ describe("AppNav", () => {
     // own doc comment) — it must still be visible, just non-interactive.
     expect(screen.queryByRole("link", { name: /^staff$/i })).not.toBeInTheDocument();
     expect(screen.getByText("Staff")).toBeInTheDocument();
+  });
+
+  /**
+   * Signup/onboarding redesign, requirement #7: PRIMARY_LINKS' exact requested order — Dashboard,
+   * Notifications, My Agreements, My Cash, Bank Info, Connections, Support, then Cards last (only once
+   * liveCardIssuanceEnabled is on; see the dedicated Cards-visibility tests above for the flag-off
+   * case). Renamed labels only — hrefs/API routes are unchanged (asserted per-link below).
+   */
+  it("renders the primary navigation links in the exact requested order, with the exact requested labels/hrefs", async () => {
+    vi.stubGlobal("fetch", stubNavFetches(undefined, true));
+    render(<AppNav />);
+    await screen.findByRole("button", { name: /^menu$/i });
+
+    const expected = [
+      ["Dashboard", "/dashboard"],
+      ["Notifications", "/notifications"],
+      ["My Agreements", "/agreements"],
+      ["My Cash", "/payments"],
+      ["Bank Info", "/payment-methods"],
+      ["Connections", "/connections"],
+      ["Support", "/support"],
+      ["Cards", "/cards"],
+    ] as const;
+
+    const links = expected.map(([label, href]) => {
+      const link = screen.getAllByRole("link", { name: new RegExp(`^${label}$`, "i") })[0]!;
+      expect(link).toHaveAttribute("href", href);
+      return link;
+    });
+
+    const allLinks: Element[] = Array.from(document.querySelectorAll("a"));
+    const positions = links.map((link) => allLinks.indexOf(link));
+    for (let i = 1; i < positions.length; i += 1) {
+      expect(positions[i]).toBeGreaterThan(positions[i - 1]!);
+    }
   });
 
   describe("Organization Features: Coming Soon treatment", () => {

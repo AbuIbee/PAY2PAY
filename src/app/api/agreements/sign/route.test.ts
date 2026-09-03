@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestSignatureService, grantStepUp, markFullyVerified, seedPersonalParty } from "@/lib/signatures/testFakes";
 import { createAgreementSignHandler } from "./route";
 
@@ -54,6 +54,9 @@ describe("POST /api/agreements/sign", () => {
 
   it("rejects a request missing required fields before ever reaching SignatureService (400)", async () => {
     const signup = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "signer@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -66,6 +69,9 @@ describe("POST /api/agreements/sign", () => {
 
   it("a real, authenticated user who is not a party to the agreement cannot sign it — server-side authorization, not just UI restriction (403)", async () => {
     const signup = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "stranger@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -112,6 +118,9 @@ describe("POST /api/agreements/sign", () => {
     // personalProfiles.findByUserId(actingUserId) resolves correctly (unlike the "unauthorized
     // signer" test above, which deliberately does *not* do this, to prove a stranger is rejected).
     const signup = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "creditor@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

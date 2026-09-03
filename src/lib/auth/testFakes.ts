@@ -1,16 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
-import { ConflictError } from "@/lib/errors";
+import type { BetaInviteRepository } from "@/lib/compliance/betaInviteService";
+import { ConfigurationError, ConflictError, ValidationError } from "@/lib/errors";
 import type { EmailSender } from "@/lib/notify/emailSender";
 import { AuthService } from "./authService";
 import { generatePublicReferenceCode } from "./token";
 import type {
+  AccountProvisioningRepository,
+  BusinessSignupDetails,
   EmailVerificationTokenRecord,
   EmailVerificationTokenRepository,
   PasswordResetTokenRecord,
   PasswordResetTokenRepository,
   PersonalProfileRecord,
   PersonalProfileRepository,
+  PersonalSignupIdentity,
+  PreferredEmailSyncTarget,
+  ProvisionedAccount,
   SessionRecord,
   SessionRepository,
   AccountClassification,
@@ -196,6 +202,142 @@ export class InMemoryPersonalProfileRepository implements PersonalProfileReposit
   }
 }
 
+export interface StoredPersonalProfile {
+  id: string;
+  userId: string;
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  preferredEmail: string;
+  preferredEmailVerifiedAt: Date | null;
+  contactPhone: string;
+  residentialAddress: { line1: string; line2: string | null; city: string; state: string; postalCode: string; country: string };
+}
+
+export interface StoredBusinessProfile {
+  id: string;
+  ownerUserId: string;
+  legalBusinessName: string;
+  displayName: string;
+  entityType: string;
+  taxIdType: string;
+  businessPhone: string | null;
+  businessAddress: { line1: string; line2: string | null; city: string; postalCode: string };
+  country: string;
+  state: string;
+}
+
+/**
+ * Signup/onboarding redesign: in-memory double for AccountProvisioningRepository, sharing the same
+ * InMemoryUserAccountRepository instance AuthService's other tests already assert against (`ctx.users`)
+ * — mirrors the real DrizzleAccountProvisioningRepository's "everything commits together or nothing
+ * does" guarantee by only writing the new user into `users` after a beta-invite claim (if any) has
+ * already succeeded. Also implements PreferredEmailSyncTarget — in production these are two separate
+ * Drizzle classes hitting the same personal_profile table; combining them here is just fake-plumbing
+ * economy, not a production design choice.
+ */
+export class InMemoryAccountProvisioningRepository implements AccountProvisioningRepository, PreferredEmailSyncTarget {
+  personalProfiles = new Map<string, StoredPersonalProfile>();
+  businessProfiles = new Map<string, StoredBusinessProfile>();
+
+  constructor(
+    private readonly users: InMemoryUserAccountRepository,
+    private readonly betaInvites?: BetaInviteRepository,
+  ) {}
+
+  private newUser(input: { email: string; authCredentialRef: string; dateOfBirth: string }): UserAccountRecord {
+    return {
+      id: randomUUID(),
+      email: input.email,
+      authCredentialRef: input.authCredentialRef,
+      status: "active",
+      platformRole: "member",
+      accountClassification: "production",
+      dateOfBirth: input.dateOfBirth,
+      emailVerifiedAt: null,
+      publicReference: generatePublicReferenceCode(),
+    };
+  }
+
+  private async claimInviteOrThrow(code: string | null, usedByUserId: string): Promise<void> {
+    if (!code) return;
+    if (!this.betaInvites) {
+      throw new ConfigurationError("No BetaInviteRepository configured for this test's AuthService.");
+    }
+    const claimed = await this.betaInvites.claimCode(code.trim(), usedByUserId);
+    if (!claimed) {
+      throw new ValidationError("This invite code is invalid or has already been used.");
+    }
+  }
+
+  private storeProfile(user: UserAccountRecord, identity: PersonalSignupIdentity): string {
+    const profileId = randomUUID();
+    this.personalProfiles.set(user.id, {
+      id: profileId,
+      userId: user.id,
+      firstName: identity.firstName.trim(),
+      middleName: identity.middleName?.trim() || null,
+      lastName: identity.lastName.trim(),
+      preferredEmail: user.email,
+      preferredEmailVerifiedAt: null,
+      contactPhone: identity.contactPhone.trim(),
+      residentialAddress: { ...identity.address },
+    });
+    return profileId;
+  }
+
+  async provisionPersonalAccount(input: {
+    email: string;
+    authCredentialRef: string;
+    dateOfBirth: string;
+    identity: PersonalSignupIdentity;
+    betaInviteCode: string | null;
+  }): Promise<ProvisionedAccount> {
+    const user = this.newUser(input);
+    await this.claimInviteOrThrow(input.betaInviteCode, user.id);
+    this.users.byId.set(user.id, user);
+    const personalProfileId = this.storeProfile(user, input.identity);
+    return { user, personalProfileId, businessProfileId: null };
+  }
+
+  async provisionBusinessAccount(input: {
+    email: string;
+    authCredentialRef: string;
+    dateOfBirth: string;
+    identity: PersonalSignupIdentity;
+    business: BusinessSignupDetails;
+    betaInviteCode: string | null;
+  }): Promise<ProvisionedAccount> {
+    const user = this.newUser(input);
+    await this.claimInviteOrThrow(input.betaInviteCode, user.id);
+    this.users.byId.set(user.id, user);
+    const personalProfileId = this.storeProfile(user, input.identity);
+    const businessProfileId = randomUUID();
+    this.businessProfiles.set(businessProfileId, {
+      id: businessProfileId,
+      ownerUserId: user.id,
+      legalBusinessName: input.business.legalBusinessName.trim(),
+      displayName: input.business.dbaName?.trim() || input.business.legalBusinessName.trim(),
+      entityType: input.business.entityType.trim(),
+      taxIdType: input.business.taxIdType.trim(),
+      businessPhone: input.business.businessPhone?.trim() || null,
+      businessAddress: { ...input.business.businessAddress },
+      country: input.business.country.trim(),
+      state: input.business.state.trim(),
+    });
+    return { user, personalProfileId, businessProfileId };
+  }
+
+  async syncVerifiedAuthEmail(userId: string, verifiedEmail: string): Promise<void> {
+    const profile = this.personalProfiles.get(userId);
+    if (!profile) return;
+    const normalized = verifiedEmail.trim().toLowerCase();
+    if (profile.preferredEmail === normalized && !profile.preferredEmailVerifiedAt) {
+      profile.preferredEmailVerifiedAt = new Date();
+    }
+  }
+}
+
 export class InMemoryEmailVerificationTokenRepository implements EmailVerificationTokenRepository {
   private byId = new Map<string, EmailVerificationTokenRecord>();
   private byHash = new Map<string, string>();
@@ -306,10 +448,14 @@ export function readSetCookie(response: Response, name: string): string | undefi
   return undefined;
 }
 
-export function createTestAuthService(sessionTtlMs: number = TEST_SESSION_TTL_MS, appUrl: string = TEST_APP_URL) {
+export function createTestAuthService(
+  sessionTtlMs: number = TEST_SESSION_TTL_MS,
+  appUrl: string = TEST_APP_URL,
+  options: { betaInvites?: BetaInviteRepository } = {},
+) {
   const users = new InMemoryUserAccountRepository();
   const sessions = new InMemorySessionRepository();
-  const personalProfiles = new InMemoryPersonalProfileRepository();
+  const accountProvisioning = new InMemoryAccountProvisioningRepository(users, options.betaInvites);
   const emailVerificationTokens = new InMemoryEmailVerificationTokenRepository();
   const passwordResetTokens = new InMemoryPasswordResetTokenRepository();
   const auditRepo = new InMemoryAuditEventRepository();
@@ -318,21 +464,43 @@ export function createTestAuthService(sessionTtlMs: number = TEST_SESSION_TTL_MS
   const authService = new AuthService(
     users,
     sessions,
-    personalProfiles,
+    accountProvisioning,
     emailVerificationTokens,
     passwordResetTokens,
     audit,
     emailSender,
     { pepper: TEST_PEPPER, sessionTtlMs, appUrl },
+    accountProvisioning,
   );
   return {
     authService,
     users,
     sessions,
-    personalProfiles,
+    accountProvisioning,
     emailVerificationTokens,
     passwordResetTokens,
     auditRepo,
     emailSender,
   };
 }
+
+/** A minimal, valid PersonalSignupIdentity — every signup test that doesn't specifically exercise identity/address validation can spread this. */
+export const TEST_SIGNUP_IDENTITY: PersonalSignupIdentity = {
+  firstName: "Jamie",
+  middleName: null,
+  lastName: "Rivera",
+  contactPhone: "+1-555-0100",
+  address: { line1: "1 Market St", line2: null, city: "San Francisco", state: "CA", postalCode: "94105", country: "US" },
+};
+
+/** A minimal, valid BusinessSignupDetails counterpart to TEST_SIGNUP_IDENTITY above. */
+export const TEST_SIGNUP_BUSINESS: BusinessSignupDetails = {
+  legalBusinessName: "Rivera Consulting LLC",
+  dbaName: null,
+  entityType: "LLC",
+  businessPhone: "+1-555-0101",
+  businessAddress: { line1: "500 Howard St", line2: null, city: "San Francisco", postalCode: "94105" },
+  state: "CA",
+  country: "US",
+  taxIdType: "EIN",
+};

@@ -22,13 +22,13 @@ interface NavLinkItem {
 // links to (CardsManager) is permanently an unconditional "Not yet available" state until one is.
 const PRIMARY_LINKS: NavLinkItem[] = [
   { href: "/dashboard", label: "Dashboard" },
-  { href: "/connections", label: "Connections" },
-  { href: "/agreements", label: "Payment Arrangements" },
-  { href: "/payments", label: "My Cash" },
-  { href: "/payment-methods", label: "Payment Methods" },
-  { href: "/cards", label: "Cards" },
   { href: "/notifications", label: "Notifications" },
+  { href: "/agreements", label: "My Agreements" },
+  { href: "/payments", label: "My Cash" },
+  { href: "/payment-methods", label: "Bank Info" },
+  { href: "/connections", label: "Connections" },
   { href: "/support", label: "Support" },
+  { href: "/cards", label: "Cards" },
 ];
 
 /**

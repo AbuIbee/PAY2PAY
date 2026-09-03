@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService, readSetCookie } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService, readSetCookie } from "@/lib/auth/testFakes";
 import { ACTIVE_PROFILE_COOKIE_NAME } from "@/lib/profiles/activeProfileCookie";
 import { createTestProfileAccessService } from "@/lib/profiles/testFakes";
 import { resetRateLimits } from "@/lib/rate-limit";
@@ -34,6 +34,9 @@ describe("login/logout lifecycle (route-handler level)", () => {
     authCtx = createTestAuthService();
     accessCtx = createTestProfileAccessService();
     const signedUp = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: EMAIL,
       password: PASSWORD,
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,

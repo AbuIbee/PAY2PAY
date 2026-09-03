@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
-import { TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
+import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestAdminOpsServices } from "@/lib/admin/adminOpsTestFakes";
 import { createSmsDeliveryRetryHandler } from "./route";
 
@@ -31,6 +31,9 @@ describe("POST /api/admin/notifications/sms/retry — unauthorized direct API ac
 
   it("rejects an ordinary Member (403) even with a well-formed body", async () => {
     const result = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "member@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -43,6 +46,9 @@ describe("POST /api/admin/notifications/sms/retry — unauthorized direct API ac
 
   it("rejects a malformed body (400) even for a Platform Owner", async () => {
     const result = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "owner@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
@@ -56,6 +62,9 @@ describe("POST /api/admin/notifications/sms/retry — unauthorized direct API ac
 
   it("a Platform Owner can retry a genuinely failed SMS event (200)", async () => {
     const result = await authCtx.authService.signup({
+      accountType: "personal",
+      identity: TEST_SIGNUP_IDENTITY,
+      inviteCode: null,
       email: "owner@example.com",
       password: "a-strong-password",
       dateOfBirth: TEST_ADULT_DATE_OF_BIRTH,
