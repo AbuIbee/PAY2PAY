@@ -10,6 +10,12 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/agreements/detail",
 }));
 
+// Ordinary fixture default — always a safe distance in the future (never a hard-coded date that
+// eventually lapses into the past and starts failing tests through the valid, unchanged client-side
+// min-date protection in AgreementTermsFields). Tests that deliberately exercise an expired/past
+// schedule keep their own explicit past-date literals below, untouched.
+const FUTURE_FIRST_PAYMENT_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 const BASE_TERMS = {
   category: "personal_loan",
   description: "Loan for car repair",
@@ -18,7 +24,7 @@ const BASE_TERMS = {
   currentPrincipalMinorUnits: 100000,
   firstPaymentMinorUnits: 10000,
   installmentAmountMinorUnits: 10000,
-  firstPaymentDate: "2026-09-01",
+  firstPaymentDate: FUTURE_FIRST_PAYMENT_DATE,
   finalPaymentMinorUnits: 10000,
   numberOfInstallments: 9,
   earlyPayoffTerms: "Allowed anytime.",
@@ -70,7 +76,7 @@ function detailBody(overrides: Partial<Record<string, unknown>> = {}) {
       signedAt: "2026-08-01T00:00:00.000Z",
       documentHash: "hash",
     },
-    schedule: [{ sequenceNumber: 0, dueDate: "2026-09-01", amountMinorUnits: 10000 }],
+    schedule: [{ sequenceNumber: 0, dueDate: FUTURE_FIRST_PAYMENT_DATE, amountMinorUnits: 10000 }],
     ...overrides,
   };
 }
