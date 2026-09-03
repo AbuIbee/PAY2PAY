@@ -4,7 +4,7 @@ import { logger } from "@/lib/logger";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
-import { CounterpartyMustSignFirstError, ForbiddenError, ScheduleRevisionRequiredError, ValidationError } from "@/lib/errors";
+import { CounterpartyMustSignFirstError, ForbiddenError, ProfileIncompleteError, ScheduleRevisionRequiredError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { PageParams } from "@/lib/pagination";
 import { computeSchedule, isPastDate } from "./schedule";
@@ -302,6 +302,29 @@ export interface AgreementIdentitySnapshotter {
   }): Promise<void>;
 }
 
+/**
+ * Production defect remediation (agreement participation requires a usable name): the one check that
+ * stops a PERSONAL profile with no first/last name from acknowledging, accepting, or signing a
+ * financial agreement while anonymous — never fabricates a name, only blocks the action until the
+ * acting party has completed their own profile. `hasRequiredName` takes the ACTING user id, never a
+ * profile id: a personal profile has exactly one owning user (`personal_profile.user_id` is unique),
+ * and every call site below has already independently verified the acting user genuinely owns the
+ * profile in question (`authorizeAsRole`/`resolvePartyRole`) before this is ever reached — this is a
+ * completeness check on an already-authorized party, never an identity lookup of its own.
+ *
+ * Deliberately never called for a business party at any call site — a business profile's own
+ * `legalBusinessName`/`displayName` concept is unrelated to this personal first/last-name requirement,
+ * and gating a business action on the acting staff member's own unrelated personal profile would be
+ * wrong. Real implementation: a thin adapter over the existing, previously-unwired
+ * PersonalProfileService.checkAgreementParticipationReadiness (its own doc comment already named this
+ * exact purpose) — reuses its `firstName`/`lastName`-missing detection verbatim rather than a second,
+ * divergent completeness check; deliberately ignores that same result's phone/email/address fields,
+ * which remain the existing, separate, unrelated profile-completeness UX this fix does not touch.
+ */
+export interface AgreementPartyNameReader {
+  hasRequiredName(actingUserId: string): Promise<boolean>;
+}
+
 export interface AgreementServiceDeps {
   agreements: AgreementRepository;
   versions: AgreementVersionRepository;
@@ -328,6 +351,14 @@ export interface AgreementServiceDeps {
   connectionEstablisher?: AgreementConnectionEstablisher;
   /** Decision 7: optional, same pattern as `connectionEstablisher?` above — best-effort, never blocks acceptance. */
   identitySnapshotter?: AgreementIdentitySnapshotter;
+  /**
+   * Production defect remediation (agreement participation requires a usable name): optional, same
+   * established "a caller that omits it — most existing tests — is unaffected" pattern as
+   * `connectionEstablisher?`/`identitySnapshotter?` above. UNLIKE those two, this is NOT best-effort —
+   * when wired, a failed check genuinely blocks the action (see `requireCompleteName`'s own doc
+   * comment) rather than being caught and logged.
+   */
+  partyNames?: AgreementPartyNameReader;
 }
 
 export interface CreateDraftInput {
@@ -640,6 +671,7 @@ export class AgreementService {
     const agreement = await this.requireAgreement(agreementId);
     await this.authorizeAsRole(agreement, "debtor", actingUserId, null);
     this.requireStatus(agreement, "awaiting_debtor_acknowledgment");
+    await this.requireCompleteName(agreement.debtorProfileKind, actingUserId);
     await this.deps.agreements.updateStatus(agreement.id, "awaiting_creditor_acceptance");
     const auditId = await this.recordAudit(agreement.id, actingUserId, "debtor_acknowledged", null);
     await this.notifyParty(agreement, "creditor", "agreement_action_required", { stage: "decide" }, auditId);
@@ -658,6 +690,11 @@ export class AgreementService {
     this.requireStatus(agreement, "awaiting_creditor_acceptance");
 
     if (input.decision === "accept") {
+      // Production defect remediation (agreement participation requires a usable name): only the
+      // "accept" decision is gated — a creditor may still reject or counter-propose with an anonymous
+      // profile (those are walk-away/renegotiation actions, not the party genuinely committing to
+      // these terms).
+      await this.requireCompleteName(agreement.creditorProfileKind, input.actingUserId);
       await this.deps.agreements.updateStatus(agreement.id, "awaiting_signatures");
       const auditId = await this.recordAudit(agreement.id, input.actingUserId, "creditor_accepted", null);
       await this.notifyParty(agreement, "debtor", "agreement_decided", { decision: "accepted" }, auditId);
@@ -710,6 +747,26 @@ export class AgreementService {
       newTerms: input.counterTerms,
       reason: input.reason ?? "The creditor proposed different terms.",
     });
+  }
+
+  /**
+   * Production defect remediation (agreement participation requires a usable name): blocks
+   * `acknowledgeDebt`/`creditorDecide`'s accept branch (and, in SignatureService, `sign`) when the
+   * acting PERSONAL party has no first/last name on file — never for a business party (skipped
+   * entirely by the `profileKind === "personal"` guard, before `partyNames` is ever consulted). Not
+   * best-effort: unlike `tryEstablishConnection`, a genuine "name missing" result here throws
+   * `ProfileIncompleteError` and the caller's own state transition never happens — this is the actual
+   * enforcement, not a UX hint (the client-side "Complete your profile" panel is a courtesy that
+   * prevents the click in the first place; this is what makes bypassing it pointless). A caller that
+   * omits `partyNames` (most existing tests) never gates at all — see that dependency's own doc
+   * comment.
+   */
+  private async requireCompleteName(profileKind: ProfileKind, actingUserId: string): Promise<void> {
+    if (profileKind !== "personal" || !this.deps.partyNames) return;
+    const hasName = await this.deps.partyNames.hasRequiredName(actingUserId);
+    if (!hasName) {
+      throw new ProfileIncompleteError();
+    }
   }
 
   /**

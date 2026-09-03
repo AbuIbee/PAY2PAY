@@ -10,6 +10,7 @@ import {
   type AgreementCancellationReader,
   type AgreementInstallmentStatusReader,
   type AgreementMandateReader,
+  type AgreementPartyAccountsReader,
   type AgreementPaymentAttemptRecord,
   type AgreementPaymentAttemptsReader,
   type InstallmentWithStatus,
@@ -51,6 +52,27 @@ class FakeAgreementMandateReader implements AgreementMandateReader {
   active = new Set<string>();
   async isActiveForAgreement(agreementId: string): Promise<boolean> {
     return this.active.has(agreementId);
+  }
+}
+
+/**
+ * Production defect remediation (existing payment methods must be recognized): keyed by exact
+ * `kind:id` profile identity, mirroring the real RelationshipFinancialAccountService.listAccountsForParty
+ * contract this fake stands in for. `calls` records every (kind, id) pair actually queried, so a test
+ * can assert the counterparty's profile was never read — the isolation guarantee this fix must never
+ * weaken.
+ */
+class FakeAgreementPartyAccountsReader implements AgreementPartyAccountsReader {
+  accountsByProfile = new Map<string, Array<{ status: string }>>();
+  calls: Array<{ kind: string; id: string }> = [];
+
+  setAccounts(kind: string, id: string, statuses: string[]) {
+    this.accountsByProfile.set(`${kind}:${id}`, statuses.map((status) => ({ status })));
+  }
+
+  async listAccountsForParty(_actingUserId: string, party: { kind: string; id: string }): Promise<Array<{ status: string }>> {
+    this.calls.push({ kind: party.kind, id: party.id });
+    return this.accountsByProfile.get(`${party.kind}:${party.id}`) ?? [];
   }
 }
 
@@ -315,6 +337,100 @@ describe("AgreementProgressService", () => {
       expect(step?.status).toBe("blocked");
       expect(step?.statusText).not.toBe("Connection required");
       expect(step?.cta).toBeNull();
+    });
+  });
+
+  describe("Production defect remediation (existing payment methods must be recognized)", () => {
+    let partyAccounts: FakeAgreementPartyAccountsReader;
+    let progressServiceWithPartyAccounts: AgreementProgressService;
+
+    beforeEach(() => {
+      partyAccounts = new FakeAgreementPartyAccountsReader();
+      progressServiceWithPartyAccounts = new AgreementProgressService({
+        agreementService: ctx.agreementService,
+        relationshipPaymentMethods,
+        cancellation: new FakeAgreementCancellationReader(ctx.auditRepo),
+        mandates,
+        installments,
+        paymentAttempts,
+        balance,
+        partyAccounts,
+      });
+    });
+
+    it("creditor: reports a one-click 'Use this account' CTA (never 'Set up payout account') when exactly one verified account is already owned but not yet assigned", async () => {
+      const { agreementId, creditorUserId, creditorProfileId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, []);
+      partyAccounts.setAccounts("personal", creditorProfileId, ["verified"]);
+
+      const step = (await progressServiceWithPartyAccounts.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "payment_method");
+      expect(step?.status).toBe("action_required");
+      expect(step?.statusText).toBe("Select a payout account");
+      expect(step?.cta).toEqual({ label: "Use this account", href: `/agreements/detail?id=${agreementId}#payment-method-select` });
+    });
+
+    it("debtor: reports 'Choose account' (never 'Set up payment method') when multiple verified accounts are already owned but not yet assigned", async () => {
+      const { agreementId, debtorUserId, debtorProfileId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, []);
+      partyAccounts.setAccounts("personal", debtorProfileId, ["verified", "verified"]);
+
+      const step = (await progressServiceWithPartyAccounts.getProgress(agreementId, debtorUserId)).steps.find((s) => s.key === "payment_method");
+      expect(step?.status).toBe("action_required");
+      expect(step?.statusText).toBe("Select a payment method");
+      expect(step?.cta).toEqual({ label: "Choose account", href: `/agreements/detail?id=${agreementId}#payment-method-select` });
+    });
+
+    it("ignores a non-verified account — still reports 'Set up...' when the only owned account is pending_verification/failed/disabled", async () => {
+      const { agreementId, creditorUserId, creditorProfileId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, []);
+      partyAccounts.setAccounts("personal", creditorProfileId, ["pending_verification"]);
+
+      const step = (await progressServiceWithPartyAccounts.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "payment_method");
+      expect(step?.statusText).toBe("Payout setup required");
+      expect(step?.cta).toEqual({ label: "Set up payout account", href: "/payment-methods" });
+    });
+
+    it("isolation: the eligible-account read is scoped to the acting party's own profile only — never the counterparty's", async () => {
+      const { agreementId, creditorUserId, creditorProfileId, debtorProfileId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, []);
+      partyAccounts.setAccounts("personal", creditorProfileId, ["verified"]);
+      partyAccounts.setAccounts("personal", debtorProfileId, ["verified"]);
+
+      await progressServiceWithPartyAccounts.getProgress(agreementId, creditorUserId);
+      expect(partyAccounts.calls).toEqual([{ kind: "personal", id: creditorProfileId }]);
+    });
+
+    it("does not read party accounts at all once the slot is already ready (no unnecessary account read)", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, [
+        { usage: "funding", status: "active", financialAccount: { status: "verified" } },
+        { usage: "payout", status: "active", financialAccount: { status: "verified" } },
+      ]);
+      mandates.active.add(agreementId);
+
+      await progressServiceWithPartyAccounts.getProgress(agreementId, creditorUserId);
+      await progressServiceWithPartyAccounts.getProgress(agreementId, debtorUserId);
+      expect(partyAccounts.calls).toEqual([]);
+    });
+
+    it("unaffected callers (no partyAccounts wired) keep the pre-existing 'Set up...' behavior unchanged — purely additive, opt-in dependency", async () => {
+      const { agreementId, creditorUserId } = await createAgreement();
+      const relationshipId = randomUUID();
+      ctx.agreements.byId.get(agreementId)!.relationshipId = relationshipId;
+      relationshipPaymentMethods.byRelationship.set(relationshipId, []);
+
+      const step = (await progressService.getProgress(agreementId, creditorUserId)).steps.find((s) => s.key === "payment_method");
+      expect(step?.cta).toEqual({ label: "Set up payout account", href: "/payment-methods" });
     });
   });
 

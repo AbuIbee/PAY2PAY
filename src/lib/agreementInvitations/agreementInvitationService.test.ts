@@ -15,7 +15,11 @@ function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
     firstPaymentMinorUnits: 10_000,
     installmentAmountMinorUnits: 10_000,
     frequency: "weekly",
-    firstPaymentDate: "2026-09-01",
+    // Ordinary fixture default — always a safe distance in the future (never a hard-coded date that
+    // eventually lapses into the past and starts failing every test that doesn't care about the
+    // date-validation rule itself). Tests that deliberately exercise isPastDate's own boundary
+    // (below) compute "yesterday"/"today" relative to Date.now() directly, unaffected by this default.
+    firstPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
     feeAllocation: "debtor_pays",
     earlyPayoffTerms: "May pay off early with no penalty.",
     hardshipRules: "Contact the other party to discuss.",

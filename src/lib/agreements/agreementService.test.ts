@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ForbiddenError, ValidationError } from "@/lib/errors";
+import { ForbiddenError, ProfileIncompleteError, ValidationError } from "@/lib/errors";
 import type { CreateDraftInput, DraftTermsInput } from "./agreementService";
-import { createTestAgreementService } from "./testFakes";
+import { createTestAgreementService, FakeAgreementPartyNameReader } from "./testFakes";
 
 function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
   return {
@@ -959,4 +959,127 @@ describe("AgreementService", () => {
       });
     },
   );
+
+  describe("Production defect remediation (agreement participation requires a usable name)", () => {
+    async function createTwoPersonalPartyDraft(localCtx: ReturnType<typeof createTestAgreementService>) {
+      const creditorUserId = randomUUID();
+      const debtorUserId = randomUUID();
+      const creditorProfileId = randomUUID();
+      const debtorProfileId = randomUUID();
+      localCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
+      localCtx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+      const created = await localCtx.agreementService.createDraft({
+        creatorUserId: debtorUserId,
+        creditor: { kind: "personal", id: creditorProfileId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      return { agreementId: created.agreement.id, creditorUserId, debtorUserId, creditorProfileId, debtorProfileId };
+    }
+
+    it("blocks acknowledgeDebt with ProfileIncompleteError when the debtor's own personal profile has no first/last name", async () => {
+      const partyNames = new FakeAgreementPartyNameReader();
+      const localCtx = createTestAgreementService(undefined, undefined, undefined, undefined, partyNames);
+      const { agreementId, debtorUserId } = await createTwoPersonalPartyDraft(localCtx);
+      await localCtx.agreementService.submitDraft(agreementId, debtorUserId);
+      partyNames.setIncomplete(debtorUserId);
+
+      await expect(localCtx.agreementService.acknowledgeDebt(agreementId, debtorUserId)).rejects.toThrow(ProfileIncompleteError);
+      const agreement = await localCtx.agreements.findById(agreementId);
+      expect(agreement?.status).toBe("awaiting_debtor_acknowledgment"); // unchanged — the gate blocked the transition
+    });
+
+    it("allows acknowledgeDebt once the debtor's own profile has a first and last name", async () => {
+      const partyNames = new FakeAgreementPartyNameReader();
+      const localCtx = createTestAgreementService(undefined, undefined, undefined, undefined, partyNames);
+      const { agreementId, debtorUserId } = await createTwoPersonalPartyDraft(localCtx);
+      await localCtx.agreementService.submitDraft(agreementId, debtorUserId);
+      // partyNames defaults to "complete" for every user until setIncomplete is called.
+
+      await expect(localCtx.agreementService.acknowledgeDebt(agreementId, debtorUserId)).resolves.toBeUndefined();
+      const agreement = await localCtx.agreements.findById(agreementId);
+      expect(agreement?.status).toBe("awaiting_creditor_acceptance");
+    });
+
+    it("blocks creditorDecide's ACCEPT specifically (never reject/counter) when the creditor's own profile has no name", async () => {
+      const partyNames = new FakeAgreementPartyNameReader();
+      const localCtx = createTestAgreementService(undefined, undefined, undefined, undefined, partyNames);
+      const { agreementId, creditorUserId, debtorUserId } = await createTwoPersonalPartyDraft(localCtx);
+      await localCtx.agreementService.submitDraft(agreementId, debtorUserId);
+      await localCtx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
+      partyNames.setIncomplete(creditorUserId);
+
+      await expect(
+        localCtx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" }),
+      ).rejects.toThrow(ProfileIncompleteError);
+
+      // Reject is a walk-away action, not a commitment — must not require a complete profile.
+      await expect(
+        localCtx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "reject", reason: "changed my mind" }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("allows creditorDecide ACCEPT once the creditor's own profile has a first and last name", async () => {
+      const partyNames = new FakeAgreementPartyNameReader();
+      const localCtx = createTestAgreementService(undefined, undefined, undefined, undefined, partyNames);
+      const { agreementId, creditorUserId, debtorUserId } = await createTwoPersonalPartyDraft(localCtx);
+      await localCtx.agreementService.submitDraft(agreementId, debtorUserId);
+      await localCtx.agreementService.acknowledgeDebt(agreementId, debtorUserId);
+
+      await expect(
+        localCtx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" }),
+      ).resolves.toBeUndefined();
+      const agreement = await localCtx.agreements.findById(agreementId);
+      expect(agreement?.status).toBe("awaiting_signatures");
+    });
+
+    it("never gates a business party, even if the acting user's own name reader would report incomplete", async () => {
+      const partyNames = new FakeAgreementPartyNameReader();
+      const localCtx = createTestAgreementService(undefined, undefined, undefined, undefined, partyNames);
+      const creditorUserId = randomUUID();
+      const debtorUserId = randomUUID();
+      const creditorBusinessId = randomUUID();
+      const debtorProfileId = randomUUID();
+      localCtx.profileOwners.set("business", creditorBusinessId, creditorUserId);
+      localCtx.profileOwners.set("personal", debtorProfileId, debtorUserId);
+      partyNames.setIncomplete(creditorUserId); // would block a PERSONAL creditor — must not block this business one.
+
+      const created = await localCtx.agreementService.createDraft({
+        creatorUserId: debtorUserId,
+        creditor: { kind: "business", id: creditorBusinessId },
+        debtor: { kind: "personal", id: debtorProfileId },
+        ...baseTerms(),
+      });
+      await localCtx.agreementService.submitDraft(created.agreement.id, debtorUserId);
+      await localCtx.agreementService.acknowledgeDebt(created.agreement.id, debtorUserId);
+
+      await expect(
+        localCtx.agreementService.creditorDecide({ agreementId: created.agreement.id, actingUserId: creditorUserId, decision: "accept" }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a caller that omits partyNames (most existing tests, including the outer ctx) never gates — purely additive, opt-in dependency", async () => {
+      const { agreementId, creditorUserId, debtorUserId } = await createTwoPersonalPartyDraft(ctx);
+      await ctx.agreementService.submitDraft(agreementId, debtorUserId);
+      await expect(ctx.agreementService.acknowledgeDebt(agreementId, debtorUserId)).resolves.toBeUndefined();
+      await expect(
+        ctx.agreementService.creditorDecide({ agreementId, actingUserId: creditorUserId, decision: "accept" }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("existing agreement remains fully accessible (getAgreement never blocked) while profile completion is required for a gated action", async () => {
+      const partyNames = new FakeAgreementPartyNameReader();
+      const localCtx = createTestAgreementService(undefined, undefined, undefined, undefined, partyNames);
+      const { agreementId, creditorUserId, debtorUserId } = await createTwoPersonalPartyDraft(localCtx);
+      await localCtx.agreementService.submitDraft(agreementId, debtorUserId);
+      partyNames.setIncomplete(debtorUserId);
+      await expect(localCtx.agreementService.acknowledgeDebt(agreementId, debtorUserId)).rejects.toThrow(ProfileIncompleteError);
+
+      // The agreement itself stays fully readable by either party — only the gated action is blocked.
+      const asDebtor = await localCtx.agreementService.getAgreement(agreementId, debtorUserId);
+      expect(asDebtor.agreement.id).toBe(agreementId);
+      const asCreditor = await localCtx.agreementService.getAgreement(agreementId, creditorUserId);
+      expect(asCreditor.agreement.id).toBe(agreementId);
+    });
+  });
 });
