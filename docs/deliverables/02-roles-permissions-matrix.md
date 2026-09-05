@@ -35,13 +35,18 @@ Business manager on a separate verified business profile — Section 18).
 | Tier | Required for | Requirements |
 |---|---|---|
 | Basic | Signup, browsing, receiving an invitation | Verified email, verified phone, password/passkey, basic profile |
-| Full (personal) | Signing an agreement, receiving money, activating payments | Legal name, DOB, residential address, government ID, selfie/liveness, bank-account ownership, payment-provider approval |
+| Full (personal) | Receiving money, activating payments | Legal name, DOB, residential address, government ID, selfie/liveness, bank-account ownership, payment-provider approval |
 | Full (business) | Same triggers, for a business profile | Legal business name, entity type, EIN/SSN, business address, authorized representative, beneficial-owner info where required, verified business bank account, payment-provider business verification |
 
-All roles below that can sign, receive funds, or approve financial terms require **Full**
-verification at the relevant tier (personal or business) in addition to being 18+. Verification
-failure blocks activation of the role's financial capabilities (Section 17) — it does not block
-account creation itself.
+All roles below that can receive funds or activate payment capability require **Full** verification
+at the relevant tier (personal or business) in addition to being 18+. Verification failure blocks
+activation of the role's financial capabilities (Section 17) — it does not block account creation
+itself. Creating, negotiating, reviewing, accepting, or signing agreement terms does not by itself
+require Full verification merely because the terms are financial — only the specific action of
+receiving funds or activating payment capability does. Signing has its own separate safeguards
+(fresh step-up/MFA, usable profile name where applicable, agreement-party authorization, business
+signing authority where applicable) — see Section 26/27. Full verification and step-up/MFA are
+separate requirements.
 
 ## 3. Permissions matrix
 
@@ -65,8 +70,10 @@ Legend: ✅ = can do by default • ⚙️ = configurable (owner-defined, per Se
 ## 4. Role detail
 
 **Personal user.** Base identity for an individual. Holds one personal profile (Section 18). Can
-hold multiple agreement-scoped roles across different agreements. Cannot sign, receive funds, or
-activate payments until Full personal verification is complete (Section 17).
+hold multiple agreement-scoped roles across different agreements. Signing is not blocked solely by
+the absence of Full personal verification — it is subject to its own separate safeguards (fresh
+step-up/MFA, usable profile name, agreement-party authorization; see Section 26/27). Cannot receive
+funds or activate payments until Full personal verification is complete (Section 17).
 
 **Borrower.** Assigned per agreement to whichever party owes the money. Must formally acknowledge
 the debt's existence, reason, amount, prior payments, and remaining balance before the agreement

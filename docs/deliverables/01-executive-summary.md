@@ -27,8 +27,9 @@ or a Sharia supervisory body. See open decision #1.
 
 The platform supports four repayment relationship shapes: personal-to-personal,
 business-to-consumer, consumer-to-business, and business-to-business — with B2B agreements
-requiring both sides to act through separately verified business profiles with an authorized
-representative.
+requiring both sides to act through separately identified business profiles, each with an
+authorized representative. Business identity verification is required before a business can
+receive funds or activate payment capability, not before it can act or sign.
 
 ## Target Users
 

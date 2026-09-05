@@ -64,7 +64,7 @@ Each successful payment should move through a qualified payment processor from t
 
 Recipients receive money only as each installment successfully clears.
 
-The platform supports personal-to-personal, business-to-consumer, consumer-to-business where appropriate, and business-to-business repayment agreements. In a B2B agreement, both parties act through separately verified business profiles, and each organization designates an authorized representative with permission to negotiate, approve, sign, amend, settle, and manage the agreement.
+The platform supports personal-to-personal, business-to-consumer, consumer-to-business where appropriate, and business-to-business repayment agreements. In a B2B agreement, both parties act through separately identified business profiles, and each organization designates an authorized representative with permission to negotiate, approve, sign, amend, settle, and manage the agreement. Business identity verification is not a prerequisite to negotiate, approve, or sign — each business separately completes it before that business can receive money or activate payment capability (Section 17).
 
 2. Ethical and Islamic-finance positioning
 
@@ -532,7 +532,7 @@ Basic signup requires:
 - Password or passkey
 - Basic profile
 
-Before signing, receiving money, or activating payments, require full verification:
+Before receiving money or activating payments, require full verification:
 
 - Legal name
 - Date of birth
@@ -541,6 +541,14 @@ Before signing, receiving money, or activating payments, require full verificati
 - Selfie or liveness verification
 - Bank-account ownership
 - Payment-provider approval
+
+Signing an agreement does not by itself require full verification. Signing has its own safeguards
+(Section 26/27): authenticated session, required usable profile name, a fresh step-up/MFA
+challenge, agreement-party authorization, and business signing authority for business signers.
+Step-up/MFA verification performed at signing is not the same thing as full identity/KYC
+verification, and completing one does not satisfy the other. Full verification remains required,
+unchanged, before either party's first payment can be created, before receiving money, and before
+activating payment capability.
 
 All users must be 18 or older.
 
@@ -615,8 +623,9 @@ Examples include:
 
 For every B2B agreement:
 
-- Both parties must act through separately verified business profiles.
-- Both businesses must complete business identity verification.
+- Both parties must act through separately identified business profiles.
+- Each business must complete business identity verification before it can receive money or
+  activate payment capability — not a prerequisite to negotiate, approve, or sign.
 - Each business must designate an authorized representative.
 - The application must verify that the representative has permission to create, negotiate, approve, sign, amend, settle, and manage the agreement.
 - The agreement must record the legal name of each business.
@@ -767,7 +776,8 @@ The secure link must:
 - Be single-use after acceptance
 - Reveal no sensitive debt details before authentication
 - Require account creation or login
-- Require identity verification before signing
+- Require full identity verification before the invited party can receive money or activate
+  payments — not merely to sign (Section 17)
 - Bind to the intended phone number or email when available
 - Record creation, delivery, open, acceptance, expiration, and revocation events
 

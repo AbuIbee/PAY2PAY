@@ -311,9 +311,12 @@ version.
 ## IDV — Identity verification (Spec §17)
 
 **FR-IDV-001 — Tiered verification.** Basic signup requires verified email, verified phone,
-password/passkey, and a basic profile; signing, receiving money, or activating payments requires
-Full verification (legal name, DOB, residential address, government ID, selfie/liveness, bank
-ownership, payment-provider approval).
+password/passkey, and a basic profile; receiving money or activating payments requires Full
+verification (legal name, DOB, residential address, government ID, selfie/liveness, bank
+ownership, payment-provider approval). Signing an agreement does not by itself require Full
+verification — see FR-SIG requirements and FR-MFA-001 for the separate, signing-specific
+safeguards (step-up/MFA, business signing authority). Step-up/MFA is not the same thing as Full
+identity/KYC verification.
 
 **FR-IDV-002 — Business verification tier.** Business profiles additionally require legal business
 name, entity type, EIN/SSN as applicable, business address, authorized representative, beneficial
@@ -324,8 +327,8 @@ verification.
 activation.
 
 **FR-IDV-004 — Verification failure blocks activation.** A failed identity or business verification
-blocks the specific gated action (signing, receiving funds, activating payments) without deleting
-existing account data.
+blocks the specific gated action (receiving funds, activating payments) without deleting existing
+account data. It does not block signing, which is gated separately (FR-MFA-001, FR-SIG-001).
 
 ## PROF — Personal & business profiles (Spec §18)
 
@@ -348,7 +351,9 @@ review — not automated account-type detection alone.
 ## B2B — Business-to-business (Spec §18A)
 
 **FR-B2B-001 — Dual business verification.** Both parties to a B2B agreement act through separately
-verified business profiles that have each completed business identity verification (FR-IDV-002).
+identified business profiles. Business identity verification (FR-IDV-002) is not a prerequisite to
+negotiate, accept, or sign (see FR-B2B-002 for the actual signing-authority check); each business
+must have completed it before that business can receive funds or activate payment capability.
 
 **FR-B2B-002 — Authorized representative validation.** Each business designates an authorized
 representative, and the system verifies that representative's permission to
@@ -449,8 +454,9 @@ link over email, SMS, WhatsApp, or another messaging application.
 
 **FR-INV-002 — Link properties.** Every invitation link expires, is revocable, becomes single-use
 after acceptance, reveals no sensitive debt detail before authentication, requires account
-creation/login, requires identity verification before signing, and binds to the intended phone
-number or email where available.
+creation/login, and binds to the intended phone number or email where available. Full identity
+verification is not required merely to sign via the link — it remains required (FR-IDV-001) before
+the invited party can receive funds or activate payment capability.
 
 **FR-INV-003 — Full invitation event log.** The system records link creation, delivery, open,
 acceptance, expiration, and revocation events.

@@ -17,8 +17,8 @@ shapes are simply the combinations of that pair, not four different code paths:
 |---|---|---|---|
 | Personal | Personal | P2P | Both sides Full personal verification (FR-IDV-001). |
 | Business | Personal | B2C | Creditor completes business (KYB) verification; payout to business bank account (FR-B2B-004 pattern applied to a single-business agreement); business pricing applies to creditor. |
-| Personal | Business | C2B | Debtor business completes KYB verification and designates an authorized representative for acknowledgment/signing (FR-B2B-002 pattern applied to a single-business agreement). |
-| Business | Business | B2B | Both sides complete KYB verification and each designates a verified authorized representative (FR-B2B-001–010); per-business audit separation (FR-B2B-007); B2B dashboards (FR-B2B-010). |
+| Personal | Business | C2B | Debtor business designates an authorized representative for acknowledgment/signing (signing-authority check, FR-B2B-002 pattern applied to a single-business agreement); that business separately completes KYB verification before it can activate payment capability, not as a prerequisite to sign. |
+| Business | Business | B2B | Each side designates an authorized representative whose signing authority is verified (FR-B2B-002); each business separately completes KYB verification before it can receive funds or activate payment capability, not as a prerequisite to sign (FR-B2B-001–010); per-business audit separation (FR-B2B-007); B2B dashboards (FR-B2B-010). |
 
 Every component below (Agreement Service, Verification Service, Audit Service, Notification
 Service, dashboards) is designed against this single `creditor_profile` / `debtor_profile` model
@@ -239,17 +239,32 @@ sequenceDiagram
     participant PAYS as Payment Service
     participant AUDIT as Audit Service
 
+    Note over Initiator,Counterparty: AGREEMENT FORMATION
     Initiator->>AGR: Create draft (terms, parties, schedule)
     AGR->>AUDIT: log draft_created
     AGR->>Counterparty: Invitation (Invitation Service)
-    Counterparty->>VER: Complete Basic/Full verification (if borrower)
+    Counterparty->>VER: Complete Basic verification (authentication/account, if not already a user)
+
+    Note over Initiator,AGR: ACKNOWLEDGMENT / ACCEPTANCE
     Counterparty->>AGR: Acknowledge debt (if borrower) / Accept (if creditor)
     AGR->>AUDIT: log acknowledgment/acceptance
     Initiator->>AGR: Final review confirmed
     Counterparty->>AGR: Final review confirmed
-    AGR->>AGR: Capture dual signatures (FR-SIG-001), MFA-gated
+
+    Note over AGR: SIGNING SAFEGUARDS
+    AGR->>AGR: Fresh step-up/MFA challenge, agreement-party authorization, business signing-authority check (where applicable)
+    AGR->>AGR: Capture dual signatures (FR-SIG-001)
     AGR->>AUDIT: log signed, create AgreementVersion (immutable)
+
+    Note over AGR: SIGNED AGREEMENT — no full identity/business verification required to reach this point
+    Note over Initiator,VER: FULL FINANCIAL KYC/KYB GATE (distinct from signing)
+    Initiator->>VER: Complete Full verification (before receiving funds / activating payment)
+    Counterparty->>VER: Complete Full verification (before receiving funds / activating payment)
+
+    Note over AGR,PAYS: PAYMENT ACTIVATION / FUNDS
     AGR->>PAYS: Request first payment
+    PAYS->>VER: Confirm payer and recipient are FULL_VERIFIED (isFullyVerified)
+    VER-->>PAYS: Both FULL_VERIFIED (blocks with a validation error otherwise — see PaymentService.createPayment)
     PAYS->>PAYS: Idempotent charge attempt via processor
     PAYS-->>AGR: Payment cleared
     AGR->>AGR: Transition to Active; activate recurring schedule

@@ -23,8 +23,10 @@ const signSchema = z.object({
 /**
  * Sprint 6 (docs/sprints/SPRINT_06_ElectronicSignatures_PDFRecords.md): supersedes Sprint 5's raw
  * `agreementService.signAgreement` call — signing now goes through SignatureService, which gates on
- * a fresh step-up challenge and full identity/business verification before ever calling
- * signAgreement (unchanged), and captures the full evidence bundle this sprint requires.
+ * a fresh step-up challenge and, for a business signer, valid signing authority before ever calling
+ * signAgreement (unchanged), and captures the full evidence bundle this sprint requires. Per the
+ * later "Remove Step 4 — Identity Verification" decision (see SignatureService's own doc comment),
+ * this gate does not include full identity/KYC verification.
  */
 export function createAgreementSignHandler(authService: AuthService, signatureService: SignatureService) {
   return async function handleSign(request: NextRequest): Promise<Response> {

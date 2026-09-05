@@ -13,9 +13,14 @@ identical whether it's P2P, B2C, C2B, or B2B, and the same is true for Payment, 
 Hardship, Partial-payment, Settlement, Dispute, and Invitation. Two machines have a B2B-specific
 detail called out explicitly where it applies:
 
-- **Business verification** (Section 5) applies once per `business_profile`, so a B2B agreement
-  requires it to have completed successfully **twice** — once for each side — before either can
-  sign (FR-B2B-001); the machine itself is unchanged per business.
+- **Business verification** (Section 5) applies once per `business_profile`; full verification is
+  required before either business can receive funds or activate payments (FR-B2B-001), but is not a
+  prerequisite for reaching `AwaitingSignatures` or for a business's authorized representative to
+  sign. Signing remains subject to every other applicable safeguard: authenticated session, usable
+  profile-name information where applicable, a fresh step-up/MFA challenge, agreement-party
+  authorization, valid agreement state/version and signing order, prevention of a duplicate
+  signature, and — for a business signer — the signing-authority check (FR-B2B-002) described next.
+  None of those safeguards are removed or weakened. The machine itself is unchanged per business.
 - **Identity verification** for a B2B signer is about the **authorized representative's** personal
   identity plus a separate authority check (FR-B2B-002) — the person-level machine (Section 5) is
   the same machine, just paired with the business-level authority validation described in its notes.
@@ -285,13 +290,16 @@ stateDiagram-v2
     Verified --> [*]
 ```
 
-**B2B note:** a B2B agreement's `AwaitingSignatures` (Agreement lifecycle) cannot be reached unless
-**both** businesses independently reach `Verified` here (FR-B2B-001) — this machine runs once per
-`business_profile`, not once per agreement.
+**B2B note:** reaching `AwaitingSignatures` (Agreement lifecycle) does not require either business
+to have reached `Verified` here — full business verification is not a prerequisite to sign. Both
+businesses must independently reach `Verified` here (FR-B2B-001) before either can receive funds or
+activate live payment capability; this machine runs once per `business_profile`, not once per
+agreement.
 
 **Invalid transitions:** `ProfileCreated` alone (no documents) never satisfies the Full-verification
-gate required to sign/receive funds (FR-IDV-002); a change of authorized representative
-(FR-B2B-009) does not reset `Verified` back to an earlier state.
+gate required to receive funds or activate payments (FR-IDV-002) — this gate does not apply to
+signing, which has its own separate safeguards (Section 0 above); a change of authorized
+representative (FR-B2B-009) does not reset `Verified` back to an earlier state.
 
 ## 10. Appeal
 
