@@ -3,13 +3,17 @@ import { NextRequest } from "next/server";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { createTestRelationshipServices } from "@/lib/relationships/testFakes";
-import { createExpireRelationshipInvitationsHandler } from "./route";
+import { createExpireRelationshipInvitationsHandler, GET, POST } from "./route";
 
 const TEST_CRON_SECRET = "test-cron-secret-0123456789abcdef";
 
-function postWithAuth(authHeader?: string) {
+function requestWithAuth(method: "GET" | "POST", authHeader?: string) {
   const headers: Record<string, string> = authHeader ? { authorization: authHeader } : {};
-  return new NextRequest("http://localhost/api/scheduler/expire-relationship-invitations", { method: "POST", headers });
+  return new NextRequest("http://localhost/api/scheduler/expire-relationship-invitations", { method, headers });
+}
+
+function postWithAuth(authHeader?: string) {
+  return requestWithAuth("POST", authHeader);
 }
 
 describe("POST /api/scheduler/expire-relationship-invitations", () => {
@@ -138,5 +142,48 @@ describe("POST /api/scheduler/expire-relationship-invitations", () => {
     // Relationship state consequence (cancellation) is also not duplicated/erroring on replay.
     const relationship = await ctx.relationships.findById(due.relationship.id);
     expect(relationship?.status).toBe("cancelled");
+  });
+
+  describe("Vercel Cron GET support (remediation 01)", () => {
+    it("exports GET as the exact same handler reference as POST — no duplicated scheduler logic", () => {
+      expect(GET).toBe(POST);
+    });
+
+    it("rejects a GET request with no authorization header (403) and does not expire anything", async () => {
+      const due = await createDueInvitation("get-no-auth@example.com");
+      const stored = ctx.invitations.byId.get(due.invitation.id);
+      if (stored) stored.expiresAt = new Date(Date.now() - 1000);
+
+      const response = await handler()(requestWithAuth("GET"));
+      expect(response.status).toBe(403);
+      const updated = await ctx.invitations.findById(due.invitation.id);
+      expect(updated?.status).toBe("sent");
+    });
+
+    it("rejects a GET request with an invalid bearer token (403) and does not expire anything", async () => {
+      const due = await createDueInvitation("get-bad-auth@example.com");
+      const stored = ctx.invitations.byId.get(due.invitation.id);
+      if (stored) stored.expiresAt = new Date(Date.now() - 1000);
+
+      const response = await handler()(requestWithAuth("GET", "Bearer not-the-real-secret"));
+      expect(response.status).toBe(403);
+      const updated = await ctx.invitations.findById(due.invitation.id);
+      expect(updated?.status).toBe("sent");
+    });
+
+    it("accepts an authenticated GET request (200) and expires due invitations, identically to POST", async () => {
+      const due = await createDueInvitation("get-due@example.com");
+      const stored = ctx.invitations.byId.get(due.invitation.id);
+      if (stored) stored.expiresAt = new Date(Date.now() - 1000);
+
+      const response = await handler()(requestWithAuth("GET", `Bearer ${TEST_CRON_SECRET}`));
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.status).toBe("ok");
+      expect(body.expired).toBe(1);
+
+      const updated = await ctx.invitations.findById(due.invitation.id);
+      expect(updated?.status).toBe("expired");
+    });
   });
 });

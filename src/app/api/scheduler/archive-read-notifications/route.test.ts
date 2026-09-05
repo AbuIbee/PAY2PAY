@@ -2,14 +2,18 @@ import { NextRequest } from "next/server";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { createTestNotificationService } from "@/lib/notify/testFakes";
-import { createArchiveReadNotificationsHandler } from "./route";
+import { createArchiveReadNotificationsHandler, GET, POST } from "./route";
 
 const TEST_CRON_SECRET = "test-cron-secret-0123456789abcdef";
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
-function postWithAuth(authHeader?: string) {
+function requestWithAuth(method: "GET" | "POST", authHeader?: string) {
   const headers: Record<string, string> = authHeader ? { authorization: authHeader } : {};
-  return new NextRequest("http://localhost/api/scheduler/archive-read-notifications", { method: "POST", headers });
+  return new NextRequest("http://localhost/api/scheduler/archive-read-notifications", { method, headers });
+}
+
+function postWithAuth(authHeader?: string) {
+  return requestWithAuth("POST", authHeader);
 }
 
 describe("POST /api/scheduler/archive-read-notifications", () => {
@@ -94,5 +98,54 @@ describe("POST /api/scheduler/archive-read-notifications", () => {
     const second = await handler()(postWithAuth(`Bearer ${TEST_CRON_SECRET}`));
     const secondBody = await second.json();
     expect(secondBody.archived).toBe(0);
+  });
+
+  describe("Vercel Cron GET support (remediation 01)", () => {
+    it("exports GET as the exact same handler reference as POST — no duplicated scheduler logic", () => {
+      expect(GET).toBe(POST);
+    });
+
+    it("rejects a GET request with no authorization header (403) and does not archive anything", async () => {
+      ctx.contacts.set("user-1", "user1@example.com");
+      await ctx.notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "get-no-auth" });
+      const [group] = await ctx.notificationService.listCurrentGroupedForUser("user-1");
+      await ctx.notificationService.markRead("user-1", group!.inAppId!);
+      ctx.events.byId.get(group!.inAppId!)!.readAt = new Date(Date.now() - (SEVEN_DAYS_MS + 60_000));
+
+      const response = await handler()(requestWithAuth("GET"));
+      expect(response.status).toBe(403);
+      const row = [...ctx.events.byId.values()].find((r) => r.dedupeKey?.startsWith("get-no-auth:"));
+      expect(row?.archivedAt).toBeNull();
+    });
+
+    it("rejects a GET request with an invalid bearer token (403) and does not archive anything", async () => {
+      ctx.contacts.set("user-1", "user1@example.com");
+      await ctx.notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "get-bad-auth" });
+      const [group] = await ctx.notificationService.listCurrentGroupedForUser("user-1");
+      await ctx.notificationService.markRead("user-1", group!.inAppId!);
+      ctx.events.byId.get(group!.inAppId!)!.readAt = new Date(Date.now() - (SEVEN_DAYS_MS + 60_000));
+
+      const response = await handler()(requestWithAuth("GET", "Bearer not-the-real-secret"));
+      expect(response.status).toBe(403);
+      const row = [...ctx.events.byId.values()].find((r) => r.dedupeKey?.startsWith("get-bad-auth:"));
+      expect(row?.archivedAt).toBeNull();
+    });
+
+    it("accepts an authenticated GET request (200) and archives eligible notifications, identically to POST", async () => {
+      ctx.contacts.set("user-1", "user1@example.com");
+      await ctx.notificationService.notify({ recipientUserId: "user-1", notificationType: "agreement_signed", payload: {}, dedupeKey: "get-due-for-archive" });
+      const [group] = await ctx.notificationService.listCurrentGroupedForUser("user-1");
+      await ctx.notificationService.markRead("user-1", group!.inAppId!);
+      ctx.events.byId.get(group!.inAppId!)!.readAt = new Date(Date.now() - (SEVEN_DAYS_MS + 60_000));
+
+      const response = await handler()(requestWithAuth("GET", `Bearer ${TEST_CRON_SECRET}`));
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.status).toBe("ok");
+      expect(body.archived).toBe(1);
+
+      const row = [...ctx.events.byId.values()].find((r) => r.dedupeKey?.startsWith("get-due-for-archive:"));
+      expect(row?.archivedAt).not.toBeNull();
+    });
   });
 });

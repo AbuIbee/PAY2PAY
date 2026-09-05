@@ -51,3 +51,7 @@ async function handlePost(request: NextRequest): Promise<Response> {
 }
 
 export const POST = withErrorHandling("scheduler_expire_negotiations", handlePost);
+// Vercel Cron invokes the configured path with HTTP GET (see vercel.json); POST is kept for
+// backward compatibility. Same handler reference for both — no duplicated business logic, and the
+// CRON_SECRET check inside handlePost runs identically regardless of which verb reached it.
+export const GET = POST;
