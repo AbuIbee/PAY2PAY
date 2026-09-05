@@ -42,16 +42,30 @@ process/operational risk, not something the technical architecture alone elimina
 **Scenario:** Someone signs on behalf of another party without authority, or a legitimate signer
 later falsely disclaims a valid signature.
 
-**Mitigations:**
+**Mitigations:** these controls support attribution and evidentiary integrity for a signature
+independent of full KYC/KYB — a signature can operationally occur before full identity verification
+completes:
+- Authenticated account/session — signing requires a logged-in, session-verified user.
+- A fresh step-up/MFA challenge immediately before signing (FR-MFA-001), separate from and not
+  satisfied by full KYC.
+- Agreement-party authorization — only a party the agreement actually names may sign
+  (`authorizeEitherParty`), and, for a business signer, a separate signing-authority check
+  (account owner or an authorized staff representative, FR-B2B-002).
+- Profile identity/name information already on file (usable first/last name where applicable).
 - Full signature-event capture — consent, identity attribution, IP, device, timestamp, timezone,
   auth method, document hash (FR-SIG-001).
-- Tamper-evident hashing and immutable version history (FR-SIG-003).
-- MFA gate on signing itself (FR-MFA-001).
+- Tamper-evident hashing, immutable version history, and agreement/version integrity checks
+  (FR-SIG-003).
 - Invitation binding to the intended contact prevents an unintended person from ever reaching the
   signing flow (FR-INV-002/004).
 
-**Residual risk:** Ultimate signer-identity assurance is bounded by the KYC/KYB provider's own
-accuracy — provider not yet selected (open decision #16).
+**Residual risk:** Ultimate assurance that the authenticated account belongs to the real-world
+person it claims to be is bounded by account-recovery/session-compromise risk (see Account
+takeover, #1), not by KYC/KYB provider accuracy — full identity/KYC verification is not part of the
+signing gate. Full KYC/KYB, where later required for that party to receive funds or activate
+payment capability, adds an additional, later financial/payment identity assurance layer — its
+provider is not yet selected (open decision #16) — but is not the control that supports the
+signature's attribution and evidentiary integrity; that role belongs to the mitigations above.
 
 ## 3. Altered agreements
 
@@ -220,7 +234,9 @@ or creditor — e.g., to defraud them or launder funds through a sham repayment.
 
 **Mitigations:** The borrower must independently authenticate and formally acknowledge the debt
 (FR-AGR-003) — an agreement cannot bind someone without their own verified participation; invitation
-binding (FR-INV-002); Full verification required before signing; FR-FRAUD-002 explicitly flags
+binding (FR-INV-002); MFA step-up gate and business signing-authority check on signing itself
+(FR-MFA-001, FR-SIG-001); Full identity/KYC verification required before either party's first
+payment can be created, not merely to sign (FR-IDV-001); FR-FRAUD-002 explicitly flags
 self-payments, collusive agreements, and circular payment activity.
 
 **Residual risk:** Cannot fully prevent two colluding *real, verified* identities from creating a
@@ -283,7 +299,7 @@ control, not eliminated by it alone.
 | # | Threat | STRIDE | Primary residual risk |
 |---|---|---|---|
 | 1 | Account takeover | S, E | SMS-fallback / social engineering |
-| 2 | Forged signatures | S, T, R | KYC/KYB provider accuracy (open decision #16) |
+| 2 | Forged signatures | S, T, R | Account-recovery / session-compromise risk (see #1) |
 | 3 | Altered agreements | T | DB/infra superuser access control (ops-level) |
 | 4 | Webhook spoofing | S, T | Signing-secret hygiene |
 | 5 | Payment replay | T, R | Implementation-time key discipline |

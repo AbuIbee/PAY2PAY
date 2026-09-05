@@ -20,13 +20,13 @@ referenced are those enumerated in Section 5; payment states are those enumerate
 5. Secure, expiring, single-use, revocable invitation link sent to the other party; link reveals no
    debt details before authentication and binds to the intended phone/email (Section 22).
 6. Other party opens the link, creates an account or logs in (Basic verification).
-7. If the recipient of the link is the **borrower**, they must complete **Full personal
-   verification** (Section 17) before acknowledging the debt. Status: **Awaiting payer
-   acknowledgment**.
+7. If the recipient of the link is the **borrower**, status becomes **Awaiting payer
+   acknowledgment**. Full personal verification (Section 17) is not required merely to acknowledge
+   or sign — see step 13 below for where it is actually required.
 8. Borrower reviews and formally acknowledges: that the debt exists, its reason, amount, prior
    payments, remaining balance, terms, and payment authorization (Section 3).
-9. Status moves to **Awaiting recipient acceptance**; the creditor reviews and accepts the terms,
-   completing Full verification if not already done.
+9. Status moves to **Awaiting recipient acceptance**; the creditor reviews and accepts the terms.
+   Accepting and signing do not require Full verification.
 10. Status moves to **Awaiting signatures**. A final review screen is shown to both parties
     summarizing what's owed, why, first/later payments, dates, fees, payment method, total borrower
     outflow, net recipient proceeds, cancellation rules, ACH revocation rights, amendment rules, and
@@ -35,8 +35,10 @@ referenced are those enumerated in Section 5; payment states are those enumerate
     attribution, timestamp, timezone, IP, device, document hash, and authentication method captured.
 12. Status becomes **Signed**; the agreement locks and the original signed version is preserved
     immutably. Both parties receive a downloadable, tamper-evident PDF (Section 27).
-13. Status becomes **First payment pending**; the mandatory first payment is collected via ACH or
-    debit card (Section 5, Section 6).
+13. Status becomes **First payment pending**; both parties must have completed **Full verification**
+    (Section 17) before this payment can be created — the point at which Full verification actually
+    gates this journey, not acknowledgment or signature. The mandatory first payment is collected
+    via ACH or debit card (Section 5, Section 6).
 14. First payment moves through the payment state machine (Scheduled → Submitted → Processing →
     Cleared) and, once cleared, is routed to the creditor via the processor (Payout pending → Paid
     out) (Section 7).
@@ -48,15 +50,18 @@ referenced are those enumerated in Section 5; payment states are those enumerate
 
 ## 2. Business invoice payment plan
 
-1. A verified **business profile** (Section 17, Section 18) initiates the draft as creditor for an
-   already-completed sale or service.
+1. An existing **business profile** (Section 18), shown here already at the Full verification tier
+   (Section 17), initiates the draft as creditor for an already-completed sale or service. Full KYB
+   is not required merely to create, negotiate, accept, or sign this agreement — only before that
+   business receives funds or activates payment capability (step 4 below).
 2. Agreement information includes the same required fields as Journey 1, plus legitimate original
    invoice components where applicable: product/service price, sales tax, shipping/delivery,
    installation, permit/filing costs (Section 4) — never charges added solely for paying over time.
 3. Invitation sent to the payer (consumer or another business) per the standard invitation flow
    (Section 22).
-4. Payer authenticates, and if a business, completes business verification (Section 17); if a
-   consumer, completes Full personal verification before signing.
+4. Payer authenticates. Business or personal Full verification (Section 17) is not required merely
+   to acknowledge or sign — it is required, as in Journey 1 step 13, before the first payment can be
+   created.
 5. Steps 8–16 of Journey 1 proceed identically (acknowledgment → acceptance → signatures → first
    payment → active schedule), with one difference: payouts route to the business's **verified
    business bank account** (Section 18A), and business pricing (annual fee, per-transaction fee,
@@ -78,7 +83,9 @@ referenced are those enumerated in Section 5; payment states are those enumerate
 
 1. The person owed money starts the draft and proposes terms (Section 3).
 2. Invitation sent to the borrower (Section 22).
-3. Borrower authenticates and completes Full verification if required.
+3. Borrower authenticates. Full verification (Section 17), if required, is not needed to
+   authenticate, acknowledge, or sign — it is required before the first payment can be created
+   (Journey 1 step 13).
 4. Regardless of who authored the draft, the **borrower must still formally acknowledge** the debt's
    existence, reason, amount, prior payments, remaining balance, terms, and payment authorization
    (Section 3) — creditor-authored terms are not binding on the borrower until acknowledged.
@@ -244,8 +251,9 @@ referenced are those enumerated in Section 5; payment states are those enumerate
 3. Business reviews the preview and confirms bulk **draft** creation — the import can only create
    drafts, never active agreements.
 4. Each resulting draft agreement then follows the standard Creditor-initiated proposal journey
-   (Journey 4) individually: its own borrower invitation, authentication, Full verification (if
-   required), acknowledgment, and signature.
+   (Journey 4) individually: its own borrower invitation, authentication, acknowledgment, and
+   signature. Full verification (if required, Section 17) is completed before that borrower's
+   first payment, not as a precondition to acknowledgment or signature.
 5. No imported agreement becomes active until its specific borrower has individually completed that
    full review-and-sign flow (Section 21) — bulk activation is explicitly prohibited.
 

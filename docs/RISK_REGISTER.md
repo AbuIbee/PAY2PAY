@@ -34,7 +34,7 @@ not implemented or verified — no application code exists yet.
 | ID | Risk | Severity | Current mitigation (design-level) | Residual concern | Linked reference |
 |---|---|---|---|---|---|
 | SEC-01 | Account takeover leading to unauthorized signing or payout redirection | High | MFA, session hygiene, device monitoring | SMS-fallback / social-engineering bypass | Security Model §1, §16 |
-| SEC-02 | Forged signature or repudiated signature dispute | High | Full signature-event capture, tamper-evident hashing | Bounded by KYC/KYB provider accuracy | Security Model §2; Open decision #16 |
+| SEC-02 | Forged signature or repudiated signature dispute | High | Authenticated session, fresh step-up/MFA, agreement-party and signing-authority authorization, full signature-event capture, tamper-evident hashing (none require full KYC/KYB) | Account-recovery / session-compromise risk (see SEC-01) | Security Model §2 |
 | SEC-03 | Signed agreement altered outside the amendment flow | Medium | DB-level immutability, admin prohibition, hash-chained audit | DB/infra superuser access control (ops-level, out of app scope) | Security Model §3 |
 | SEC-04 | Webhook spoofing triggers a false payment/payout state | Medium | Mandatory signature verification, state-machine enforcement | Depends on signing-secret hygiene | Security Model §4 |
 | SEC-05 | Cross-tenant data leakage between unrelated users/businesses | High | Dual-layer authorization (RLS + app layer) | New-endpoint implementation gaps at build time | Security Model §11 |

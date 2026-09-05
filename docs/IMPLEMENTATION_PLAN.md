@@ -71,22 +71,26 @@ for the borrower-acknowledgment / creditor-acceptance separation.
 ## Phase 2 — Identity & business verification
 
 **Goal:** Wire the Verification Service to a real (or, if the provider open decision is still
-unresolved, a mocked-but-swappable) KYC/KYB provider, gating Phase 1's signing step behind actual
-tier verification.
+unresolved, a mocked-but-swappable) KYC/KYB provider, gating Phase 3's payment-activation/
+fund-receipt steps behind actual tier verification — not Phase 1's signing step, which has its own
+separate safeguards (step-up/MFA, business signing authority) and does not require Full
+verification.
 
 **Features:** FR-IDV-001–004, `identity_verification_record` table, Identity/Business verification
 state machines (`docs/STATE_MACHINES.md` §8–9), age gate (FR-IDV-003).
 
-**Dependencies:** Phase 1 (signing exists to gate); **open decision #16** (KYC/KYB provider) —
-if unresolved, this phase proceeds against a mock provider behind the same interface, deferring
-only the *real* integration, not the internal design.
+**Dependencies:** Phase 1 (agreements and Full-verification-independent signing already exist);
+**open decision #16** (KYC/KYB provider) — if unresolved, this phase proceeds against a mock
+provider behind the same interface, deferring only the *real* integration, not the internal design.
 
 **Risks:** RISK FIN-04 / SEC threat "Synthetic identity" (`docs/SECURITY_MODEL.md` §15) — detection
 quality is provider-dependent; this phase's acceptance gate cannot fully close that risk until a
 real provider is integrated.
 
-**Acceptance gate:** A test user cannot reach the signing step from Phase 1 without completing Full
-verification; an underage test identity is blocked.
+**Acceptance gate:** A test user can still complete the full draft → acknowledge → accept → sign
+lifecycle from Phase 1 without completing Full verification; a test user cannot activate payment
+capability or receive funds without completing Full verification; an underage test identity is
+blocked from account activation.
 
 **Security review gate:** Confirm no raw ID/selfie data is stored outside the Verification
 Service's restricted path (NFR-PRIV-001).
