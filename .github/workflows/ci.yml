@@ -103,6 +103,40 @@ jobs:
           DATABASE_URL: postgres://ci:ci@localhost:5432/pay2pay_fresh_migration_test
         run: npm run db:fresh-migration-test
 
+  postgres-concurrency-test:
+    name: Postgres integrity & concurrency tests
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    # R03/R04/R05/R07 (DB integrity & concurrency hardening): runs the *.postgres.test.ts suites via
+    # `npm run test:postgres` (scripts/postgres-test-db.mjs), which provisions its own throwaway,
+    # uniquely-named Docker Postgres container (see that script's own doc comment for the full safety
+    # design), applies migrations, and tears the container down on every exit path — so this job needs
+    # nothing but Docker, which ubuntu-latest runners provide out of the box. Deliberately does NOT use
+    # a `services:` Postgres container (unlike fresh-migration-test above): the harness's own
+    # container-per-run isolation, ownership marker, and forbidden-port checks are exactly the
+    # behaviors this job exists to exercise, and they need real `docker` CLI access to do it.
+    # Never given DATABASE_URL, AUDIT_HASH_SECRET, or any other real secret — the harness generates its
+    # own disposable database URL, and vitest.postgres.setup.ts fills in test-only defaults for the
+    # rest; nothing here can reach Supabase or Vercel production.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Confirm Docker is available
+        run: docker version
+
+      - name: Run Postgres integrity & concurrency suites
+        run: npm run test:postgres
+
   schema-drift:
     name: Supabase schema drift check
     runs-on: ubuntu-latest

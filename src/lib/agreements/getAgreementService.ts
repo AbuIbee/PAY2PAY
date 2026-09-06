@@ -10,6 +10,7 @@ import { DrizzleAgreementPartyRepository } from "./drizzleAgreementPartyReposito
 import { DrizzleAgreementRepository } from "./drizzleAgreementRepository";
 import { DrizzleAgreementVersionRepository } from "./drizzleAgreementVersionRepository";
 import { DrizzleInstallmentScheduleItemRepository } from "./drizzleInstallmentScheduleItemRepository";
+import { DrizzleRevisionApplicationRepository } from "./drizzleRevisionApplicationRepository";
 import { DrizzleSigningApplicationRepository } from "./drizzleSigningApplicationRepository";
 import { getAgreementPartyNameReader } from "./getAgreementPartyNameReader";
 
@@ -57,6 +58,7 @@ export function getAgreementService(): AgreementService {
       staffService: getStaffService(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
       signing: new DrizzleSigningApplicationRepository(),
+      revisions: new DrizzleRevisionApplicationRepository(),
       notifications: getNotificationService(),
       connectionEstablisher,
       identitySnapshotter,

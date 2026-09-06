@@ -1,5 +1,4 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
 import type { AuditService } from "@/lib/audit/auditService";
 import type { MfaService } from "@/lib/auth/mfaService";
 import { ForbiddenError, StepUpRequiredError, ValidationError, ConflictError } from "@/lib/errors";
@@ -154,6 +153,27 @@ export interface RelationshipFinancialAccountRepository {
   listForRelationship(relationshipId: string): Promise<RelationshipFinancialAccountAssignmentWithAccount[]>;
   /** Manual UAT remediation (#10): every relationship currently using this account as an *active* funding/payout slot, regardless of relationship — the removal guard's source of truth for "would this break an in-flight transaction." */
   listActiveAssignmentsForAccount(financialAccountId: string): Promise<RelationshipFinancialAccountAssignmentRecord[]>;
+  /**
+   * R03 (DB integrity & concurrency hardening): the single atomic replacement boundary —
+   * supersedes `expectedExistingId` (when not null) and inserts the new active assignment inside
+   * ONE transaction, instead of `replaceAccount`'s previous two independent, non-transactional
+   * writes (`markSuperseded` then `insertAssignment`), where a failure between them could leave the
+   * slot permanently superseded with no active assignment at all. Real implementation
+   * (DrizzleRelationshipFinancialAccountRepository) additionally serializes concurrent callers for
+   * the same (relationshipId, usage) slot via a transaction-scoped advisory lock, and re-validates —
+   * AFTER acquiring that lock — that the slot's current active assignment still matches
+   * `expectedExistingId` (or is still absent, when null). Throws `ConflictError` when it no longer
+   * matches: someone else already replaced/assigned this slot between the caller's own earlier
+   * `findActiveAssignment` read and this write.
+   */
+  replaceAssignmentAtomically(input: {
+    relationshipId: string;
+    relationshipParticipantId: string;
+    financialAccountId: string;
+    usage: FinancialAccountUsage;
+    selectedByUserId: string;
+    expectedExistingId: string | null;
+  }): Promise<RelationshipFinancialAccountAssignmentRecord>;
 }
 
 /** Narrow interface onto RelationshipService's own read-time-sync method — avoids depending on that class's entire surface (this codebase's established interface-segregation precedent, e.g. MandateReader). RelationshipService itself satisfies this structurally. */
@@ -523,57 +543,32 @@ export class RelationshipFinancialAccountService {
       return existing; // idempotent — replacing with the same account is a no-op
     }
 
-    // SPRINT_19_FraudRisk_SecurityHardening: the DB has a real partial unique index — only one
-    // *active* row may exist per (relationshipId, usage) at a time
-    // (`relationship_financial_account_active_slot_unique`, src/db/schema/financialAccount.ts). This
-    // previously inserted the new active row BEFORE marking the old one superseded, which would
-    // violate that index on every ordinary (non-racing) replacement, not just a race — both rows
-    // would briefly be "active" simultaneously. Generating the new row's id up front lets the old row
-    // be superseded-by-it FIRST, so at insert time exactly zero active rows exist for this slot.
-    let assignment;
-    if (existing) {
-      const newAssignmentId = randomUUID();
-      await this.deps.assignments.markSuperseded(existing.id, newAssignmentId);
-      try {
-        assignment = await this.deps.assignments.insertAssignment({
-          id: newAssignmentId,
-          relationshipId: input.relationshipId,
-          relationshipParticipantId: participant.id,
-          financialAccountId: account.id,
-          usage: input.usage,
-          selectedByUserId: input.actingUserId,
-        });
-      } catch (error) {
-        // The old row is already superseded either way — a losing concurrent replaceAccount call
-        // collides with the WINNER's new active row here, not with the (already-superseded) old one.
-        const raced = await this.deps.assignments.findActiveAssignment(input.relationshipId, input.usage);
-        if (raced && raced.id !== existing.id) {
-          throw new ConflictError(
-            "This funding/payout account was just replaced by another concurrent request. Please refresh and try again.",
-          );
-        }
-        throw error;
+    // R03 (DB integrity & concurrency hardening): supersede-old + insert-new now happen inside ONE
+    // atomic, lock-serialized transaction (DrizzleRelationshipFinancialAccountRepository) instead of
+    // two independent writes — a failure between them can no longer leave this slot permanently
+    // superseded with no active assignment. `expectedExistingId` re-validates, after the lock is
+    // acquired, that the slot's active assignment is still exactly what this caller observed above —
+    // if a concurrent request already won the race, this throws `ConflictError` and the old row this
+    // caller saw is left untouched (never superseded by a request that didn't actually win).
+    let assignment: RelationshipFinancialAccountAssignmentRecord;
+    try {
+      assignment = await this.deps.assignments.replaceAssignmentAtomically({
+        relationshipId: input.relationshipId,
+        relationshipParticipantId: participant.id,
+        financialAccountId: account.id,
+        usage: input.usage,
+        selectedByUserId: input.actingUserId,
+        expectedExistingId: existing?.id ?? null,
+      });
+    } catch (error) {
+      if (error instanceof ConflictError) {
+        throw new ConflictError(
+          existing
+            ? "This funding/payout account was just replaced by another concurrent request. Please refresh and try again."
+            : "This funding/payout account was just assigned by another concurrent request. Please refresh and try again.",
+        );
       }
-    } else {
-      // No prior active row for this slot — nothing to supersede, so a concurrent race here is a
-      // genuine simultaneous first-time assignment, handled the same way assignAccount handles it.
-      try {
-        assignment = await this.deps.assignments.insertAssignment({
-          relationshipId: input.relationshipId,
-          relationshipParticipantId: participant.id,
-          financialAccountId: account.id,
-          usage: input.usage,
-          selectedByUserId: input.actingUserId,
-        });
-      } catch (error) {
-        const raced = await this.deps.assignments.findActiveAssignment(input.relationshipId, input.usage);
-        if (raced) {
-          throw new ConflictError(
-            "This funding/payout account was just assigned by another concurrent request. Please refresh and try again.",
-          );
-        }
-        throw error;
-      }
+      throw error;
     }
     await this.recordAssignmentAudit(input.relationshipId, input.actingUserId, "FINANCIAL_ACCOUNT_ASSIGNMENT_REPLACED", {
       assignmentId: assignment.id,
