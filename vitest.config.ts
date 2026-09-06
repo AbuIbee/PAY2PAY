@@ -17,6 +17,12 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
+    // R07 (DB integrity & concurrency hardening): `*.postgres.test.ts` suites require a real,
+    // disposable Postgres database (provisioned only by `npm run test:postgres`, see
+    // vitest.postgres.config.ts) — excluded here so the ordinary `vitest run`/`npm test` never
+    // attempts them against whatever DATABASE_URL happens to be set (or the fake default
+    // vitest.setup.ts provides), which would otherwise fail or silently pass against nothing.
+    exclude: ["**/*.postgres.test.ts"],
     css: false,
   },
 });

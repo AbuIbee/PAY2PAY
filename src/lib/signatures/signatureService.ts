@@ -183,14 +183,18 @@ export class SignatureService {
       }
     }
 
-    const agreementHashAtSigning = computeVersionHash(detail.version);
-
     // PRSprint 12 (docs/prsprints/PRSPRINT_12_ELECTRONIC_SIGNATURES_PDFS_IMMUTABLE_RECORDS.md):
     // Sprint 5's state machine (still unchanged in every other respect — throws if the agreement
     // isn't in awaiting_signatures, if this role already signed, or if the caller isn't a party at
     // all) and this signature_event evidence row are now recorded atomically in one transaction —
     // see AgreementService.signAgreementWithEvidence and SigningApplicationRepository's own doc
     // comments for exactly what non-atomic risk this closes.
+    //
+    // R05 (DB integrity & concurrency hardening): deliberately does NOT compute
+    // `agreementHashAtSigning` here from `detail.version` (a pre-transaction read) — that value could
+    // be stale by the time the transaction below actually commits (e.g. a concurrent revision). The
+    // authoritative hash is computed inside the transaction itself, from the version it locks and
+    // re-validates as current, and returned via `signResult.agreementHashAtSigning`.
     const signResult = await this.deps.agreementService.signAgreementWithEvidence(input.agreementId, input.actingUserId, {
       signerUserId: input.actingUserId,
       signerProfileKind: party.kind,
@@ -204,10 +208,9 @@ export class SignatureService {
       ipAddress: input.ipAddress,
       deviceInfo: input.deviceInfo ?? null,
       timezone: input.timezone,
-      agreementHashAtSigning,
     });
-    if (!signResult.signatureEventId) {
-      throw new ConfigurationError("Signing succeeded but no signature_event id was returned.");
+    if (!signResult.signatureEventId || !signResult.agreementHashAtSigning) {
+      throw new ConfigurationError("Signing succeeded but no signature_event id/hash was returned.");
     }
     const signatureEvent: SignatureEventRecord = {
       id: signResult.signatureEventId,
@@ -224,7 +227,7 @@ export class SignatureService {
       ipAddress: input.ipAddress,
       deviceInfo: input.deviceInfo ?? null,
       timezone: input.timezone,
-      agreementHashAtSigning,
+      agreementHashAtSigning: signResult.agreementHashAtSigning,
       signedAt: signResult.signedAt,
     };
 

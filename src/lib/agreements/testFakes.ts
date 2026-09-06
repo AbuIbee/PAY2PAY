@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
+import { ConflictError, CounterpartyMustSignFirstError, ScheduleRevisionRequiredError } from "@/lib/errors";
 import type { PageParams } from "@/lib/pagination";
 import { InMemoryProfileOwnerReader } from "@/lib/profiles/testFakes";
 import { createTestStaffService } from "@/lib/staff/testFakes";
@@ -23,9 +24,12 @@ import type {
   FeeAllocation,
   InstallmentScheduleItemRepository,
   PartyRole,
+  RevisionApplicationRepository,
+  RevisionApplicationResult,
   SigningApplicationRepository,
   SigningApplicationResult,
 } from "./agreementService";
+import { isPastDate } from "./schedule";
 import type { PaymentFrequency, ScheduleItem } from "./schedule";
 import type { AgreementTerms } from "./agreementService";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
@@ -91,6 +95,29 @@ export class InMemoryAgreementRepository implements AgreementRepository {
   async updateStatus(id: string, status: AgreementStatus): Promise<void> {
     const record = this.byId.get(id);
     if (record) record.status = status;
+  }
+
+  /** R05: mirrors DrizzleAgreementRepository's identical conditional-write contract — see its own doc comment. */
+  async updateStatusIfCurrentlyIn(id: string, expectedStatuses: readonly AgreementStatus[], newStatus: AgreementStatus): Promise<boolean> {
+    const record = this.byId.get(id);
+    if (!record || !expectedStatuses.includes(record.status)) return false;
+    record.status = newStatus;
+    return true;
+  }
+
+  /** FINAL corrective pass: mirrors `DrizzleAgreementRepository.applyAcceptanceTransitionAtomically`'s status/currentVersionId re-validation contract (no separate version-row-ownership check needed here — there is no untrusted DB state for an in-memory fake to defend against). */
+  async applyAcceptanceTransitionAtomically(input: {
+    agreementId: string;
+    expectedCurrentVersionId: string;
+    expectedStatuses: readonly AgreementStatus[];
+    newStatus: AgreementStatus;
+  }): Promise<boolean> {
+    const record = this.byId.get(input.agreementId);
+    if (!record) return false;
+    if (!input.expectedStatuses.includes(record.status)) return false;
+    if (record.currentVersionId !== input.expectedCurrentVersionId) return false;
+    record.status = input.newStatus;
+    return true;
   }
 
   async setCurrentVersionId(id: string, versionId: string): Promise<void> {
@@ -219,6 +246,7 @@ export class InMemorySigningApplicationRepository implements SigningApplicationR
     agreementId: string;
     agreementVersionId: string;
     role: PartyRole;
+    originatorRole: PartyRole;
     signedAt: Date;
     evidence: {
       signerUserId: string;
@@ -233,21 +261,57 @@ export class InMemorySigningApplicationRepository implements SigningApplicationR
       ipAddress: string;
       deviceInfo: unknown;
       timezone: string;
-      agreementHashAtSigning: string;
     } | null;
   }): Promise<SigningApplicationResult> {
+    // R05 (DB integrity & concurrency hardening): mirrors DrizzleSigningApplicationRepository's own
+    // re-validation contract — see that class's doc comment. No separate lock needed here: every
+    // read this method performs (the checks below) is a direct, synchronous Map access with no
+    // `await` in between it and this method's own first write — unlike a fallback that reads via one
+    // awaited call and writes via a separate, later awaited call (see AuditService.record's own doc
+    // comment for exactly that failure shape), there is no suspension point between "read" and
+    // "write" here for a second concurrent caller to interleave into. The `await`s below (on other
+    // in-memory repositories' own methods) only ever follow this method's own decisive check/write,
+    // never precede it, so two "concurrent" `Promise.all` callers against this fake still can never
+    // interleave mid-check.
+    const agreementRecord = this.agreements.byId.get(input.agreementId);
+    if (!agreementRecord) throw new Error("agreement not found during atomic signing apply");
+    if (agreementRecord.status !== "awaiting_signatures") {
+      throw new ConflictError(
+        `This agreement is no longer awaiting signatures (it is now "${agreementRecord.status}") — someone else's action changed it first. Please refresh and try again.`,
+      );
+    }
+    if (agreementRecord.currentVersionId !== input.agreementVersionId) {
+      throw new ConflictError(
+        "This agreement's terms were revised by another request before your signature could be recorded. Please review the current version and try again.",
+      );
+    }
+
     const version = this.versions.byId.get(input.agreementVersionId);
     if (!version) throw new Error("agreement_version not found during atomic signing apply");
     const alreadySigned = input.role === "creditor" ? version.creditorSignedAt !== null : version.debtorSignedAt !== null;
     if (alreadySigned) {
-      return { alreadySigned: true, bothSigned: false, documentHash: null, signatureEventId: null };
+      return { alreadySigned: true, bothSigned: false, documentHash: null, signatureEventId: null, agreementHashAtSigning: null };
+    }
+
+    if (input.role === input.originatorRole) {
+      const counterpartySignedAt = input.originatorRole === "creditor" ? version.debtorSignedAt : version.creditorSignedAt;
+      if (!counterpartySignedAt) {
+        throw new CounterpartyMustSignFirstError();
+      }
+    }
+    if (isPastDate(version.terms.firstPaymentDate)) {
+      throw new ScheduleRevisionRequiredError(
+        `The proposed first payment date (${version.terms.firstPaymentDate}) has already passed. This agreement's schedule must be revised before it can be signed.`,
+      );
     }
 
     await this.versions.recordSignature(input.agreementVersionId, input.role, input.signedAt);
 
     let signatureEventId: string | null = null;
+    let agreementHashAtSigning: string | null = null;
     if (input.evidence) {
-      const record: InMemorySignatureEventLike = { id: randomUUID(), agreementVersionId: input.agreementVersionId, signedAt: input.signedAt, ...input.evidence };
+      agreementHashAtSigning = computeVersionHash(version);
+      const record: InMemorySignatureEventLike = { id: randomUUID(), agreementVersionId: input.agreementVersionId, signedAt: input.signedAt, agreementHashAtSigning, ...input.evidence };
       this.signatureEvents.push(record);
       signatureEventId = record.id;
     }
@@ -257,7 +321,7 @@ export class InMemorySigningApplicationRepository implements SigningApplicationR
       (input.role === "creditor" || refreshed.creditorSignedAt !== null) &&
       (input.role === "debtor" || refreshed.debtorSignedAt !== null);
     if (!bothSigned) {
-      return { alreadySigned: false, bothSigned: false, documentHash: null, signatureEventId };
+      return { alreadySigned: false, bothSigned: false, documentHash: null, signatureEventId, agreementHashAtSigning };
     }
 
     const documentHash = computeVersionHash(refreshed);
@@ -265,7 +329,122 @@ export class InMemorySigningApplicationRepository implements SigningApplicationR
     await this.agreements.updateStatus(input.agreementId, "signed");
     await this.agreements.updateStatus(input.agreementId, "first_payment_pending");
 
-    return { alreadySigned: false, bothSigned: true, documentHash, signatureEventId };
+    return { alreadySigned: false, bothSigned: true, documentHash, signatureEventId, agreementHashAtSigning };
+  }
+}
+
+/**
+ * R07 corrective pass (Codex finding G): mirrors `DrizzleRevisionApplicationRepository`'s real
+ * re-validation contract — see that class's own doc comment. No separate lock needed here: every
+ * read this method performs is a direct, synchronous Map access with no `await` in between it and
+ * this method's own first write (see `InMemorySigningApplicationRepository.applySigningAtomically`'s
+ * identical reasoning above), so two "concurrent" `Promise.all` callers against this fake can never
+ * interleave mid-check.
+ */
+export class InMemoryRevisionApplicationRepository implements RevisionApplicationRepository {
+  constructor(
+    private readonly versions: InMemoryAgreementVersionRepository,
+    private readonly agreements: InMemoryAgreementRepository,
+    private readonly scheduleItems: InMemoryInstallmentScheduleItemRepository,
+  ) {}
+
+  async applyFirstPaymentDateRevisionAtomically(input: {
+    agreementId: string;
+    baseVersionId: string;
+    frequency: PaymentFrequency;
+    feeAllocation: FeeAllocation;
+    terms: AgreementTerms;
+    schedule: ScheduleItem[];
+  }): Promise<RevisionApplicationResult> {
+    const agreementRecord = this.agreements.byId.get(input.agreementId);
+    if (!agreementRecord) throw new Error("agreement not found during atomic revision apply");
+    if (agreementRecord.status !== "awaiting_signatures") {
+      throw new ConflictError(
+        `This agreement is no longer awaiting signatures (it is now "${agreementRecord.status}") — its schedule can no longer be revised this way. Please refresh and try again.`,
+      );
+    }
+    if (agreementRecord.currentVersionId !== input.baseVersionId) {
+      throw new ConflictError("This agreement's terms were already revised by another request. Please refresh and try again.");
+    }
+
+    const versionRecord = this.versions.byId.get(input.baseVersionId);
+    if (!versionRecord) throw new Error("agreement_version not found during atomic revision apply");
+    if (versionRecord.agreementId !== input.agreementId) {
+      throw new ConflictError("This version does not belong to the specified agreement — refusing to revise.");
+    }
+    if (versionRecord.signedAt) {
+      throw new ConflictError(
+        "This agreement was fully signed by another request before this revision could be applied. Please refresh and try again.",
+      );
+    }
+
+    const newVersion = await this.versions.insert({
+      agreementId: input.agreementId,
+      versionNumber: versionRecord.versionNumber + 1,
+      parentVersionId: versionRecord.id,
+      isOriginal: false,
+      producedBy: "first_payment_date_revision",
+      frequency: input.frequency,
+      feeAllocation: input.feeAllocation,
+      terms: input.terms,
+    });
+    await this.scheduleItems.replaceForVersion(newVersion.id, input.schedule);
+    await this.agreements.setCurrentVersionId(input.agreementId, newVersion.id);
+
+    return { newVersionId: newVersion.id, newVersionNumber: newVersion.versionNumber };
+  }
+
+  /** FINAL corrective pass (Codex): mirrors `DrizzleRevisionApplicationRepository.applyGeneralTermsRevisionAtomically`'s real re-validation contract exactly — see that class's own doc comment. */
+  async applyGeneralTermsRevisionAtomically(input: {
+    agreementId: string;
+    baseVersionId: string;
+    expectedStatus: AgreementStatus;
+    newStatus: AgreementStatus;
+    producedBy: string;
+    frequency: PaymentFrequency;
+    feeAllocation: FeeAllocation;
+    terms: AgreementTerms;
+    schedule: ScheduleItem[];
+  }): Promise<RevisionApplicationResult> {
+    const agreementRecord = this.agreements.byId.get(input.agreementId);
+    if (!agreementRecord) throw new Error("agreement not found during atomic revision apply");
+    // FINAL corrective pass, round 2: exact status match, not "any generally-revisable status" — see
+    // DrizzleRevisionApplicationRepository.applyGeneralTermsRevisionAtomically's own doc comment.
+    if (agreementRecord.status !== input.expectedStatus) {
+      throw new ConflictError(
+        `This agreement is no longer awaiting review in the status it was reviewed against (it is now "${agreementRecord.status}") — someone else's action changed it first. Please refresh and try again.`,
+      );
+    }
+    if (agreementRecord.currentVersionId !== input.baseVersionId) {
+      throw new ConflictError("This agreement's terms were already revised by another request. Please refresh and try again.");
+    }
+
+    const versionRecord = this.versions.byId.get(input.baseVersionId);
+    if (!versionRecord) throw new Error("agreement_version not found during atomic revision apply");
+    if (versionRecord.agreementId !== input.agreementId) {
+      throw new ConflictError("This version does not belong to the specified agreement — refusing to revise.");
+    }
+    if (versionRecord.signedAt) {
+      throw new ConflictError(
+        "This agreement was fully signed by another request before this revision could be applied. Please refresh and try again.",
+      );
+    }
+
+    const newVersion = await this.versions.insert({
+      agreementId: input.agreementId,
+      versionNumber: versionRecord.versionNumber + 1,
+      parentVersionId: versionRecord.id,
+      isOriginal: false,
+      producedBy: input.producedBy,
+      frequency: input.frequency,
+      feeAllocation: input.feeAllocation,
+      terms: input.terms,
+    });
+    await this.scheduleItems.replaceForVersion(newVersion.id, input.schedule);
+    await this.agreements.setCurrentVersionId(input.agreementId, newVersion.id);
+    await this.agreements.updateStatus(input.agreementId, input.newStatus);
+
+    return { newVersionId: newVersion.id, newVersionNumber: newVersion.versionNumber };
   }
 }
 
@@ -394,6 +573,7 @@ export function createTestAgreementService(
   const auditRepo = new InMemoryAuditEventRepositoryForAgreements();
   const audit = new AuditService(auditRepo);
   const signing = new InMemorySigningApplicationRepository(versions, agreements, signatureEvents);
+  const revisions = new InMemoryRevisionApplicationRepository(versions, agreements, scheduleItems);
 
   // Decision 7: every test harness gets a real, working identity-snapshot mechanism by default (no
   // circular-dependency issue, unlike connectionEstablisher below) — a test can still override it, or
@@ -411,6 +591,7 @@ export function createTestAgreementService(
     staffService: staffCtx.staffService,
     audit,
     signing,
+    revisions,
     notifications,
     connectionEstablisher,
     identitySnapshotter: identitySnapshotter ?? defaultIdentitySnapshotter,

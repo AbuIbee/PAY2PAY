@@ -1,11 +1,12 @@
 import "server-only";
-import { desc, eq, or, and } from "drizzle-orm";
-import { getDb } from "@/db/client";
+import { desc, eq, or, and, inArray } from "drizzle-orm";
+import { getDb, type Database } from "@/db/client";
 import { agreement, agreementParty, agreementVersion, installmentScheduleItem } from "@/db/schema";
 import { ConfigurationError, ValidationError } from "@/lib/errors";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
 import type { PageParams } from "@/lib/pagination";
 import type { AgreementRecord, AgreementRepository, AgreementStatus } from "./agreementService";
+import type { AgreementLockTestHooks } from "./drizzleSigningApplicationRepository";
 
 /** postgres.js/drizzle FK-violation error code (23503) — surfaces either directly on the thrown error or nested under `.cause`, depending on which query-builder path raised it. */
 function isForeignKeyViolation(error: unknown): boolean {
@@ -36,6 +37,26 @@ function toRecord(row: Row): AgreementRecord {
 }
 
 export class DrizzleAgreementRepository implements AgreementRepository {
+  /**
+   * R07 corrective pass: `db` is injectable (defaulting to the shared production singleton) solely
+   * so `*.postgres.test.ts` concurrency suites can hand two instances of this SAME class two
+   * genuinely distinct PostgreSQL connections — e.g. racing `updateStatusIfCurrentlyIn` (cancellation)
+   * against `DrizzleSigningApplicationRepository.applySigningAtomically` (signing) on real, separate
+   * connections. Every production call site (`new DrizzleAgreementRepository()`, no argument) is
+   * unaffected.
+   */
+  constructor(
+    private readonly db: Database = getDb(),
+    /**
+     * FINAL corrective pass: test-only affordance, identical in shape and purpose to
+     * `DrizzleSigningApplicationRepository`'s/`DrizzleRevisionApplicationRepository`'s own `hooks` —
+     * see `AgreementLockTestHooks`'s own doc comment. Only ever set by `*.postgres.test.ts` suites to
+     * deterministically pause `applyAcceptanceTransitionAtomically` mid-transaction; every production
+     * call site (`new DrizzleAgreementRepository()`, no second argument) is unaffected.
+     */
+    private readonly hooks?: AgreementLockTestHooks,
+  ) {}
+
   async insert(input: {
     creditorProfileKind: ProfileKind;
     creditorProfileId: string;
@@ -44,26 +65,84 @@ export class DrizzleAgreementRepository implements AgreementRepository {
     currency: string;
     createdByUserId: string;
   }): Promise<AgreementRecord> {
-    const db = getDb();
+    const db = this.db;
     const [row] = await db.insert(agreement).values(input).returning();
     if (!row) throw new ConfigurationError("agreement insert returned no row");
     return toRecord(row);
   }
 
   async findById(id: string): Promise<AgreementRecord | null> {
-    const db = getDb();
+    const db = this.db;
     const rows = await db.select().from(agreement).where(eq(agreement.id, id)).limit(1);
     const row = rows[0];
     return row ? toRecord(row) : null;
   }
 
   async updateStatus(id: string, status: AgreementStatus): Promise<void> {
-    const db = getDb();
+    const db = this.db;
     await db.update(agreement).set({ status }).where(eq(agreement.id, id));
   }
 
+  /**
+   * R05 (DB integrity & concurrency hardening): one atomic `UPDATE ... WHERE id = ? AND status IN
+   * (...)` — see this method's own doc comment in agreementService.ts. `.returning()` coming back
+   * empty is how Postgres tells us the WHERE clause matched no row (status had already moved on),
+   * distinguishing that from "row doesn't exist at all" the same way every other conditional-update
+   * pattern in this codebase does (e.g. AgreementInvitationRepository.claimAcceptance's identical
+   * `status IN (pending, viewed)` guard).
+   */
+  async updateStatusIfCurrentlyIn(id: string, expectedStatuses: readonly AgreementStatus[], newStatus: AgreementStatus): Promise<boolean> {
+    const db = this.db;
+    const rows = await db
+      .update(agreement)
+      .set({ status: newStatus })
+      .where(and(eq(agreement.id, id), inArray(agreement.status, [...expectedStatuses])))
+      .returning({ id: agreement.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * FINAL corrective pass (Codex: close the accept-vs-general-revision race) — see
+   * `AgreementRepository.applyAcceptanceTransitionAtomically`'s own doc comment in agreementService.ts
+   * for the exact staleness window this closes. Lock order (`agreement` then its current
+   * `agreement_version`, both `FOR UPDATE`) intentionally matches
+   * `DrizzleSigningApplicationRepository`/`DrizzleRevisionApplicationRepository` exactly — this method
+   * doesn't itself need to WRITE to `agreement_version` (accept never mutates version content), but
+   * locking it too proves it's genuinely the row `expectedCurrentVersionId` claims it is and keeps
+   * this write serialized against every other transition that touches the same pair.
+   */
+  async applyAcceptanceTransitionAtomically(input: {
+    agreementId: string;
+    expectedCurrentVersionId: string;
+    expectedStatuses: readonly AgreementStatus[];
+    newStatus: AgreementStatus;
+  }): Promise<boolean> {
+    const db = this.db;
+    return db.transaction(async (tx) => {
+      if (this.hooks?.beforeAgreementLock) await this.hooks.beforeAgreementLock();
+      const agreementRows = await tx.select().from(agreement).where(eq(agreement.id, input.agreementId)).for("update").limit(1);
+      if (this.hooks?.afterAgreementLock) await this.hooks.afterAgreementLock();
+      const agreementRow = agreementRows[0];
+      if (!agreementRow) return false;
+      if (!input.expectedStatuses.includes(agreementRow.status)) return false;
+      if (agreementRow.currentVersionId !== input.expectedCurrentVersionId) return false;
+
+      const versionRows = await tx
+        .select()
+        .from(agreementVersion)
+        .where(eq(agreementVersion.id, input.expectedCurrentVersionId))
+        .for("update")
+        .limit(1);
+      const versionRow = versionRows[0];
+      if (!versionRow || versionRow.agreementId !== input.agreementId) return false;
+
+      await tx.update(agreement).set({ status: input.newStatus }).where(eq(agreement.id, input.agreementId));
+      return true;
+    });
+  }
+
   async setCurrentVersionId(id: string, versionId: string): Promise<void> {
-    const db = getDb();
+    const db = this.db;
     await db.update(agreement).set({ currentVersionId: versionId }).where(eq(agreement.id, id));
   }
 
@@ -81,7 +160,7 @@ export class DrizzleAgreementRepository implements AgreementRepository {
    * ValidationError instead of silently orphaning data.
    */
   async deleteDraft(id: string): Promise<void> {
-    const db = getDb();
+    const db = this.db;
     try {
       await db.transaction(async (tx) => {
         const versions = await tx.select({ id: agreementVersion.id }).from(agreementVersion).where(eq(agreementVersion.agreementId, id));
@@ -101,7 +180,7 @@ export class DrizzleAgreementRepository implements AgreementRepository {
   }
 
   async listForProfile(profileKind: ProfileKind, profileId: string, pageParams?: PageParams): Promise<AgreementRecord[]> {
-    const db = getDb();
+    const db = this.db;
     const query = db
       .select()
       .from(agreement)
@@ -117,7 +196,7 @@ export class DrizzleAgreementRepository implements AgreementRepository {
   }
 
   async listByRelationshipId(relationshipId: string): Promise<AgreementRecord[]> {
-    const db = getDb();
+    const db = this.db;
     const rows = await db.select().from(agreement).where(eq(agreement.relationshipId, relationshipId)).orderBy(desc(agreement.createdAt));
     return rows.map(toRecord);
   }

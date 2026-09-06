@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ConflictError } from "@/lib/errors";
 import { generateRelationshipReferenceCode } from "@/lib/auth/token";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { AgreementService } from "@/lib/agreements/agreementService";
@@ -7,6 +8,7 @@ import {
   InMemoryAgreementVersionRepository,
   InMemoryAgreementPartyRepository,
   InMemoryInstallmentScheduleItemRepository,
+  InMemoryRevisionApplicationRepository,
   InMemorySigningApplicationRepository,
 } from "@/lib/agreements/testFakes";
 import { InMemoryProfileOwnerReader } from "@/lib/profiles/testFakes";
@@ -622,6 +624,59 @@ export class InMemoryRelationshipFinancialAccountRepository implements Relations
     return [...this.byId.values()].filter((a) => a.relationshipId === relationshipId).map((a) => this.withAccount(a));
   }
 
+  /**
+   * R03 (DB integrity & concurrency hardening): mirrors DrizzleRelationshipFinancialAccountRepository's
+   * real atomic-replacement contract — see that class's own doc comment. This in-memory version has no
+   * separate lock to acquire: this method's body below contains NO `await` at all (every operation is
+   * a direct, synchronous Map/property access) — verify this stays true if this method is ever edited,
+   * since even one internal `await` between the conflict check and the mutation would reopen exactly
+   * the interleaving window a real Postgres transaction needs the advisory lock to close (see
+   * AuditService.record's own doc comment for a worked example of that failure shape). The conflict
+   * re-check against `expectedExistingId` is still real and still required — it's what a
+   * `Promise.allSettled`-based concurrency test exercises the exact same way it exercises the real
+   * database.
+   */
+  async replaceAssignmentAtomically(input: {
+    relationshipId: string;
+    relationshipParticipantId: string;
+    financialAccountId: string;
+    usage: FinancialAccountUsage;
+    selectedByUserId: string;
+    expectedExistingId: string | null;
+  }): Promise<RelationshipFinancialAccountAssignmentRecord> {
+    const current = [...this.byId.values()].find(
+      (a) => a.relationshipId === input.relationshipId && a.usage === input.usage && a.status === "active",
+    );
+    const currentId = current?.id ?? null;
+    if (currentId !== input.expectedExistingId) {
+      throw new ConflictError("relationship_financial_account slot was already replaced or assigned by a concurrent request");
+    }
+    const now = new Date();
+    const newAssignmentId = randomUUID();
+    if (current) {
+      current.status = "superseded";
+      current.supersededBy = newAssignmentId;
+      current.effectiveTo = now;
+      current.updatedAt = now;
+    }
+    const record: RelationshipFinancialAccountAssignmentRecord = {
+      id: newAssignmentId,
+      relationshipId: input.relationshipId,
+      relationshipParticipantId: input.relationshipParticipantId,
+      financialAccountId: input.financialAccountId,
+      usage: input.usage,
+      status: "active",
+      selectedByUserId: input.selectedByUserId,
+      effectiveFrom: now,
+      effectiveTo: null,
+      supersededBy: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.byId.set(record.id, record);
+    return record;
+  }
+
   async listActiveAssignmentsForAccount(financialAccountId: string): Promise<RelationshipFinancialAccountAssignmentRecord[]> {
     return [...this.byId.values()].filter((a) => a.financialAccountId === financialAccountId && a.status === "active");
   }
@@ -767,6 +822,7 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
     staffService: staffCtx.staffService,
     audit: new AuditService(agreementAuditRepo),
     signing: new InMemorySigningApplicationRepository(versions, agreements),
+    revisions: new InMemoryRevisionApplicationRepository(versions, agreements, scheduleItems),
   });
 
   const participants = new InMemoryRelationshipParticipantRepository();

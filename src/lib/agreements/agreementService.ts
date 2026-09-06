@@ -4,7 +4,7 @@ import { logger } from "@/lib/logger";
 import type { NotificationService } from "@/lib/notify/notificationService";
 import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
-import { CounterpartyMustSignFirstError, ForbiddenError, ProfileIncompleteError, ScheduleRevisionRequiredError, ValidationError } from "@/lib/errors";
+import { ConflictError, CounterpartyMustSignFirstError, ForbiddenError, ProfileIncompleteError, ScheduleRevisionRequiredError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { PageParams } from "@/lib/pagination";
 import { computeSchedule, isPastDate } from "./schedule";
@@ -115,6 +115,43 @@ export interface AgreementRepository {
   }): Promise<AgreementRecord>;
   findById(id: string): Promise<AgreementRecord | null>;
   updateStatus(id: string, status: AgreementStatus): Promise<void>;
+  /**
+   * R05 (DB integrity & concurrency hardening): the conditional counterpart to `updateStatus` —
+   * writes `newStatus` only if the row's status is still one of `expectedStatuses` at the moment of
+   * the write (one atomic `UPDATE ... WHERE id = ? AND status IN (...)`, never a separate read then a
+   * blind write), and reports whether it actually happened. `cancelAgreement`/`markMutuallyCanceled`
+   * use this instead of `updateStatus` specifically to close the "cancellation races a concurrent,
+   * already-committed signing transition" window: without it, cancellation's own pre-write read could
+   * observe `awaiting_signatures`, a concurrent signing transaction could complete and advance the
+   * agreement to `first_payment_pending` in between, and cancellation's blind `updateStatus` would
+   * then silently stomp that completed signing back to `mutually_canceled` — corrupting a genuinely
+   * finished agreement. Returns `false` (write a no-op) when the status no longer matches, letting the
+   * caller throw a clear conflict rather than ever allowing that overwrite.
+   */
+  updateStatusIfCurrentlyIn(id: string, expectedStatuses: readonly AgreementStatus[], newStatus: AgreementStatus): Promise<boolean>;
+  /**
+   * FINAL corrective pass (Codex: `creditorDecide`'s accept transition was still an unconditional
+   * `updateStatus` call after earlier, pre-transaction reads — the exact same staleness window R05
+   * already closed for signing, cancellation, and general revision, just on accept's own write path).
+   * Unsafe interleaving this closes: creditorDecide reads `status = awaiting_creditor_acceptance`,
+   * `currentVersionId = V1`; a concurrent `reviseTermsBeforeSignature` locks the agreement, creates
+   * V2, repoints `currentVersionId`, advances status to the appropriate review stage, and commits;
+   * the stale `creditorDecide` resumes and would previously have blindly advanced the agreement past
+   * a version the creditor never actually reviewed.
+   *
+   * Locks `agreement` then its current `agreement_version` `FOR UPDATE` — the SAME order signing and
+   * revision use — and re-validates, immediately before writing, that: the agreement is still in one
+   * of `expectedStatuses`; `currentVersionId` is still exactly `expectedCurrentVersionId` (the version
+   * the creditor actually reviewed); and that version genuinely belongs to this agreement. Returns
+   * `false` (write a no-op) the instant any of that no longer holds, so the caller can surface a clear
+   * conflict rather than ever silently advancing lifecycle state past a superseded version.
+   */
+  applyAcceptanceTransitionAtomically(input: {
+    agreementId: string;
+    expectedCurrentVersionId: string;
+    expectedStatuses: readonly AgreementStatus[];
+    newStatus: AgreementStatus;
+  }): Promise<boolean>;
   setCurrentVersionId(id: string, versionId: string): Promise<void>;
   /** Agreement Lifecycle V2 UAT (Defect 3 — Delete Draft): hard delete, only ever called after AgreementService.deleteDraft's own status/authorization checks. */
   deleteDraft(id: string): Promise<void>;
@@ -207,7 +244,15 @@ export interface SigningEvidenceInput {
   ipAddress: string;
   deviceInfo: unknown;
   timezone: string;
-  agreementHashAtSigning: string;
+  /**
+   * R05 (DB integrity & concurrency hardening): deliberately NOT present here. `agreementHashAtSigning`
+   * used to be computed by the caller (SignatureService, from a pre-transaction `getAgreement` read)
+   * and passed straight through — meaning a signature could be evidenced against stale terms if a
+   * concurrent revision changed the current version between that read and this transaction's commit.
+   * `applySigningAtomically` now computes it itself, from the exact version row its own transaction
+   * freshly reads and locks, and returns it via `SigningApplicationResult.agreementHashAtSigning` —
+   * see that field's own doc comment.
+   */
 }
 
 export interface SigningApplicationResult {
@@ -217,6 +262,14 @@ export interface SigningApplicationResult {
   documentHash: string | null;
   /** Present only when `evidence` was supplied and this call actually recorded a new signature. */
   signatureEventId: string | null;
+  /**
+   * R05: the hash actually recorded on the new signature_event row (see SigningEvidenceInput's own
+   * doc comment for why this is computed inside the transaction rather than accepted as input) — the
+   * authoritative, transaction-locked version's hash, never a pre-transaction, potentially-stale one.
+   * Present under the exact same condition as `signatureEventId` (non-null iff evidence was supplied
+   * and a new signature was actually recorded); null when `alreadySigned` or `evidence` was null.
+   */
+  agreementHashAtSigning: string | null;
 }
 
 /**
@@ -233,15 +286,106 @@ export interface SigningApplicationResult {
  * hasn't already signed *inside* the transaction (closing a concurrent-double-submit race the
  * pre-PRSprint-12 read-then-write pattern was exposed to) and, when evidence is supplied, inserts
  * signature_event in the same transaction as the version/agreement writes it's evidence for.
+ *
+ * R05 (DB integrity & concurrency hardening): `AgreementService.signAgreementWithEvidence`'s own
+ * pre-transaction reads (agreement status, currentVersionId, version signed-columns, signing order,
+ * first-payment-date validity) are necessarily stale by the time this transaction actually commits —
+ * a concurrent revision, cancellation, or duplicate signing request can invalidate any of them in the
+ * gap between that read and this write. The real implementation now re-locks and re-validates every
+ * one of those facts, fresh, *inside* this same transaction, immediately before writing — throwing
+ * `ConflictError`/`ScheduleRevisionRequiredError`/`CounterpartyMustSignFirstError` (propagated
+ * straight to the caller, no translation needed — these are the exact same error types the
+ * pre-transaction checks above already throw for the equivalent non-racing case) rather than ever
+ * committing a signature against state that changed out from under it.
  */
 export interface SigningApplicationRepository {
   applySigningAtomically(input: {
     agreementId: string;
     agreementVersionId: string;
     role: PartyRole;
+    /**
+     * R05: needed to re-run the counterparty-first check against the transaction's own fresh version
+     * read. Safe to resolve once, before the transaction (unlike everything else re-validated inside
+     * it) — it is a fact about who *created* the agreement, fixed at creation time and never mutated
+     * by any later action, so there is nothing for it to race against.
+     */
+    originatorRole: PartyRole;
     signedAt: Date;
     evidence: SigningEvidenceInput | null;
   }): Promise<SigningApplicationResult>;
+}
+
+export interface RevisionApplicationResult {
+  newVersionId: string;
+  newVersionNumber: number;
+}
+
+/**
+ * R07 corrective pass (Codex finding G — "close signing vs revision race"): `reviseFirstPaymentDate`
+ * previously made three independent, non-transactional writes (insert the new version, replace its
+ * schedule, repoint `currentVersionId`) with no re-validation at the write boundary — the same class
+ * of defect PRSprint 12 (see `SigningApplicationRepository` above) already closed for signing. The
+ * vulnerable interleaving: a revision reads the agreement while it's still unsigned, a concurrent
+ * signing transaction completes and commits (`agreement.status = 'first_payment_pending'`), and the
+ * revision — none the wiser — blindly repoints `currentVersionId` at a brand-new, unsigned version,
+ * leaving a fully-executed agreement pointing at terms nobody ever signed.
+ *
+ * Real implementation (`DrizzleRevisionApplicationRepository`) closes this by locking the SAME two
+ * rows signing locks, in the SAME order — `agreement` row first, then its current `agreement_version`
+ * row, both `SELECT ... FOR UPDATE` — inside one transaction, and re-validating fresh, locked state
+ * immediately before writing: agreement is still `awaiting_signatures`, `currentVersionId` still
+ * equals the version this revision started from, that version still belongs to this agreement, and it
+ * has not become signed. Shared lock order is what makes this mutually exclusive with signing at the
+ * database level (see `SigningApplicationRepository`'s own doc comment) — whichever transaction's
+ * `FOR UPDATE` on `agreement` commits first, the other blocks until it releases, then re-reads and
+ * correctly rejects if the state it depended on no longer holds.
+ */
+export interface RevisionApplicationRepository {
+  applyFirstPaymentDateRevisionAtomically(input: {
+    agreementId: string;
+    /** The version this revision was computed against (agreement.currentVersionId at the time of the caller's pre-transaction read) — re-validated fresh inside the transaction, not trusted. */
+    baseVersionId: string;
+    frequency: PaymentFrequency;
+    feeAllocation: FeeAllocation;
+    terms: AgreementTerms;
+    schedule: ScheduleItem[];
+  }): Promise<RevisionApplicationResult>;
+  /**
+   * FINAL corrective pass (Codex: `reviseTermsBeforeSignature` — the pre-signature counter/revision
+   * loop — had the EXACT SAME defect `applyFirstPaymentDateRevisionAtomically` above was built to
+   * close, still making independent, non-transactional writes: read old agreement/version, insert
+   * revised version, replace schedule, unconditionally repoint `currentVersionId`, unconditionally
+   * overwrite status. A concurrent acceptance/signing progression completing in that gap would let a
+   * stale revision silently repoint a fully-executed (or further-advanced) agreement at an unsigned
+   * version and revert its status backward into review. This is the general-purpose sibling of
+   * `applyFirstPaymentDateRevisionAtomically` — same file, same shared class, same lock order
+   * (`agreement` row then its current `agreement_version` row, both `FOR UPDATE`).
+   *
+   * FINAL corrective pass, round 2 (Codex: an earlier version of this contract took
+   * `expectedStatuses: AgreementStatus[]` — BOTH review statuses at once — which was too broad: a
+   * stale DEBTOR revision (authorized only while `awaiting_debtor_acknowledgment`) could read that
+   * status, pause, let a concurrent `acknowledgeDebt` advance the SAME version to
+   * `awaiting_creditor_acceptance`, then resume and incorrectly pass revalidation because
+   * `awaiting_creditor_acceptance` was ALSO in the allowed set — even though that specific revision
+   * attempt was never authorized against that status. `expectedStatus` (singular) forces the caller
+   * to pass the EXACT status it actually observed/authorized this specific attempt against — the
+   * agreement must still be in precisely that status, not merely "some generally revisable status",
+   * for the revision to still be valid.
+   */
+  applyGeneralTermsRevisionAtomically(input: {
+    agreementId: string;
+    /** The version this revision was computed against (agreement.currentVersionId at the time of the caller's pre-transaction read) — re-validated fresh inside the transaction, not trusted. */
+    baseVersionId: string;
+    /** The EXACT status the agreement was in when this specific revision attempt was authorized — re-checked fresh, under the lock, immediately before writing. Any status change at all (including to another otherwise-generally-revisable status) invalidates this attempt. */
+    expectedStatus: AgreementStatus;
+    /** Status to advance the agreement to once the revision is written (the other party's review stage). */
+    newStatus: AgreementStatus;
+    producedBy: string;
+    frequency: PaymentFrequency;
+    feeAllocation: FeeAllocation;
+    terms: AgreementTerms;
+    schedule: ScheduleItem[];
+  }): Promise<RevisionApplicationResult>;
 }
 
 /**
@@ -334,6 +478,7 @@ export interface AgreementServiceDeps {
   staffService: StaffService;
   audit: AuditService;
   signing: SigningApplicationRepository;
+  revisions: RevisionApplicationRepository;
   /**
    * PRSprint 13 (docs/prsprints/PRSPRINT_13_NOTIFICATION_EVENT_WIRING.md): optional, mirroring
    * PaymentWebhookService's own identical `notifications?`/`profileOwners` precedent — every caller
@@ -620,7 +765,17 @@ export class AgreementService {
     // `agreement.status` read back as "mutually_canceled" instead of the real prior status.
     const previousStatus = agreement.status;
     const versionIdAtCancellation = agreement.currentVersionId;
-    await this.deps.agreements.updateStatus(agreementId, "mutually_canceled");
+    // R05 (DB integrity & concurrency hardening): conditional, not blind — closes the "cancellation
+    // races a concurrent, already-committed signing transition" window (see
+    // `updateStatusIfCurrentlyIn`'s own doc comment). `previousStatus` (read above, pre-write) is
+    // still the honest value for the audit record either way: if this wins, it's exactly what was
+    // cancelled; this throws before the audit call at all if it loses.
+    const cancelled = await this.deps.agreements.updateStatusIfCurrentlyIn(agreementId, cancellableStatuses, "mutually_canceled");
+    if (!cancelled) {
+      throw new ConflictError(
+        "This agreement's state changed before it could be cancelled — it may have just been fully signed. Please refresh and try again.",
+      );
+    }
     await this.recordAudit(agreementId, actingUserId, "agreement_cancelled", {
       cancelledByRole: role,
       previousStatus,
@@ -695,7 +850,24 @@ export class AgreementService {
       // profile (those are walk-away/renegotiation actions, not the party genuinely committing to
       // these terms).
       await this.requireCompleteName(agreement.creditorProfileKind, input.actingUserId);
-      await this.deps.agreements.updateStatus(agreement.id, "awaiting_signatures");
+      if (!agreement.currentVersionId) {
+        throw new ValidationError("This agreement has no current version to accept.");
+      }
+      // FINAL corrective pass (Codex: close the accept-vs-general-revision race — see
+      // AgreementRepository.applyAcceptanceTransitionAtomically's own doc comment for the exact
+      // staleness window this closes). Every accept-side effect below (audit, notify, auto-connect,
+      // identity snapshot) now runs only once this authoritative transition has actually succeeded.
+      const advanced = await this.deps.agreements.applyAcceptanceTransitionAtomically({
+        agreementId: agreement.id,
+        expectedCurrentVersionId: agreement.currentVersionId,
+        expectedStatuses: ["awaiting_creditor_acceptance"],
+        newStatus: "awaiting_signatures",
+      });
+      if (!advanced) {
+        throw new ConflictError(
+          "This agreement's terms were revised by another request before your acceptance could be recorded. Please review the current version and try again.",
+        );
+      }
       const auditId = await this.recordAudit(agreement.id, input.actingUserId, "creditor_accepted", null);
       await this.notifyParty(agreement, "debtor", "agreement_decided", { decision: "accepted" }, auditId);
 
@@ -901,35 +1073,51 @@ export class AgreementService {
     }
 
     const { terms, schedule } = buildTerms(input.newTerms);
-    const versionNumber = currentVersion.versionNumber + 1;
-    const newVersion = await this.deps.versions.insert({
-      agreementId: agreement.id,
-      versionNumber,
-      parentVersionId: currentVersion.id,
-      isOriginal: false,
-      producedBy: `${actingRole}_revision`,
-      frequency: input.newTerms.frequency,
-      feeAllocation: input.newTerms.feeAllocation,
-      terms,
-    });
-    await this.deps.scheduleItems.replaceForVersion(newVersion.id, schedule);
-    await this.deps.agreements.setCurrentVersionId(agreement.id, newVersion.id);
 
     // Flip to the *other* party's review — the revision loop: whoever didn't just propose this
     // change must acknowledge/accept (or revise again) the new version before signing can begin.
     const otherRole: PartyRole = actingRole === "debtor" ? "creditor" : "debtor";
     const nextStatus: AgreementStatus = otherRole === "debtor" ? "awaiting_debtor_acknowledgment" : "awaiting_creditor_acceptance";
-    await this.deps.agreements.updateStatus(agreement.id, nextStatus);
+
+    // FINAL corrective pass (Codex: close the general-revision-vs-acceptance/signing race — the same
+    // class of defect `reviseFirstPaymentDate` was already fixed for): the version insert, schedule
+    // replacement, currentVersionId repoint, and status flip now happen inside ONE transaction that
+    // re-locks and re-validates fresh agreement/version state immediately before writing — see
+    // RevisionApplicationRepository.applyGeneralTermsRevisionAtomically's own doc comment for exactly
+    // what race this closes (a concurrent acceptance/signing progression completing between this
+    // method's pre-transaction reads above and the write). Propagates `ConflictError` directly (no
+    // translation needed) if that revalidation fails.
+    const applied = await this.deps.revisions.applyGeneralTermsRevisionAtomically({
+      agreementId: agreement.id,
+      baseVersionId: currentVersion.id,
+      // FINAL corrective pass, round 2: the EXACT status this specific attempt was authorized
+      // against (`agreement.status`, which is what `actingRole` was derived from above) — never the
+      // broader `revisableStatuses` set, which would incorrectly let a stale debtor-turn revision
+      // commit merely because the agreement has since moved to the OTHER generally-revisable status.
+      expectedStatus: agreement.status,
+      newStatus: nextStatus,
+      producedBy: `${actingRole}_revision`,
+      frequency: input.newTerms.frequency,
+      feeAllocation: input.newTerms.feeAllocation,
+      terms,
+      schedule,
+    });
 
     const auditId = await this.recordAudit(agreement.id, input.actingUserId, "agreement_terms_revised", {
       previousVersionId: currentVersion.id,
       previousVersionNumber: currentVersion.versionNumber,
-      newVersionId: newVersion.id,
-      newVersionNumber: versionNumber,
+      newVersionId: applied.newVersionId,
+      newVersionNumber: applied.newVersionNumber,
       proposedByRole: actingRole,
       reason: input.reason,
     });
-    await this.notifyParty(agreement, otherRole, "agreement_action_required", { stage: "review_revision", versionNumber }, auditId);
+    await this.notifyParty(
+      agreement,
+      otherRole,
+      "agreement_action_required",
+      { stage: "review_revision", versionNumber: applied.newVersionNumber },
+      auditId,
+    );
 
     return this.getAgreement(input.agreementId, input.actingUserId);
   }
@@ -958,7 +1146,13 @@ export class AgreementService {
     agreementId: string,
     actingUserId: string,
     evidence: SigningEvidenceInput | null,
-  ): Promise<{ signatureEventId: string | null; signedAt: Date; bothSigned: boolean; agreementStatus: AgreementStatus }> {
+  ): Promise<{
+    signatureEventId: string | null;
+    signedAt: Date;
+    bothSigned: boolean;
+    agreementStatus: AgreementStatus;
+    agreementHashAtSigning: string | null;
+  }> {
     const agreement = await this.requireAgreement(agreementId);
     const role = await this.authorizeEitherParty(agreement, actingUserId, null);
     this.requireStatus(agreement, "awaiting_signatures");
@@ -1002,10 +1196,16 @@ export class AgreementService {
     }
 
     const now = new Date();
+    // R05 (DB integrity & concurrency hardening): everything checked above is necessarily a
+    // pre-transaction read — it catches the overwhelming common case fast, but is stale by the time
+    // this actually commits. `applySigningAtomically` re-locks and re-validates all of it fresh
+    // inside the transaction (see that interface's own doc comment) and throws directly (no
+    // translation needed here — same error types as above) if state changed concurrently.
     const result = await this.deps.signing.applySigningAtomically({
       agreementId: agreement.id,
       agreementVersionId: version.id,
       role,
+      originatorRole,
       signedAt: now,
       evidence,
     });
@@ -1021,14 +1221,26 @@ export class AgreementService {
     await this.recordAudit(agreement.id, actingUserId, "agreement_signed_by_party", { role });
 
     if (!result.bothSigned) {
-      return { signatureEventId: result.signatureEventId, signedAt: now, bothSigned: false, agreementStatus: agreement.status };
+      return {
+        signatureEventId: result.signatureEventId,
+        signedAt: now,
+        bothSigned: false,
+        agreementStatus: agreement.status,
+        agreementHashAtSigning: result.agreementHashAtSigning,
+      };
     }
 
     await this.recordAudit(agreement.id, actingUserId, "agreement_signed", { documentHash: result.documentHash });
     // Automatic per docs/STATE_MACHINES.md §1 — no payment is initiated (Sprint 5 doesn't
     // integrate payments); this is purely a status placeholder for Sprint 9+ to act on later.
     await this.recordAudit(agreement.id, actingUserId, "agreement_first_payment_pending", null);
-    return { signatureEventId: result.signatureEventId, signedAt: now, bothSigned: true, agreementStatus: "first_payment_pending" };
+    return {
+      signatureEventId: result.signatureEventId,
+      signedAt: now,
+      bothSigned: true,
+      agreementStatus: "first_payment_pending",
+      agreementHashAtSigning: result.agreementHashAtSigning,
+    };
   }
 
   /**
@@ -1084,24 +1296,27 @@ export class AgreementService {
     // construction, so any partial signature on the prior version is invalidated implicitly, not by
     // clearing it after the fact.
     const hadPartialSignature = !!version.creditorSignedAt || !!version.debtorSignedAt;
-    const newVersion = await this.deps.versions.insert({
+    // R07 corrective pass (Codex finding G): the version insert, schedule replacement, and
+    // currentVersionId repoint now happen inside ONE transaction that re-locks and re-validates
+    // fresh agreement/version state immediately before writing — see
+    // RevisionApplicationRepository's own doc comment for exactly what race this closes (a
+    // concurrent signing transaction completing between this method's pre-transaction read above and
+    // the write). Propagates `ConflictError` directly (no translation needed) if that revalidation
+    // fails — e.g. the agreement was just fully signed by a racing request.
+    const applied = await this.deps.revisions.applyFirstPaymentDateRevisionAtomically({
       agreementId: agreement.id,
-      versionNumber: version.versionNumber + 1,
-      parentVersionId: version.id,
-      isOriginal: false,
-      producedBy: "first_payment_date_revision",
+      baseVersionId: version.id,
       frequency: version.frequency,
       feeAllocation: version.feeAllocation,
       terms,
+      schedule: computed.items,
     });
-    await this.deps.scheduleItems.replaceForVersion(newVersion.id, computed.items);
-    await this.deps.agreements.setCurrentVersionId(agreement.id, newVersion.id);
 
     await this.recordAudit(agreement.id, input.actingUserId, "agreement_first_payment_date_revised", {
       previousVersionId: version.id,
       previousVersionNumber: version.versionNumber,
-      newVersionId: newVersion.id,
-      newVersionNumber: newVersion.versionNumber,
+      newVersionId: applied.newVersionId,
+      newVersionNumber: applied.newVersionNumber,
       previousFirstPaymentDate,
       newFirstPaymentDate: input.newFirstPaymentDate,
       priorSignatureInvalidated: hadPartialSignature,
