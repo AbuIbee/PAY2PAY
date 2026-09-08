@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, date, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { agreement, installmentScheduleItem } from "./agreement";
 import {
   notificationChannelEnum,
@@ -43,8 +43,29 @@ export const paymentRetry = pgTable(
     canceledAt: timestamp("canceled_at", { withTimezone: true }),
     canceledReason: text("canceled_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // PACKAGE B — remaining Codex blockers (retry executor coordination): a fresh token minted only
+    // when a worker atomically claims this retry for execution (status -> "claimed"), under the SAME
+    // installment row lock `FailedPaymentRetryCoordinator.coordinateFailure`/`coordinateSuccess` use.
+    // The worker must re-confirm this exact token is still current immediately before the actual
+    // provider call (see `FailedPaymentRetryCoordinator`'s own doc comment) — `coordinateSuccess`
+    // canceling a "claimed" retry never changes this column, so a stale worker's own remembered token
+    // simply no longer matches a "canceled" row's expectations once it re-checks. Null until claimed;
+    // never reused across a later reclaim (a canceled retry is never reclaimed at all).
+    executionToken: uuid("execution_token"),
+    // PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 4A): durable backoff for a
+    // `claimed` retry whose provider outcome remains ambiguous/unresolved — set (now + a bounded
+    // interval) after each inconclusive `resolveAmbiguousRetry` attempt, so `findClaimedForResumption`
+    // can defer it instead of re-selecting the SAME permanently-stuck rows on every single scheduler
+    // run (which would starve later, genuinely-resolvable ones). Null means "never attempted, or due
+    // now" — every pre-existing row (none exist yet for this brand-new status) and every freshly
+    // claimed retry.
+    nextResolutionAttemptAt: timestamp("next_resolution_attempt_at", { withTimezone: true }),
   },
-  (table) => [uniqueIndex("payment_retry_original_payment_attempt_unique").on(table.originalPaymentAttemptId)],
+  (table) => [
+    uniqueIndex("payment_retry_original_payment_attempt_unique").on(table.originalPaymentAttemptId),
+    // Backs `findClaimedForResumption`'s bounded, deterministically-ordered, backoff-aware scan.
+    index("payment_retry_claimed_resumption_idx").on(table.status, table.nextResolutionAttemptAt, table.id),
+  ],
 ).enableRLS();
 
 /**

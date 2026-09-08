@@ -24,6 +24,11 @@ import type {
 interface StoredSandboxPayment {
   status: PaymentProviderPaymentStatus;
   amountMinorUnits: number;
+  currency: string;
+  payerProfileKind: string;
+  payerProfileId: string;
+  recipientProfileKind: string;
+  recipientProfileId: string;
 }
 
 /**
@@ -42,6 +47,12 @@ export class SandboxPaymentProvider implements PaymentProvider {
   readonly providerName = "sandbox_mock";
   readonly providerEnvironment = "sandbox" as const;
   private readonly payments = new Map<string, StoredSandboxPayment>();
+  /**
+   * PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 3): real adapter-level idempotency
+   * — the durable memory a genuine processor keeps against the caller's own idempotency key. Every
+   * `createPayment` call consults this FIRST, before ever minting a new `providerPaymentId`.
+   */
+  private readonly byIdempotencyKey = new Map<string, string>();
 
   constructor(private readonly webhookSecret: string) {}
 
@@ -76,7 +87,35 @@ export class SandboxPaymentProvider implements PaymentProvider {
     return { providerAccountRef: `sandbox_bank_${randomUUID()}`, maskedLast4 };
   }
 
+  /**
+   * PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 3): real idempotency semantics —
+   * for the SAME `idempotencyKey`, this returns the SAME logical payment every time, never a second
+   * one, matching a genuine processor's own idempotency-key contract. A same-key call with materially
+   * different request data (amount/currency/either party's FULL reference — `profileKind` AND
+   * `profileId`, per Codex's own Section 6 finding: the same `profileId` reused under a DIFFERENT
+   * `profileKind` — e.g. personal -> business — is a genuinely different real-world party, not the
+   * same request replayed) is rejected rather than silently creating or mutating a different logical
+   * payment underneath the same key.
+   */
   async createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult> {
+    const existingId = this.byIdempotencyKey.get(input.idempotencyKey);
+    if (existingId) {
+      const existing = this.payments.get(existingId);
+      if (!existing) throw new ValidationError("sandbox_idempotency_key_index_corrupted");
+      const conflicts =
+        existing.amountMinorUnits !== input.amountMinorUnits ||
+        existing.currency !== input.currency ||
+        existing.payerProfileKind !== input.payer.profileKind ||
+        existing.payerProfileId !== input.payer.profileId ||
+        existing.recipientProfileKind !== input.recipient.profileKind ||
+        existing.recipientProfileId !== input.recipient.profileId;
+      if (conflicts) {
+        throw new ValidationError("This idempotency key was already used with different payment details.");
+      }
+      // Idempotent replay: the SAME logical payment, never a second one, never re-simulated.
+      return { providerPaymentId: existingId, status: existing.status };
+    }
+
     if (!Number.isInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
       throw new ValidationError("amountMinorUnits must be a positive integer.");
     }
@@ -85,14 +124,43 @@ export class SandboxPaymentProvider implements PaymentProvider {
     }
     const status: PaymentProviderPaymentStatus = input.simulateOutcome ?? "pending";
     const providerPaymentId = `sandbox_pay_${randomUUID()}`;
-    this.payments.set(providerPaymentId, { status, amountMinorUnits: input.amountMinorUnits });
+    this.payments.set(providerPaymentId, {
+      status,
+      amountMinorUnits: input.amountMinorUnits,
+      currency: input.currency,
+      payerProfileKind: input.payer.profileKind,
+      payerProfileId: input.payer.profileId,
+      recipientProfileKind: input.recipient.profileKind,
+      recipientProfileId: input.recipient.profileId,
+    });
+    this.byIdempotencyKey.set(input.idempotencyKey, providerPaymentId);
     return { providerPaymentId, status };
+  }
+
+  /**
+   * PAID2YOU — PACKAGE B (Codex final remaining blockers, Section B2 — Part B): `feeMinorUnits` is
+   * always explicitly `0` — this sandbox never simulates a processor fee at the provider-API layer
+   * (mirrors `SANDBOX_ACH_PROCESSOR_FEE_MINOR_UNITS`'s identical "no live processor integrated"
+   * baseline elsewhere in this codebase) — normalized HERE, inside the adapter, never left absent for
+   * generic webhook/ledger code to guess about.
+   */
+  private toRetrieveResult(providerPaymentId: string, record: StoredSandboxPayment): RetrievePaymentResult {
+    return { providerPaymentId, status: record.status, amountMinorUnits: record.amountMinorUnits, currency: record.currency, feeMinorUnits: 0 };
   }
 
   async retrievePayment(providerPaymentId: string): Promise<RetrievePaymentResult> {
     const record = this.payments.get(providerPaymentId);
     if (!record) throw new ValidationError("Unknown payment reference.");
-    return { providerPaymentId, status: record.status };
+    return this.toRetrieveResult(providerPaymentId, record);
+  }
+
+  /** See `PaymentProvider.retrievePaymentByIdempotencyKey`'s own doc comment. */
+  async retrievePaymentByIdempotencyKey(idempotencyKey: string): Promise<RetrievePaymentResult | null> {
+    const providerPaymentId = this.byIdempotencyKey.get(idempotencyKey);
+    if (!providerPaymentId) return null;
+    const record = this.payments.get(providerPaymentId);
+    if (!record) return null;
+    return this.toRetrieveResult(providerPaymentId, record);
   }
 
   async cancelPayment(providerPaymentId: string): Promise<CancelPaymentResult> {
@@ -130,11 +198,22 @@ export class SandboxPaymentProvider implements PaymentProvider {
     if (typeof parsed.providerEventId !== "string" || typeof parsed.eventType !== "string") {
       throw new ValidationError("Webhook payload is missing providerEventId/eventType.");
     }
+    // PACKAGE B — remaining Codex blockers (Section 4 — reconciliation evidence must be complete):
+    // this sandbox provider's own explicit contract is "there is no fee simulation" — normalized
+    // HERE, at the seam between an untrusted raw webhook body and the internal `data` this codebase
+    // trusts, so every consumer (the original webhook-processing path AND reconciliation's automatic
+    // repair evidence check) sees the SAME explicit zero, never an implicitly-absent field that
+    // generic reconciliation code would otherwise have to guess about.
+    const data: Record<string, unknown> = { ...parsed };
+    if (parsed.eventType === "payment.succeeded") {
+      if (typeof data.processorFeeMinorUnits !== "number") data.processorFeeMinorUnits = 0;
+      if (typeof data.platformFeeMinorUnits !== "number") data.platformFeeMinorUnits = 0;
+    }
     return {
       provider: this.providerName,
       providerEventId: parsed.providerEventId,
       eventType: parsed.eventType,
-      data: parsed,
+      data,
     };
   }
 

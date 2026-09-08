@@ -352,10 +352,62 @@ export const reconciliationExceptionTypeEnum = pgEnum("reconciliation_exception_
   "stale_pending_settlement",
   "internal_posting_failure",
   "provider_event_without_internal_state",
+  // PAID2YOU — PACKAGE B (R06+R09 architectural review remediation, Item 1 — complete trusted-
+  // evidence conflict detection): a trusted financial event's own carried fee evidence disagreeing
+  // with, respectively, already-posted ledger evidence (processor fee) or Paid2You's own authoritative
+  // fee policy (platform fee) — see `PaymentWebhookService.detectAndRecordConflict`'s own doc comment.
+  "processor_fee_mismatch",
+  "platform_fee_mismatch",
+  // PAID2YOU — PACKAGE B (Stage 6 final architecture closure, Item 1 — provider namespace mismatch is
+  // a durable identity conflict): an incoming event's own claimed provider disagreeing with the
+  // authoritative `providerName` of the payment its `providerPaymentId` resolves to — conflicting
+  // payment-identity evidence a retry can never resolve — see
+  // `PaymentWebhookService.recordProviderIdentityMismatch`'s own doc comment.
+  "provider_identity_mismatch",
 ]);
 
 /** Sprint 10: an exception stays "open" until an administrator (or a future automated repair) explicitly resolves it — reconciliation itself never auto-resolves anything, matching the sprint's "must not silently ignore mismatches." */
 export const reconciliationExceptionStatusEnum = pgEnum("reconciliation_exception_status", ["open", "resolved"]);
+
+/**
+ * R06 (webhook processed-state / redelivery recovery): the durable processing lifecycle for a
+ * `payment_webhook_event` row — see that table's own doc comment in payment.ts for the exact defect
+ * this closes ("event existence != event completion"). A row starts "received" the instant it is
+ * durably recorded (before any business-logic effect has been attempted), moves to "processing" only
+ * while a specific worker holds its lease (see `lease_expires_at`), and only ever becomes "processed"
+ * after every REQUIRED financial consequence of the event has actually completed. "failed" covers
+ * both a retryable failure awaiting `next_retry_at` and a permanent/poison failure (distinguished by
+ * whether `next_retry_at` is set) — kept as one status rather than two so "is this event stuck?"
+ * always has one authoritative column to check, matching this remediation's "must remain
+ * visible/auditable" requirement for a poison event.
+ */
+export const paymentWebhookProcessingStatusEnum = pgEnum("payment_webhook_processing_status", [
+  "received",
+  "processing",
+  "processed",
+  "failed",
+]);
+
+/**
+ * PAID2YOU — PACKAGE B (Codex final remaining blockers, Section B2 — Part A): the TRUTHFUL origin of
+ * a `payment_webhook_event` row — never conflated with `signature_verified`, which means something
+ * narrower ("was an inbound HTTP request's signature header cryptographically valid") and is
+ * meaningless for a row that was never an inbound HTTP request at all.
+ *   - "webhook": genuinely arrived via `PaymentWebhookService.receiveWebhook` (an inbound provider
+ *     webhook delivery) — `signature_verified` reflects a REAL signature check on that request.
+ *   - "provider_lookup": genuinely originated from `PaymentWebhookService.receiveInternalEvent`, the
+ *     ONLY other call site that can ever create a row — itself reachable exclusively from
+ *     `FailedPaymentRetryCoordinator.resolveAmbiguousRetry`'s own authenticated
+ *     `PaymentProvider.retrievePaymentByIdempotencyKey` call, never from any HTTP/user-controlled
+ *     route. `signature_verified` is always `false` for this source — there was no inbound webhook
+ *     signature to verify at all; trust instead rests on the row's own complete, evidence-validated
+ *     financial payload (see `postLedgerEntryRequired`'s own doc comment) and on this source itself
+ *     being unreachable from outside this codebase's own internal recovery path.
+ * Defaults to "webhook" for every pre-existing row: `receiveInternalEvent` did not exist before this
+ * fix, so every row ever written before this migration is PROVABLY a genuine webhook delivery — this
+ * default never falsely relabels historical data.
+ */
+export const paymentWebhookEventSourceEnum = pgEnum("payment_webhook_event_source", ["webhook", "provider_lookup"]);
 
 /**
  * Sprint 13 (docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md): the lifecycle of a single
@@ -368,7 +420,15 @@ export const reconciliationExceptionStatusEnum = pgEnum("reconciliation_exceptio
  * "if retry fails, stop automatic retries": a retry's own resulting payment_attempt is never itself
  * treated as eligible for a further `payment_retry` row.
  */
-export const paymentRetryStatusEnum = pgEnum("payment_retry_status", ["scheduled", "fired", "canceled"]);
+/**
+ * PACKAGE B — remaining Codex blockers (retry executor coordination): "claimed" is the durable
+ * intermediate state between "scheduled" and "fired" — a retry authoritatively claimed for execution
+ * (see FailedPaymentRetryCoordinator.claimRetryForExecution) but not yet confirmed submitted to the
+ * provider. Exists so `coordinateSuccess` can cancel/supersede a retry a worker has already claimed
+ * but not yet fired, closing the "worker claims, pauses, installment settles, worker still submits"
+ * race — see that class's own doc comment.
+ */
+export const paymentRetryStatusEnum = pgEnum("payment_retry_status", ["scheduled", "claimed", "fired", "canceled"]);
 
 /**
  * Sprint 13: a borrower-requested new due date for a past-due (or any) installment — requirement #9

@@ -34,6 +34,8 @@ function toPaymentAttemptRecord(row: PaymentAttemptRow): PaymentAttemptRecord {
     recordedByUserId: row.recordedByUserId,
     recipientConfirmedAt: row.recipientConfirmedAt,
     bankConnectionId: row.bankConnectionId,
+    lifecycleCheckedAt: row.lifecycleCheckedAt,
+    financialRepairNextAttemptAt: row.financialRepairNextAttemptAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

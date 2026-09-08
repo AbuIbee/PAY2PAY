@@ -5,6 +5,10 @@
       "schedule": "0 13 * * *"
     },
     {
+      "path": "/api/scheduler/recover-payment-webhooks",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/scheduler/expire-negotiations",
       "schedule": "0 14 * * *"
     },

@@ -1,4 +1,5 @@
-import { bigserial, index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { bigserial, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { profileKindEnum } from "./enums";
 import { userAccount } from "./identity";
 
@@ -58,9 +59,25 @@ export const auditEvent = pgTable(
     targetResourceId: text("target_resource_id"),
     eventHash: text("event_hash").notNull(),
     previousEventHash: text("previous_event_hash"),
+    // R09 corrective pass (Codex blocker 9 — audit effect recovery/idempotency): a durable, stable
+    // identity for a REQUIRED financial-transition audit effect, tied to the exact provider event
+    // that caused it — never set for any other audit action. Lets a retry safely re-attempt writing
+    // a missing required audit record (status committed, audit failed, retry restores it) via
+    // insert-then-recheck-on-conflict, the same idiom used everywhere else in this codebase, WITHOUT
+    // weakening R04's append-only hash-chain serialization at all: this is purely an additional,
+    // orthogonal uniqueness check performed before the chain-serialized insert, never a change to
+    // how the chain itself is built or verified. Nullable — every non-financial-transition audit
+    // action (the overwhelming majority) never sets this.
+    providerEventId: text("provider_event_id"),
   },
   (table) => [
     index("audit_event_agreement_idx").on(table.agreementId, table.occurredAt),
     index("audit_event_profile_idx").on(table.profileKind, table.profileId, table.occurredAt),
+    // Partial unique index: only ever constrains the rows that opt into this identity (financial
+    // transition audits tied to a provider event) — every other action's rows are entirely
+    // unaffected, since `provider_event_id IS NULL` never participates in a unique index.
+    uniqueIndex("audit_event_provider_event_action_unique")
+      .on(table.providerEventId, table.action)
+      .where(sql`${table.providerEventId} IS NOT NULL`),
   ],
 ).enableRLS();

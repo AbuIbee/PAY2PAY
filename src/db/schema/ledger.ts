@@ -104,15 +104,35 @@ export const ledgerPosting = pgTable(
  * `(payment_attempt_id, exception_type)` before inserting — see reconciliationService.ts's doc
  * comment for why this is an application-level check rather than a DB partial-unique-index).
  */
-export const reconciliationException = pgTable("reconciliation_exception", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  exceptionType: reconciliationExceptionTypeEnum("exception_type").notNull(),
-  paymentAttemptId: uuid("payment_attempt_id").references(() => paymentAttempt.id),
-  providerEventId: text("provider_event_id"),
-  details: jsonb("details"),
-  status: reconciliationExceptionStatusEnum("status").notNull().default("open"),
-  detectedAt: timestamp("detected_at", { withTimezone: true }).notNull().defaultNow(),
-  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
-  resolvedByUserId: uuid("resolved_by_user_id").references(() => userAccount.id),
-  resolutionReason: text("resolution_reason"),
-}).enableRLS();
+export const reconciliationException = pgTable(
+  "reconciliation_exception",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    exceptionType: reconciliationExceptionTypeEnum("exception_type").notNull(),
+    paymentAttemptId: uuid("payment_attempt_id").references(() => paymentAttempt.id),
+    providerEventId: text("provider_event_id"),
+    details: jsonb("details"),
+    status: reconciliationExceptionStatusEnum("status").notNull().default("open"),
+    detectedAt: timestamp("detected_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedByUserId: uuid("resolved_by_user_id").references(() => userAccount.id),
+    resolutionReason: text("resolution_reason"),
+  },
+  (table) => [
+    // PAID2YOU — PACKAGE B (R06+R09 architectural review remediation, Item 1 — CONFLICT EXCEPTION
+    // IDEMPOTENCY): DB-enforced atomicity for the trusted-evidence-conflict path
+    // (`PaymentWebhookService.detectAndRecordConflict` / `ensureOpenException`) — a real unique
+    // constraint, never merely an application-level "find open then insert" race. Scoped to
+    // `status = 'open'` (a PARTIAL index) rather than every row: this identity
+    // `(payment_attempt_id, provider_event_id, exception_type)` legitimately recurs once a prior
+    // exception with the same identity has been resolved (a fresh conflict later deserves its own
+    // fresh open record) — only ever ONE currently-open exception per identity is enforced. Every
+    // OTHER pre-existing exception type either always has `provider_event_id = NULL` (each row's own
+    // NULL is distinct under SQL uniqueness semantics, so this index is structurally a no-op for
+    // them — their own existing application-level idempotency check is unaffected) or already used a
+    // real `provider_event_id` in a way compatible with this same identity shape.
+    uniqueIndex("reconciliation_exception_open_identity_unique")
+      .on(table.paymentAttemptId, table.providerEventId, table.exceptionType)
+      .where(sql`${table.status} = 'open'`),
+  ],
+).enableRLS();

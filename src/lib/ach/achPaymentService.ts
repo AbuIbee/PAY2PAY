@@ -94,6 +94,8 @@ export class AchPaymentService {
     currency: string;
     actingUserId: string;
     installmentScheduleItemId?: string;
+    /** See `RetryPaymentMethodInitiator.createManualPayment`'s own doc comment — passed straight through to `PaymentService.submitPending`. */
+    finalGuard?: () => Promise<void>;
   }): Promise<PaymentAttemptRecord> {
     const mandate = await this.requireActiveMandate(input.agreementId);
     const scheduled = await this.deps.payments.schedulePayment(
@@ -115,7 +117,23 @@ export class AchPaymentService {
       // Idempotent replay of an already-submitted manual payment — nothing further to do.
       return scheduled;
     }
-    return this.deps.payments.submitPending(scheduled.id, input.actingUserId);
+    return this.deps.payments.submitPending(scheduled.id, input.actingUserId, null, null, input.finalGuard);
+  }
+
+  /** See `RetryPaymentMethodInitiator.prepareRetrySubmission`'s own doc comment (paymentRetryService.ts). */
+  async prepareRetrySubmission(input: { agreementId: string; amountMinorUnits: number; currency: string }): Promise<{
+    amountMinorUnits: number;
+    currency: string;
+    paymentMethod: "ach";
+    bankConnectionId: string | null;
+  }> {
+    const mandate = await this.requireActiveMandate(input.agreementId);
+    return {
+      amountMinorUnits: input.amountMinorUnits,
+      currency: input.currency,
+      paymentMethod: "ach",
+      bankConnectionId: mandate.financialAccountId,
+    };
   }
 
   private async requireActiveMandate(agreementId: string): Promise<AchMandateRecord> {

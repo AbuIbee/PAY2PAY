@@ -86,7 +86,10 @@ describe("POST /api/admin/sandbox/simulate-settlement", () => {
       recipientProfileId: randomUUID(),
       amountMinorUnits: 5_000,
       currency: "USD",
-      agreementId: null,
+      // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): non-null — a "succeeded" transition
+      // now requires a real ledger posting, which requires an agreement (unregistered here; this
+      // test's own concern is exercising the real webhook path, not agreement-party matching).
+      agreementId: randomUUID(),
       providerName: sandboxProvider.providerName,
       initialStatus: "processing",
     });

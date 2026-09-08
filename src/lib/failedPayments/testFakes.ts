@@ -26,12 +26,18 @@ export class InMemoryInstallmentStatusRepository implements InstallmentStatusRep
     this.dueDateById.set(installmentScheduleItemId, dueDate);
   }
 
+  /** Mirrors DrizzleInstallmentStatusRepository.markPastDue's `AND status <> 'paid'` guard — see that method's own doc comment. */
   async markPastDue(installmentScheduleItemId: string): Promise<void> {
+    if (this.statusById.get(installmentScheduleItemId) === "paid") return;
     this.statusById.set(installmentScheduleItemId, "past_due");
   }
 
   async markPaid(installmentScheduleItemId: string): Promise<void> {
     this.statusById.set(installmentScheduleItemId, "paid");
+  }
+
+  async markScheduled(installmentScheduleItemId: string): Promise<void> {
+    this.statusById.set(installmentScheduleItemId, "scheduled");
   }
 
   async findDueDate(installmentScheduleItemId: string): Promise<string | null> {
@@ -40,6 +46,10 @@ export class InMemoryInstallmentStatusRepository implements InstallmentStatusRep
 
   async updateDueDate(installmentScheduleItemId: string, dueDate: string): Promise<void> {
     this.dueDateById.set(installmentScheduleItemId, dueDate);
+  }
+
+  async findStatus(installmentScheduleItemId: string): Promise<string | null> {
+    return this.statusById.get(installmentScheduleItemId) ?? null;
   }
 }
 
@@ -60,6 +70,8 @@ export class InMemoryPaymentRetryRepository implements PaymentRetryRepository {
       canceledAt: null,
       canceledReason: null,
       createdAt: new Date(),
+      executionToken: null,
+      nextResolutionAttemptAt: null,
       ...input,
     };
     this.byId.set(record.id, record);
@@ -80,8 +92,23 @@ export class InMemoryPaymentRetryRepository implements PaymentRetryRepository {
     );
   }
 
-  async findDueForFiring(now: Date): Promise<PaymentRetryRecord[]> {
-    return [...this.byId.values()].filter((r) => r.status === "scheduled" && r.scheduledFor.getTime() <= now.getTime());
+  async findDueForFiring(now: Date, limit: number): Promise<PaymentRetryRecord[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.status === "scheduled" && r.scheduledFor.getTime() <= now.getTime())
+      .sort((a, b) => a.scheduledFor.getTime() - b.scheduledFor.getTime())
+      .slice(0, limit);
+  }
+
+  async findClaimedForResumption(limit: number, now: Date): Promise<PaymentRetryRecord[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.status === "claimed" && (!r.nextResolutionAttemptAt || r.nextResolutionAttemptAt.getTime() <= now.getTime()))
+      .sort((a, b) => (a.nextResolutionAttemptAt?.getTime() ?? 0) - (b.nextResolutionAttemptAt?.getTime() ?? 0))
+      .slice(0, limit);
+  }
+
+  async markResolutionDeferred(id: string, nextAttemptAt: Date): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) record.nextResolutionAttemptAt = nextAttemptAt;
   }
 
   private mustFind(id: string): PaymentRetryRecord {
@@ -98,8 +125,10 @@ export class InMemoryPaymentRetryRepository implements PaymentRetryRepository {
     return record;
   }
 
-  async markCanceled(id: string, canceledAt: Date, canceledReason: string): Promise<PaymentRetryRecord> {
+  /** Mirrors DrizzlePaymentRetryRepository.markCanceled's `status = 'scheduled'` guard — see that method's own doc comment. */
+  async markCanceled(id: string, canceledAt: Date, canceledReason: string): Promise<PaymentRetryRecord | null> {
     const record = this.mustFind(id);
+    if (record.status !== "scheduled") return null;
     record.status = "canceled" satisfies PaymentRetryStatus;
     record.canceledAt = canceledAt;
     record.canceledReason = canceledReason;
@@ -223,7 +252,10 @@ export function createTestFailedPaymentWorkflow(delayBusinessDays?: number) {
       ach: ach.achPaymentService,
       debit_card: card.debitCardPaymentService,
       // PRSprint 18: never invoked in practice — see getPaymentRetryService.ts's identical stub.
-      manual_off_platform: { createManualPayment: () => Promise.reject(new Error("not retryable")) },
+      manual_off_platform: {
+        createManualPayment: () => Promise.reject(new Error("not retryable")),
+        prepareRetrySubmission: () => Promise.reject(new Error("not retryable")),
+      },
     },
     profileOwners: ach.paymentCtx.verificationCtx.profileOwners,
     audit: new AuditService(auditRepo),

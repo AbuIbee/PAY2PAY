@@ -19,8 +19,9 @@ import type {
   PaymentMethod,
 } from "./paymentService";
 import type { ProfileRef } from "./paymentProvider";
+import type { PaymentTransitionCoordinator, TransitionApplyResult } from "./paymentTransitionCoordinator";
 import { PaymentWebhookService } from "./paymentWebhookService";
-import type { FailedPaymentWorkflow, PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
+import type { ClaimOutcome, FailedPaymentWorkflow, PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
 import { SandboxPaymentProvider } from "./sandboxPaymentProvider";
 
 /** Test-only in-memory doubles for PaymentService, mirroring src/lib/csvImport/testFakes.ts's pattern. */
@@ -63,6 +64,8 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
       recordedByUserId: recordedByUserId ?? null,
       recipientConfirmedAt: null,
       bankConnectionId: bankConnectionId ?? null,
+      lifecycleCheckedAt: null,
+      financialRepairNextAttemptAt: null,
       createdAt: now,
       updatedAt: now,
       ...rest,
@@ -79,6 +82,22 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     const record = this.byId.get(id);
     if (!record) throw new Error("payment_attempt not found");
     record.status = status;
+    if (fields.providerPaymentId !== undefined) record.providerPaymentId = fields.providerPaymentId;
+    if (fields.failureReason !== undefined) record.failureReason = fields.failureReason;
+    record.updatedAt = new Date();
+    return record;
+  }
+
+  /** Mirrors DrizzlePaymentAttemptRepository.updateStatusIfLegalTransition's exact contract — see that method's own doc comment. */
+  async updateStatusIfLegalTransition(
+    id: string,
+    newStatus: PaymentAttemptStatus,
+    fields: { providerPaymentId?: string; failureReason?: string },
+    allowedSourceStatuses: readonly PaymentAttemptStatus[],
+  ): Promise<PaymentAttemptRecord | null> {
+    const record = this.byId.get(id);
+    if (!record || !allowedSourceStatuses.includes(record.status)) return null;
+    record.status = newStatus;
     if (fields.providerPaymentId !== undefined) record.providerPaymentId = fields.providerPaymentId;
     if (fields.failureReason !== undefined) record.failureReason = fields.failureReason;
     record.updatedAt = new Date();
@@ -144,6 +163,63 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     return [...this.byId.values()].filter(
       (r) => r.payerProfileKind === payer.profileKind && r.payerProfileId === payer.profileId && r.createdAt >= sinceDate,
     );
+  }
+
+  async listRecentlySucceeded(limit: number): Promise<PaymentAttemptRecord[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.status === "succeeded")
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+      .slice(0, limit);
+  }
+
+  /**
+   * PACKAGE B — remaining Codex blockers: this in-memory fake has no visibility into ledger state at
+   * all (a separate fake/service), so — unlike the real, properly `NOT EXISTS`-filtered Drizzle
+   * query — this simply returns every "succeeded" payment, oldest-updated first. Correctness is still
+   * enforced downstream by `ReconciliationService.reconcilePaymentAttempt`'s own
+   * `ledger.findEntry(...)` check for each candidate; this fake only needs to be a safe (over-broad)
+   * pre-filter, never an under-broad one.
+   */
+  async listMissingClearingCandidates(limit: number, now: Date): Promise<PaymentAttemptRecord[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.status === "succeeded" && (!r.financialRepairNextAttemptAt || r.financialRepairNextAttemptAt.getTime() <= now.getTime()))
+      .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
+      .slice(0, limit);
+  }
+
+  async markFinancialRepairDeferred(id: string, nextAttemptAt: Date): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) record.financialRepairNextAttemptAt = nextAttemptAt;
+  }
+
+  /**
+   * PACKAGE B — PRE-CODEX FINAL CORRECTION (item 3): mirrors the real Drizzle query's
+   * `lifecycleCheckedAt IS NULL` filter exactly (not merely over-broad here — this fake has no
+   * ledger-state visibility to fall back on for correctness the way `listMissingClearingCandidates`
+   * does, so it must itself be precise about the one thing that makes this self-shrinking).
+   */
+  async listLifecycleRepairCandidates(limit: number): Promise<PaymentAttemptRecord[]> {
+    return [...this.byId.values()]
+      .filter((r) => r.status === "succeeded" && r.agreementId && !r.lifecycleCheckedAt)
+      .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
+      .slice(0, limit);
+  }
+
+  async markLifecycleChecked(id: string, checkedAt: Date): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) record.lifecycleCheckedAt = checkedAt;
+  }
+
+  /** Same rationale as `listMissingClearingCandidates` — see its own doc comment. */
+  async listMissingReversalCandidates(limit: number, now: Date): Promise<PaymentAttemptRecord[]> {
+    return [...this.byId.values()]
+      .filter(
+        (r) =>
+          (r.status === "refunded" || r.status === "returned" || r.status === "reversed" || r.status === "disputed") &&
+          (!r.financialRepairNextAttemptAt || r.financialRepairNextAttemptAt.getTime() <= now.getTime()),
+      )
+      .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
+      .slice(0, limit);
   }
 
   /** Test-only helper (not part of PaymentAttemptRepository) — backdates a record for staleness tests. */
@@ -231,44 +307,221 @@ export function createTestPaymentService(options?: {
   return { verificationCtx, provider, payments, auditRepo, agreements, paymentService };
 }
 
+/**
+ * R06 corrective pass: mirrors `DrizzlePaymentWebhookEventRepository`'s exact claim/lease contract —
+ * see that class's, and `PaymentWebhookEventRepository`'s, own doc comments. Every method here is
+ * synchronous internally (no `await` between reading and mutating its `Map`/`Set`), the same
+ * no-real-race-window property the real DB's transaction/unique-constraint guarantees give the
+ * Drizzle implementation — mirrors `InMemoryPaymentAttemptRepository.insertPending`'s identical
+ * synchronous-reservation precedent.
+ */
 export class InMemoryPaymentWebhookEventRepository implements PaymentWebhookEventRepository {
   private byId = new Map<string, PaymentWebhookEventRecord>();
-  // PRSprint 20 (docs/prsprints/PRSPRINT_20_IDEMPOTENCY_CONCURRENCY_FINANCIAL_STATE_SAFETY.md): a
-  // synchronous, no-await-before-check-and-reserve index — the fake's own accurate model of what the
-  // real DB's `(provider, provider_event_id)` unique index guarantees atomically. The prior
-  // implementation re-checked via the async `findByProviderEvent` (an await point) before inserting,
-  // which left a genuine race window a concurrent `Promise.all` test could fall through (both callers
-  // pass the check before either reserves the key) — a window the real Postgres unique constraint
-  // never has. This mirrors `InMemoryPaymentAttemptRepository.insertPending`'s own already-correct
-  // synchronous-reservation pattern.
   private reservedKeys = new Set<string>();
 
   async findByProviderEvent(provider: string, providerEventId: string): Promise<PaymentWebhookEventRecord | null> {
     return [...this.byId.values()].find((e) => e.provider === provider && e.providerEventId === providerEventId) ?? null;
   }
 
-  async insert(input: {
+  async tryInsertAndClaim(input: {
     provider: string;
     providerEventId: string;
     eventType: string;
+    source: PaymentWebhookEventRecord["source"];
     signatureVerified: boolean;
     payload: unknown;
-  }): Promise<PaymentWebhookEventRecord> {
+    leaseMs: number;
+    now: Date;
+  }): Promise<PaymentWebhookEventRecord | null> {
     const key = `${input.provider}:${input.providerEventId}`;
-    if (this.reservedKeys.has(key)) throw new Error("duplicate webhook event");
+    if (this.reservedKeys.has(key)) return null;
     this.reservedKeys.add(key);
-    const record: PaymentWebhookEventRecord = { id: randomUUID(), receivedAt: new Date(), processedAt: null, ...input };
+    const record: PaymentWebhookEventRecord = {
+      id: randomUUID(),
+      provider: input.provider,
+      providerEventId: input.providerEventId,
+      eventType: input.eventType,
+      source: input.source,
+      signatureVerified: input.signatureVerified,
+      payload: input.payload,
+      receivedAt: input.now,
+      processedAt: null,
+      processingStatus: "processing",
+      processingAttempts: 1,
+      processingStartedAt: input.now,
+      lastFailedAt: null,
+      lastErrorCode: null,
+      nextRetryAt: null,
+      leaseExpiresAt: new Date(input.now.getTime() + input.leaseMs),
+      claimToken: randomUUID(),
+      providerPaymentId: extractProviderPaymentId(input.payload),
+      transitionAppliedAt: null,
+      transitionFromStatus: null,
+      transitionToStatus: null,
+    };
     this.byId.set(record.id, record);
     return record;
   }
 
-  async markProcessed(id: string): Promise<void> {
+  async claimExistingForProcessing(provider: string, providerEventId: string, leaseMs: number, now: Date): Promise<ClaimOutcome> {
+    const record = [...this.byId.values()].find((e) => e.provider === provider && e.providerEventId === providerEventId);
+    if (!record) return { outcome: "duplicate" };
+    if (record.processingStatus === "processed") return { outcome: "duplicate" };
+    if (record.processingStatus === "processing") {
+      if (record.leaseExpiresAt && record.leaseExpiresAt.getTime() > now.getTime()) return { outcome: "in_progress" };
+    } else if (record.processingStatus === "failed") {
+      if (!record.nextRetryAt) return { outcome: "not_due" };
+      if (record.nextRetryAt.getTime() > now.getTime()) return { outcome: "not_due" };
+    }
+    record.processingStatus = "processing";
+    record.processingAttempts += 1;
+    record.processingStartedAt = now;
+    record.leaseExpiresAt = new Date(now.getTime() + leaseMs);
+    record.claimToken = randomUUID();
+    return { outcome: "claimed", record };
+  }
+
+  async claimBatchForRecovery(limit: number, leaseMs: number, now: Date): Promise<PaymentWebhookEventRecord[]> {
+    const eligible = [...this.byId.values()]
+      .filter((e) => {
+        if (e.processingStatus === "received") return true;
+        if (e.processingStatus === "failed") return e.nextRetryAt !== null && e.nextRetryAt.getTime() <= now.getTime();
+        if (e.processingStatus === "processing") return e.leaseExpiresAt !== null && e.leaseExpiresAt.getTime() <= now.getTime();
+        return false;
+      })
+      .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime())
+      .slice(0, limit);
+    for (const record of eligible) {
+      record.processingStatus = "processing";
+      record.processingAttempts += 1;
+      record.processingStartedAt = now;
+      record.leaseExpiresAt = new Date(now.getTime() + leaseMs);
+      record.claimToken = randomUUID();
+    }
+    return eligible;
+  }
+
+  async markProcessed(id: string, claimToken: string, now: Date): Promise<void> {
     const record = this.byId.get(id);
-    if (record) record.processedAt = new Date();
+    if (!record || record.claimToken !== claimToken) return;
+    record.processedAt = now;
+    record.processingStatus = "processed";
+    record.leaseExpiresAt = null;
+    record.nextRetryAt = null;
+  }
+
+  async markFailedRetryable(id: string, claimToken: string, errorCode: string, nextRetryAt: Date, now: Date): Promise<void> {
+    const record = this.byId.get(id);
+    if (!record || record.claimToken !== claimToken) return;
+    record.processingStatus = "failed";
+    record.lastErrorCode = errorCode;
+    record.lastFailedAt = now;
+    record.nextRetryAt = nextRetryAt;
+    record.leaseExpiresAt = null;
+  }
+
+  async markFailedPermanent(id: string, claimToken: string, errorCode: string, now: Date): Promise<void> {
+    const record = this.byId.get(id);
+    if (!record || record.claimToken !== claimToken) return;
+    record.processingStatus = "failed";
+    record.lastErrorCode = errorCode;
+    record.lastFailedAt = now;
+    record.nextRetryAt = null;
+    record.leaseExpiresAt = null;
   }
 
   async listAll(): Promise<PaymentWebhookEventRecord[]> {
     return [...this.byId.values()];
+  }
+
+  /** Mirrors DrizzlePaymentWebhookEventRepository's own Part D trust rule — see that method's own doc comment. */
+  /** Mirrors DrizzlePaymentWebhookEventRepository's own EXACT provenance predicate — see that method's own doc comment (R06+R09 architectural review remediation, Item 3). */
+  async findTrustedFinancialEventsForPayment(provider: string, providerPaymentId: string, eventType: string): Promise<PaymentWebhookEventRecord[]> {
+    return [...this.byId.values()]
+      .filter(
+        (e) =>
+          e.provider === provider &&
+          e.providerPaymentId === providerPaymentId &&
+          e.eventType === eventType &&
+          ((e.source === "webhook" && e.signatureVerified === true) || (e.source === "provider_lookup" && e.signatureVerified === false)) &&
+          e.processingStatus === "processed",
+      )
+      .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime())
+      .slice(0, 2);
+  }
+
+  /** Mirrors DrizzlePaymentWebhookEventRepository's own identical method — see that method's own doc comment (Stage 9 remediation, Root Correction 4). */
+  async findCanonicalTransitionEvidence(provider: string, providerPaymentId: string, targetStatus: PaymentAttemptStatus): Promise<PaymentWebhookEventRecord | null> {
+    const matches = [...this.byId.values()].filter(
+      (e) =>
+        e.provider === provider &&
+        e.providerPaymentId === providerPaymentId &&
+        e.transitionToStatus === targetStatus &&
+        e.transitionAppliedAt !== null &&
+        ((e.source === "webhook" && e.signatureVerified === true) || (e.source === "provider_lookup" && e.signatureVerified === false)),
+    );
+    return matches.length === 1 ? matches[0]! : null;
+  }
+
+  /** Test-only helper (not part of PaymentWebhookEventRepository) — used only by InMemoryPaymentTransitionCoordinator, mirrors DrizzlePaymentTransitionCoordinator's identical atomic write. */
+  recordTransitionIfClaimTokenMatches(
+    id: string,
+    claimToken: string,
+    fromStatus: PaymentAttemptStatus,
+    toStatus: PaymentAttemptStatus,
+    appliedAt: Date,
+  ): void {
+    const record = this.byId.get(id);
+    if (!record || record.claimToken !== claimToken) return;
+    record.transitionAppliedAt = appliedAt;
+    record.transitionFromStatus = fromStatus;
+    record.transitionToStatus = toStatus;
+  }
+}
+
+/** R09 corrective pass (Codex blocker 8): mirrors DrizzlePaymentWebhookEventRepository's identical extraction helper. */
+function extractProviderPaymentId(payload: unknown): string | null {
+  if (payload && typeof payload === "object" && "providerPaymentId" in payload) {
+    const value = (payload as Record<string, unknown>).providerPaymentId;
+    return typeof value === "string" ? value : null;
+  }
+  return null;
+}
+
+/**
+ * PACKAGE B — remaining Codex blockers: mirrors DrizzlePaymentTransitionCoordinator's exact contract
+ * (see that class's own doc comment) — synchronous internally (no `await` between reading and
+ * mutating the underlying `Map`s), the same no-real-race-window property the real DB's transaction
+ * gives the Drizzle implementation.
+ */
+export class InMemoryPaymentTransitionCoordinator implements PaymentTransitionCoordinator {
+  constructor(
+    private readonly payments: InMemoryPaymentAttemptRepository,
+    private readonly events: InMemoryPaymentWebhookEventRepository,
+  ) {}
+
+  async applyTransition(input: {
+    paymentAttemptId: string;
+    webhookEventId: string;
+    claimToken: string;
+    newStatus: PaymentAttemptStatus;
+    fields: { providerPaymentId?: string; failureReason?: string };
+    allowedSourceStatuses: readonly PaymentAttemptStatus[];
+  }): Promise<TransitionApplyResult> {
+    const current = await this.payments.findById(input.paymentAttemptId);
+    if (!current) throw new Error("payment_attempt not found during transition coordination");
+    if (!input.allowedSourceStatuses.includes(current.status)) {
+      return { outcome: "rejected", payment: current };
+    }
+    const updated = await this.payments.updateStatusIfLegalTransition(
+      input.paymentAttemptId,
+      input.newStatus,
+      input.fields,
+      input.allowedSourceStatuses,
+    );
+    if (!updated) return { outcome: "rejected", payment: current };
+    this.events.recordTransitionIfClaimTokenMatches(input.webhookEventId, input.claimToken, current.status, input.newStatus, new Date());
+    return { outcome: "applied", payment: updated, fromStatus: current.status };
   }
 }
 
@@ -295,10 +548,12 @@ export function createTestPaymentWebhookService(
   // params above) so any test can inspect `riskCtx.riskEvents.events` — the signal itself still only
   // fires when `profileOwners` is also provided (recordFailureRiskSignal's own gate).
   const riskCtx = createTestRiskEventService();
+  const transitionCoordinator = new InMemoryPaymentTransitionCoordinator(paymentCtx.payments as InMemoryPaymentAttemptRepository, events);
   const paymentWebhookService = new PaymentWebhookService({
     provider: paymentCtx.provider,
     events,
     payments: paymentCtx.payments,
+    transitionCoordinator,
     ledger: ledgerCtx.ledgerService,
     audit: new AuditService(auditRepo),
     failedPaymentWorkflow,

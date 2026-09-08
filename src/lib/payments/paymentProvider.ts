@@ -75,9 +75,25 @@ export interface CreatePaymentResult {
   status: PaymentProviderPaymentStatus;
 }
 
+/**
+ * PAID2YOU — PACKAGE B (Codex final remaining blockers, Section B2 — Part B): an authoritative
+ * resolved-payment lookup must carry the COMPLETE financial evidence the event/effect pipeline needs
+ * to safely post a ledger entry from it — never merely identity + status. `amountMinorUnits`/
+ * `currency` let a consumer cross-check the provider's own authoritative record against whatever it
+ * internally expected (a genuine mismatch is a real anomaly, never silently accepted). `feeMinorUnits`
+ * is the provider/processor's OWN fee for this payment — every implementer must return an explicit
+ * value, never `undefined`/omitted: a provider that genuinely charges no fee (e.g. this codebase's own
+ * sandbox, which never simulates a processor fee at the provider-API layer — see
+ * `SandboxPaymentProvider`'s own doc comment) returns `feeMinorUnits: 0` explicitly, normalized inside
+ * the adapter itself — generic webhook/ledger code must NEVER invent this value on the provider's
+ * behalf when it is merely absent/unknown.
+ */
 export interface RetrievePaymentResult {
   providerPaymentId: string;
   status: PaymentProviderPaymentStatus;
+  amountMinorUnits: number;
+  currency: string;
+  feeMinorUnits: number;
 }
 
 export interface CancelPaymentResult {
@@ -120,6 +136,18 @@ export interface PaymentProvider {
   createPaymentMethodToken(input: CreatePaymentMethodTokenInput): Promise<CreatePaymentMethodTokenResult>;
   createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult>;
   retrievePayment(providerPaymentId: string): Promise<RetrievePaymentResult>;
+  /**
+   * PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 2/3): the narrowest lookup
+   * capability needed to resolve an AMBIGUOUS `createPayment` call (the request may have reached the
+   * provider, but the application never durably observed a resolved response) — never a new
+   * submission, always keyed by the SAME durable idempotency identity the original attempt used.
+   * Returns `null` when the provider has no record of this idempotency key at all (a definitive
+   * "not found" the caller may use to decide whether resubmission is safe under its own retry
+   * policy) — never throws for "not found" specifically. A real (non-sandbox) processor adapter
+   * implementing this is explicit R10 scope; `SandboxPaymentProvider`'s own implementation proves the
+   * APPLICATION-side recovery flow, not production provider readiness.
+   */
+  retrievePaymentByIdempotencyKey(idempotencyKey: string): Promise<RetrievePaymentResult | null>;
   /** "cancel when permitted" — the provider itself decides whether a given payment id is still cancelable; PaymentService additionally restricts this to its own "pending" records. */
   cancelPayment(providerPaymentId: string): Promise<CancelPaymentResult>;
   refundPayment(providerPaymentId: string, amountMinorUnits?: number): Promise<RefundPaymentResult>;

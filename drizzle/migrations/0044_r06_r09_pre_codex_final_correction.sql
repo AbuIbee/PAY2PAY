@@ -1,0 +1,2 @@
+ALTER TABLE "payment_attempt" ADD COLUMN "lifecycle_checked_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "payment_attempt_lifecycle_checked_idx" ON "payment_attempt" USING btree ("status","lifecycle_checked_at","updated_at");

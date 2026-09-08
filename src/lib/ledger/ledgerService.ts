@@ -2,6 +2,25 @@ import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
 import { ConfigurationError, ConflictError, ValidationError } from "@/lib/errors";
 
+/**
+ * R09 corrective pass (Codex blocker 5 — failure classification): a NARROW subclass of
+ * `ValidationError`, thrown ONLY for demonstrably impossible financial event data (a fee split that
+ * cannot mathematically fit inside the gross amount, a non-positive gross amount, a negative
+ * posting) — never for an ordinary business-rule rejection like "cannot reverse a payment that has
+ * not cleared yet" (that IS a `ValidationError`, deliberately left as the plain base class, because
+ * it reflects a missing PREREQUISITE that a later retry can resolve once the prerequisite exists,
+ * not permanently-invalid data). `PaymentWebhookService.classifyProcessingFailure` uses this
+ * specific class — never the broader `ValidationError`/`ConfigurationError` — to decide whether a
+ * webhook-processing failure is genuinely permanent (manual review) or should keep retrying
+ * indefinitely at a capped backoff.
+ */
+export class FinancialIntegrityError extends ValidationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "FinancialIntegrityError";
+  }
+}
+
 export type LedgerAccountType =
   | "processor_clearing"
   | "creditor_proceeds_payable"
@@ -118,11 +137,11 @@ export class LedgerService {
     this.assertNonNegativeInteger(processorFee, "processorFeeMinorUnits");
     this.assertNonNegativeInteger(platformFee, "platformFeeMinorUnits");
     if (input.grossAmountMinorUnits === 0) {
-      throw new ValidationError("grossAmountMinorUnits must be greater than zero.");
+      throw new FinancialIntegrityError("grossAmountMinorUnits must be greater than zero.");
     }
     const creditorNet = input.grossAmountMinorUnits - processorFee - platformFee;
     if (creditorNet < 0) {
-      throw new ValidationError("Processor fee and platform fee cannot together exceed the gross payment amount.");
+      throw new FinancialIntegrityError("Processor fee and platform fee cannot together exceed the gross payment amount.");
     }
 
     const processorClearing = await this.deps.accounts.findOrCreate("processor_clearing", input.agreementId);
@@ -359,9 +378,11 @@ export class LedgerService {
   }
 
   private assertNonNegativeInteger(value: number, label: string): void {
-    // PRSprint 17: Number.isSafeInteger — see schedule.ts's identical hardening rationale.
+    // PRSprint 17: Number.isSafeInteger — see schedule.ts's identical hardening rationale. R09
+    // corrective pass: a negative/non-integer amount is always genuinely impossible financial data
+    // (FinancialIntegrityError), never a transient/prerequisite condition.
     if (!Number.isSafeInteger(value) || value < 0) {
-      throw new ValidationError(`${label} must be a non-negative integer.`);
+      throw new FinancialIntegrityError(`${label} must be a non-negative integer.`);
     }
   }
 
