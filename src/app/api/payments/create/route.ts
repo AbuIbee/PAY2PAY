@@ -31,7 +31,12 @@ const createPaymentSchema = z.object({
   recipient: profileRefSchema,
   amountMinorUnits: z.number().int().positive(),
   currency: z.string().trim().length(3).default("USD"),
-  agreementId: z.string().uuid().optional(),
+  // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): this route only ever creates
+  // provider-routed payments (agreement-less manual/off-platform payments go through
+  // /api/payments/manual instead) — required here so a malformed request is rejected with a clean
+  // 400 before a payment_attempt row is even written, rather than relying solely on
+  // PaymentService.submitToProvider's own (still-authoritative) same-invariant check.
+  agreementId: z.string().uuid(),
   deviceInfo: z.unknown().optional(),
 });
 
@@ -59,7 +64,7 @@ export function createPaymentCreateHandler(authService: AuthService, paymentServ
       recipient: parsed.data.recipient,
       amountMinorUnits: parsed.data.amountMinorUnits,
       currency: parsed.data.currency,
-      agreementId: parsed.data.agreementId ?? null,
+      agreementId: parsed.data.agreementId,
       actingUserId: userId,
       ipAddress: getClientIp(request),
       deviceInfo: parsed.data.deviceInfo ?? null,

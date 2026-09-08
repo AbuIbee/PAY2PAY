@@ -47,7 +47,7 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
     return { rawBody, signatureHeader: ctx.paymentCtx.provider.signWebhookPayload(rawBody) };
   }
 
-  it("posts payment_cleared, including processor fee and platform fee legs, on payment.succeeded", async () => {
+  it("posts payment_cleared, including the processor fee leg (from the event) — platform fee is NEVER sourced from the webhook payload (PAID2YOU — PACKAGE B, R06+R09 architectural review remediation, Item 2: platformFeeMinorUnits comes exclusively from the centralized PlatformFeePolicy, today's authoritative value being explicit zero)", async () => {
     const agreementId = "agreement-1";
     const payment = await createPayment("k1", agreementId, 10_200);
     const event = signedWebhook({
@@ -55,6 +55,8 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
       eventType: "payment.succeeded",
       providerPaymentId: payment.providerPaymentId,
       processorFeeMinorUnits: 150,
+      // Even though this payload claims a platform fee, it must be IGNORED for the actual posting —
+      // Paid2You's own fee is never an inbound webhook payload's to define.
       platformFeeMinorUnits: 50,
     });
     const result = await ctx.webhookCtx.paymentWebhookService.receiveWebhook(event);
@@ -68,8 +70,8 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
     const byType = Object.fromEntries(entry!.postings.map((p) => [p.accountType, p.amountMinorUnits]));
     expect(byType.processor_clearing).toBe(10_200);
     expect(byType.processor_fee_expense).toBe(150);
-    expect(byType.platform_fee_revenue).toBe(50);
-    expect(byType.creditor_proceeds_payable).toBe(10_000);
+    expect(byType.platform_fee_revenue).toBeUndefined(); // never posted — the central policy's own zero means no platform-fee leg at all.
+    expect(byType.creditor_proceeds_payable).toBe(10_050); // 10_200 - 150 (processor fee) - 0 (policy's platform fee).
   });
 
   it("a redelivered/duplicate webhook never double-credits or double-debits (requirement #12)", async () => {
@@ -160,27 +162,51 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
     expect(payoutEntry).not.toBeNull();
   });
 
-  it("a ledger-posting gap (no agreementId) does not fail the webhook, and reconciliation surfaces it", async () => {
-    const payment = await ctx.paymentCtx.paymentService.createPayment({
-      idempotencyKey: "k7",
-      payer: PAYER,
-      recipient: RECIPIENT,
+  // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): a provider-routed payment can no longer be
+  // created with no agreement at all — PaymentService.submitToProvider now rejects it before ever
+  // reaching the provider. See paymentService.test.ts for the creation-time rejection proof; this
+  // file's own concern is the ledger/webhook consequence for a payment that predates that invariant.
+  it("provider submission rejects a payment with no agreementId before ever reaching the provider", async () => {
+    await expect(
+      ctx.paymentCtx.paymentService.createPayment({
+        idempotencyKey: "k7",
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 1_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+        ipAddress: null,
+        deviceInfo: null,
+      }),
+    ).rejects.toThrow(/must be linked to an agreement/i);
+  });
+
+  it("a legacy provider-routed payment with a null agreementId is never marked processed by the webhook, and its ledger accounting is never fabricated", async () => {
+    // Models a pre-existing/legacy row from before this invariant existed — inserted directly via the
+    // repository, bypassing PaymentService's own (now-enforced) creation-time guard.
+    const legacyPayment = await ctx.paymentCtx.payments.insertPending({
+      idempotencyKey: "k7-legacy",
+      payerProfileKind: PAYER.profileKind,
+      payerProfileId: PAYER.profileId,
+      recipientProfileKind: RECIPIENT.profileKind,
+      recipientProfileId: RECIPIENT.profileId,
       amountMinorUnits: 1_000,
       currency: "USD",
-      // no agreementId — Sprint 9 allows this; Sprint 10's ledger cannot post without one.
-      actingUserId: PAYER_USER_ID,
-      ipAddress: null,
-      deviceInfo: null,
+      agreementId: null,
+      providerName: ctx.paymentCtx.provider.providerName,
     });
-    const result = await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
-      signedWebhook({ providerEventId: "evt-7", eventType: "payment.succeeded", providerPaymentId: payment.providerPaymentId }),
-    );
-    expect(result.status).toBe("processed"); // webhook still succeeds
-    const entries = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
-    expect(entries).toHaveLength(0); // but nothing was posted
+    const providerPaymentId = `sandbox_pay_legacy_${legacyPayment.id}`;
+    await ctx.paymentCtx.payments.updateStatus(legacyPayment.id, "pending", { providerPaymentId });
 
-    const found = await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
-    expect(found.map((e) => e.exceptionType)).toContain("internal_posting_failure");
+    const result = await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt-7-legacy", eventType: "payment.succeeded", providerPaymentId }),
+    );
+    expect(result.status).toBe("accepted"); // never silently "processed" — remains unresolved/retryable.
+    const entries = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(legacyPayment.id);
+    expect(entries).toHaveLength(0); // no fabricated ledger entry.
+    const eventRow = await ctx.webhookCtx.events.findByProviderEvent(ctx.paymentCtx.provider.providerName, "evt-7-legacy");
+    expect(eventRow?.processingStatus).toBe("failed"); // retryable-failed, still visible for manual review.
+    expect(eventRow?.nextRetryAt).not.toBeNull(); // never a dead-end permanent state.
   });
 });
 

@@ -123,6 +123,11 @@ export function createFullLedgerTestContext() {
     agreements: agreementRepo,
     balances: balanceCtx.balanceService,
     audit: new AuditService(completionAuditRepo),
+    // PAID2YOU — PACKAGE B (Codex final review): `recomputeAfterSupersession` now reads/writes
+    // tx-bound against the REAL Postgres schema directly (see that method's own doc comment for
+    // why) — structurally incompatible with this context's in-memory fakes. No test in this shared
+    // in-memory context exercises it; Postgres-backed supersession-compensation coverage lives in
+    // `paymentWebhookRecovery.postgres.test.ts` instead.
   });
   const atomicManualPayments = new InMemoryAtomicManualPaymentPoster({
     ledgerAccounts: ledgerCtx.accounts,
@@ -144,6 +149,9 @@ export function createFullLedgerTestContext() {
     provider: paymentCtx.provider,
     ledger: ledgerCtx.ledgerService,
     exceptions,
+    // R09 addition: wired here too so tests can exercise reconciliation's opportunistic,
+    // idempotent lifecycle-convergence retry exactly as production wires it.
+    completion: completionService,
   });
   return { ledgerCtx, paymentCtx, webhookCtx, balanceCtx, exceptions, reconciliationService, agreementRepo, completionService };
 }

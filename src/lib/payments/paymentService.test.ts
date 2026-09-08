@@ -32,6 +32,14 @@ describe("PaymentService", () => {
     });
   }
 
+  // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): PaymentService.submitToProvider now
+  // rejects any provider-routed payment with no agreementId — every test in this file exercises the
+  // real provider-submission path, so baseInput() needs a non-null default. Deliberately an
+  // UNREGISTERED id (never passed to ctx.agreements.register) — reserveAttempt's own party
+  // cross-check only fires for a REGISTERED agreement, so every test below that doesn't care about
+  // agreement-party matching is completely unaffected; tests that DO care override this explicitly.
+  const DEFAULT_TEST_AGREEMENT_ID = "test-agreement-default";
+
   function baseInput(overrides: Partial<Parameters<typeof ctx.paymentService.createPayment>[0]> = {}) {
     return {
       idempotencyKey: "idem-1",
@@ -39,6 +47,7 @@ describe("PaymentService", () => {
       recipient: RECIPIENT,
       amountMinorUnits: 10_000,
       currency: "USD",
+      agreementId: DEFAULT_TEST_AGREEMENT_ID,
       actingUserId: PAYER_USER_ID,
       ipAddress: "127.0.0.1",
       deviceInfo: null,
@@ -65,6 +74,24 @@ describe("PaymentService", () => {
     expect(record.status).toBe("pending");
     expect(record.providerName).toBe("sandbox_mock");
     expect(record.providerPaymentId).toBeTruthy();
+  });
+
+  // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): a provider-routed payment (every payment
+  // this class ever submits to `this.deps.provider`) must be linked to an agreement — see
+  // PaymentService.submitToProvider's own doc comment for why. Manual/off-platform payments
+  // (recordManualOffPlatformPayment) never call submitToProvider at all and are unaffected.
+  it("rejects a provider-routed payment with no agreementId before ever reaching the provider, and marks the attempt failed (not left pending)", async () => {
+    await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+    await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+    await expect(ctx.paymentService.createPayment(baseInput({ agreementId: null }))).rejects.toThrow(
+      /must be linked to an agreement/i,
+    );
+    // The provider was never called — no providerPaymentId was ever assigned — and the attempt is
+    // still visible, marked "failed", not silently discarded or left "pending" forever.
+    const all = await ctx.payments.listAll();
+    const rejected = all.find((p) => p.idempotencyKey === "idem-1");
+    expect(rejected?.status).toBe("failed");
+    expect(rejected?.providerPaymentId).toBeNull();
   });
 
   it("rejects creating a payment for a payer profile the caller does not own", async () => {
@@ -251,6 +278,7 @@ describe("PaymentService", () => {
           recipient: RECIPIENT,
           amountMinorUnits: 10_000,
           currency: "USD",
+          agreementId: DEFAULT_TEST_AGREEMENT_ID,
           actingUserId: PAYER_USER_ID,
         });
         expect(scheduled.status).toBe("scheduled");

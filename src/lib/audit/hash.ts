@@ -25,6 +25,15 @@ export interface AuditEventPayload {
    */
   targetResourceType?: string | null;
   targetResourceId?: string | null;
+  /**
+   * R09 corrective pass (Codex blocker 9 — audit effect recovery/idempotency): optional, so every
+   * pre-existing call site (which never sets it) hashes byte-identically to before this field was
+   * added — see `targetResourceType`'s own doc comment for why `canonicalize`/`JSON.stringify`
+   * dropping an omitted key makes that guarantee hold. Only payment-transition audit effects set this,
+   * to a value tied to the exact provider event that caused them (see `audit_event`'s own schema doc
+   * comment).
+   */
+  providerEventId?: string | null;
 }
 
 const PAYLOAD_KEYS: (keyof AuditEventPayload)[] = [
@@ -45,6 +54,7 @@ const PAYLOAD_KEYS: (keyof AuditEventPayload)[] = [
   "relatedCaseId",
   "targetResourceType",
   "targetResourceId",
+  "providerEventId",
 ];
 
 /**

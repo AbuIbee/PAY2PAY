@@ -8,6 +8,7 @@ import type { NotificationService } from "@/lib/notify/notificationService";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { PaymentProvider, ProfileRef } from "./paymentProvider";
+import { assertNotOverpaying as sharedAssertNotOverpaying } from "./paymentInitiationEligibilityService";
 
 export type PaymentAttemptStatus =
   | "pending"
@@ -24,6 +25,58 @@ export type PaymentAttemptStatus =
   | "processing"
   /** Sprint 11: a late ACH return — the correctly-named counterpart to "reversed" above. */
   | "returned";
+
+/**
+ * R09 corrective pass (Codex blocker 4A — payment transition legality): the authoritative,
+ * DB-enforced legal-transition matrix — which SOURCE statuses may legally reach each destination
+ * status. Replaces the earlier "any non-terminal status may reach any status" terminal-exclusion
+ * check, which incorrectly allowed `succeeded -> failed` (a stale/out-of-order `payment.failed`
+ * webhook regressing an already-cleared payment). A destination status not listed here (e.g.
+ * "pending", "processing" — never a webhook-driven destination) has no entry and is simply never
+ * checked by `updateStatusIfLegalTransition`, since nothing in this codebase writes it through that
+ * path.
+ */
+export const ALLOWED_SOURCE_STATUSES_FOR_DESTINATION: Readonly<Partial<Record<PaymentAttemptStatus, readonly PaymentAttemptStatus[]>>> = {
+  succeeded: ["pending", "scheduled", "submitted", "processing"],
+  failed: ["pending", "scheduled", "submitted", "processing"],
+  refunded: ["succeeded"],
+  returned: ["succeeded"],
+  disputed: ["succeeded"],
+  reversed: ["succeeded"],
+  canceled: ["pending", "scheduled"],
+};
+
+/**
+ * PACKAGE B — remaining Codex blockers (rejected-transition handling). When a transition attempt is
+ * rejected (current status not in the destination's own allowed-source list), this decides whether
+ * that rejection is PERMANENT (the current status can never legally reach any allowed source for this
+ * destination via any future legitimate event — e.g. `succeeded -> failed`: "succeeded" only ever
+ * reaches refunded/returned/disputed/reversed, never back to a pre-terminal status) or merely
+ * PROVISIONAL (the current status could still legally advance into an allowed source for this exact
+ * destination later — e.g. `pending -> refunded`: "pending" can still legally become "succeeded",
+ * which IS an allowed source for "refunded"). Entirely data-driven from
+ * `ALLOWED_SOURCE_STATUSES_FOR_DESTINATION` itself — never a hardcoded list of statuses — and
+ * deliberately only reasons one hop ahead, which this matrix's own actual shape (pre-terminal ->
+ * {succeeded, failed, canceled}; succeeded -> {refunded, returned, disputed, reversed}) never
+ * requires more than to answer this question correctly for every real transition in it.
+ */
+export function isTransitionPermanentlyIllegal(currentStatus: PaymentAttemptStatus, destinationStatus: PaymentAttemptStatus): boolean {
+  const allowedForDestination = ALLOWED_SOURCE_STATUSES_FOR_DESTINATION[destinationStatus] ?? [];
+  // Every status that itself never appears as a source anywhere in the matrix can never legally
+  // transition to anything else again — any rejection from one of these is permanent.
+  const canCurrentStatusEverTransitionAgain = Object.values(ALLOWED_SOURCE_STATUSES_FOR_DESTINATION).some((sources) =>
+    sources?.includes(currentStatus),
+  );
+  if (!canCurrentStatusEverTransitionAgain) return true;
+  // currentStatus can still transition somewhere — check whether any status it could legally reach
+  // NEXT is itself an allowed source for the destination in question (one hop is sufficient for this
+  // matrix's own depth — see this function's own doc comment).
+  const reachableNext = Object.entries(ALLOWED_SOURCE_STATUSES_FOR_DESTINATION)
+    .filter(([, sources]) => sources?.includes(currentStatus))
+    .map(([dest]) => dest as PaymentAttemptStatus);
+  const stillReachable = allowedForDestination.includes(currentStatus) || reachableNext.some((next) => allowedForDestination.includes(next));
+  return !stillReachable;
+}
 
 /**
  * Sprint 12 (docs/sprints/SPRINT_12_DebitCard_Sandbox.md): which rail a payment attempt used. See
@@ -65,6 +118,15 @@ export interface PaymentAttemptRecord {
    * debit_card/manual_off_platform attempts and for every pre-Phase-6A row.
    */
   bankConnectionId: string | null;
+  /**
+   * PACKAGE B — PRE-CODEX FINAL CORRECTION (item 3): null until this exact payment attempt's own
+   * effect on its agreement's lifecycle has actually been examined (`AgreementCompletionService
+   * .checkAndAdvance` invoked and returned) — see `listLifecycleRepairCandidates`'s own doc comment
+   * for why this, not agreement status, is the self-shrinking candidate predicate.
+   */
+  lifecycleCheckedAt: Date | null;
+  /** PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 4B): see the schema column's own doc comment. */
+  financialRepairNextAttemptAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -103,6 +165,77 @@ export interface PaymentAttemptRepository {
     status: PaymentAttemptStatus,
     fields: { providerPaymentId?: string; failureReason?: string },
   ): Promise<PaymentAttemptRecord>;
+  /**
+   * R09 corrective pass (Codex blocker 4A — payment transition legality): the atomic, DB-enforced
+   * legal-transition guard, mirroring `AgreementRepository.updateStatusIfCurrentlyIn`'s identical
+   * contract in the agreements domain. Superseded the earlier `updateStatusIfNotTerminal` (a
+   * terminal-EXCLUSION check — "not already one of these statuses") with a positive ALLOW-list keyed
+   * by destination status (see `ALLOWED_SOURCE_STATUSES_FOR_DESTINATION`): a `succeeded -> failed`
+   * transition, for example, is now rejected outright (not merely "sometimes caught by a terminal
+   * check"), while `succeeded -> refunded/returned/disputed/reversed` remain legal. One atomic
+   * `UPDATE ... WHERE id = ? AND status IN (...)` — returns `null` (the write never happened) the
+   * instant the row's current status is not in `allowedSourceStatuses`, so an old/stale event can
+   * never illegally overwrite a newer valid provider event's status, no matter how the two race.
+   */
+  updateStatusIfLegalTransition(
+    id: string,
+    newStatus: PaymentAttemptStatus,
+    fields: { providerPaymentId?: string; failureReason?: string },
+    allowedSourceStatuses: readonly PaymentAttemptStatus[],
+  ): Promise<PaymentAttemptRecord | null>;
+  /**
+   * R09 corrective pass (Codex blocker 1 — automatic reconciliation/convergence): the scheduler's
+   * bounded, indexed candidate query for automatic ledger/lifecycle repair — never an unbounded
+   * `listAll()` scan. Ordered most-recently-updated first (a payment whose status/ledger state just
+   * changed is the most likely to have a fresh, still-outstanding repair need; one that has been
+   * "succeeded" and fully reconciled for a long time has already had many chances to converge).
+   */
+  listRecentlySucceeded(limit: number): Promise<PaymentAttemptRecord[]>;
+  /**
+   * PACKAGE B — remaining Codex blockers (Section 1 — automatic repair must be bounded AND
+   * eventually complete): every "succeeded" payment with no `payment_cleared` ledger entry yet,
+   * oldest-updated first. Unlike `listRecentlySucceeded` (which can starve an old genuinely-unfixed
+   * row behind newer, already-fine ones), a repaired row drops out of THIS query entirely — see
+   * `DrizzlePaymentAttemptRepository`'s own doc comment for why that makes repeated bounded calls
+   * starvation-free without a separate durable cursor.
+   */
+  /**
+   * PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 4B): `now` bounds the candidate set
+   * to rows whose `financialRepairNextAttemptAt` is null or already due — see that column's own doc
+   * comment for why this, not merely "missing entry," is required for fairness.
+   */
+  listMissingClearingCandidates(limit: number, now: Date): Promise<PaymentAttemptRecord[]>;
+  /** See `listMissingClearingCandidates`'s own doc comment — set after a BLOCKED (not missing-evidence-fatal) repair attempt, so this row is deferred rather than re-selected on every subsequent scheduler run. */
+  markFinancialRepairDeferred(id: string, nextAttemptAt: Date): Promise<void>;
+  /**
+   * PACKAGE B — remaining Codex blockers (Section 1): every "succeeded" payment whose agreement has
+   * not yet reached a converged/terminal state — the candidate set for "payment + ledger both
+   * correct, agreement lifecycle simply never advanced" (which `listMissingClearingCandidates`
+   * cannot see, since its ledger entry already exists).
+   *
+   * PACKAGE B — PRE-CODEX FINAL CORRECTION (item 3): filtering on `agreement.status` alone is NOT
+   * self-shrinking — a legitimately-still-active agreement (real outstanding balance, correctly not
+   * yet complete) would re-qualify on every single scheduler run forever, since neither its own
+   * status nor this payment's `updatedAt` ever changes, permanently starving batch slots at the
+   * front of the oldest-first ordering away from genuinely unresolved rows. The additional
+   * `lifecycleCheckedAt IS NULL` filter (see that column's own doc comment) is what makes this
+   * self-shrinking: once THIS payment's own effect has actually been examined (`markLifecycleChecked`
+   * called, from either the normal synchronous webhook path or this scheduler's own repair path), it
+   * permanently drops out of this query — a later succeeded payment on the SAME agreement (the only
+   * thing that can actually change whether a further lifecycle transition is now due) is always its
+   * own fresh, never-yet-checked row.
+   */
+  listLifecycleRepairCandidates(limit: number): Promise<PaymentAttemptRecord[]>;
+  /**
+   * PACKAGE B — PRE-CODEX FINAL CORRECTION (item 3): marks this exact payment attempt as having had
+   * its agreement-lifecycle effect genuinely examined — see `lifecycleCheckedAt`'s own doc comment.
+   * Called unconditionally after a successful (non-throwing) `checkAndAdvance` invocation, whether or
+   * not it actually advanced anything — never called if the invocation threw, so a genuine failure
+   * leaves the row eligible for another attempt.
+   */
+  markLifecycleChecked(id: string, checkedAt: Date): Promise<void>;
+  /** The reversal-side counterpart — refunded/returned/reversed/disputed payments missing their own required reversal-type ledger entry. Same starvation-free ordering, same `now`-bounded backoff filter. */
+  listMissingReversalCandidates(limit: number, now: Date): Promise<PaymentAttemptRecord[]>;
   /** PRSprint 18: the recipient's optional, purely evidentiary confirmation of a manually-recorded payment. */
   confirmManualPayment(id: string, confirmedAt: Date): Promise<PaymentAttemptRecord>;
   findById(id: string): Promise<PaymentAttemptRecord | null>;
@@ -185,6 +318,19 @@ export interface LedgerPoster {
  */
 export interface AgreementCompletionChecker {
   checkAndAdvance(agreementId: string): Promise<void>;
+  /**
+   * PAID2YOU — PACKAGE B (Stage 6 targeted correction — REQUIRED per ChatGPT's own review): the sole
+   * production implementation (`AgreementCompletionService`) already provides this unconditionally,
+   * so requiring it costs nothing in production and closes a real gap — without this, production
+   * TypeScript compilation would silently permit a hypothetical second `AgreementCompletionChecker`
+   * implementation to omit a correctness-critical compensation method with no compiler signal. See
+   * `AgreementCompletionService.recomputeAfterSupersession`'s own doc comment for the exact
+   * ledger-authoritative demotion rules. `providerEventId` is the superseding event's own stable
+   * identity — the durable idempotency/atomicity correlation key the corrected implementation keys
+   * its own required audit marker to (never a separate, crash-vulnerable "write status, then
+   * separately write audit" sequence).
+   */
+  recomputeAfterSupersession(agreementId: string, providerEventId: string): Promise<void>;
 }
 
 /**
@@ -319,7 +465,25 @@ export class PaymentService {
    * provider call itself fails) — the same failure-handling shape as `createPayment`'s own
    * provider-call step.
    */
-  async submitPending(id: string, actingUserId: string, ipAddress: string | null = null, deviceInfo: unknown = null): Promise<PaymentAttemptRecord> {
+  /**
+   * PACKAGE B — PRE-CODEX FINAL CORRECTION (item 2 — retry executor provider-call race): `finalGuard`,
+   * when supplied, is awaited as the ABSOLUTE LAST step inside `submitToProvider` — after every other
+   * DB read/write this call chain performs (mandate/card lookup, `schedulePayment`'s own reservation
+   * writes, this method's own "submitted" status write) and with NO other awaited step in between it
+   * and the actual `this.deps.provider.createPayment(...)` call. See
+   * `FailedPaymentRetryCoordinator.confirmExecutionStillValid`'s own doc comment for why this
+   * placement — not an earlier check — is what narrows the unavoidable check-then-call gap (an
+   * external provider API cannot participate atomically in a local DB transaction/lock) to the
+   * theoretical floor: exactly one DB round-trip, immediately adjacent to the network call it gates.
+   * Every existing caller omits this and is completely unaffected.
+   */
+  async submitPending(
+    id: string,
+    actingUserId: string,
+    ipAddress: string | null = null,
+    deviceInfo: unknown = null,
+    finalGuard?: () => Promise<void>,
+  ): Promise<PaymentAttemptRecord> {
     // SPRINT_19_FraudRisk_SecurityHardening (P0): this previously called `findById` directly with no
     // ownership check at all — any authenticated user who knew/guessed a `scheduled` payment_attempt
     // UUID belonging to a DIFFERENT tenant's agreement could force it to submit to the real provider
@@ -338,6 +502,7 @@ export class PaymentService {
       actingUserId,
       ipAddress,
       deviceInfo,
+      finalGuard,
     });
   }
 
@@ -476,9 +641,39 @@ export class PaymentService {
 
   private async submitToProvider(
     record: PaymentAttemptRecord,
-    input: { payer: ProfileRef; recipient: ProfileRef; actingUserId: string; ipAddress: string | null; deviceInfo: unknown },
+    input: {
+      payer: ProfileRef;
+      recipient: ProfileRef;
+      actingUserId: string;
+      ipAddress: string | null;
+      deviceInfo: unknown;
+      /** See `submitPending`'s own doc comment for why this must be invoked exactly here. */
+      finalGuard?: () => Promise<void>;
+    },
   ): Promise<PaymentAttemptRecord> {
+    // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): every payment that reaches an external
+    // payment provider is, by construction, "provider-routed" — this is the ONE place every such
+    // payment (the generic /api/payments/create route, and every ACH/debit-card submission via
+    // schedulePayment -> submitPending, both of which already require a real agreementId in their own
+    // narrower input types) passes through before the actual provider call. A provider success with
+    // no agreement linkage is exactly the defect Codex identified: PaymentWebhookService can only post
+    // required ledger accounting against a real `agreementId`, so a null one here would let a
+    // legitimate provider success be marked processed while ledger accounting is silently skipped.
+    // Manual/off-platform payments (`recordManualOffPlatformPayment`) never call this method at all —
+    // they are unaffected by this check, preserving that flow's own, intentionally agreement-less
+    // convention (see this class's own doc comment on `assertNotOverpaying`/PRSprint 09).
+    if (!record.agreementId) {
+      const failed = await this.deps.payments.updateStatus(record.id, "failed", {
+        failureReason: "A provider-routed payment must be linked to an agreement.",
+      });
+      await this.recordAudit(failed, "payment_creation_failed", input.actingUserId, input.ipAddress, input.deviceInfo);
+      throw new ValidationError("A provider-routed payment must be linked to an agreement.");
+    }
     try {
+      // See `submitPending`'s own doc comment: the LAST check before the actual network call, with
+      // nothing else awaited in between — never moved earlier, where unrelated DB work would widen
+      // the gap a concurrent revocation could land in.
+      if (input.finalGuard) await input.finalGuard();
       const result = await this.deps.provider.createPayment({
         idempotencyKey: record.idempotencyKey,
         amountMinorUnits: record.amountMinorUnits,
@@ -724,19 +919,14 @@ export class PaymentService {
    * `balances` is not wired (most existing tests) or when the agreement has no signed terms yet to
    * compute a balance against (BalanceService throws in that case — nothing to check yet).
    */
+  /**
+   * PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 1): delegates to the shared
+   * `assertNotOverpaying` (paymentInitiationEligibilityService.ts) so
+   * `FailedPaymentRetryCoordinator.claimAndExecuteRetry` can re-run the EXACT SAME policy — never a
+   * second, independently-drifting copy. Behavior is unchanged.
+   */
   private async assertNotOverpaying(agreementId: string, amountMinorUnits: number): Promise<void> {
-    if (!this.deps.balances) return;
-    let balance: { remainingBalanceMinorUnits: number } | null;
-    try {
-      balance = await this.deps.balances.getAgreementBalance(agreementId);
-    } catch {
-      return;
-    }
-    if (balance && amountMinorUnits > balance.remainingBalanceMinorUnits) {
-      throw new ValidationError(
-        `This payment of ${amountMinorUnits} minor units would exceed the agreement's remaining balance of ${balance.remainingBalanceMinorUnits} minor units. Overpayment is not permitted.`,
-      );
-    }
+    await sharedAssertNotOverpaying(this.deps.balances, agreementId, amountMinorUnits);
   }
 
   private async getAuthorizedRecord(

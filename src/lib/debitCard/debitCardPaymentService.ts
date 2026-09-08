@@ -120,6 +120,8 @@ export class DebitCardPaymentService {
     currency: string;
     actingUserId: string;
     installmentScheduleItemId?: string;
+    /** See `RetryPaymentMethodInitiator.createManualPayment`'s own doc comment — passed straight through to `PaymentService.submitPending`. */
+    finalGuard?: () => Promise<void>;
   }): Promise<PaymentAttemptRecord & { charge: DebitCardChargeBreakdown }> {
     await this.requireActiveUnexpiredCard(input.agreementId);
     const charge = await this.computeChargeBreakdown(input.agreementId, input.amountMinorUnits);
@@ -141,8 +143,25 @@ export class DebitCardPaymentService {
       // Idempotent replay of an already-submitted manual payment — nothing further to do.
       return { ...scheduled, charge };
     }
-    const submitted = await this.deps.payments.submitPending(scheduled.id, input.actingUserId);
+    const submitted = await this.deps.payments.submitPending(scheduled.id, input.actingUserId, null, null, input.finalGuard);
     return { ...submitted, charge };
+  }
+
+  /** See `RetryPaymentMethodInitiator.prepareRetrySubmission`'s own doc comment (paymentRetryService.ts). */
+  async prepareRetrySubmission(input: { agreementId: string; amountMinorUnits: number; currency: string }): Promise<{
+    amountMinorUnits: number;
+    currency: string;
+    paymentMethod: "debit_card";
+    bankConnectionId: string | null;
+  }> {
+    await this.requireActiveUnexpiredCard(input.agreementId);
+    const charge = await this.computeChargeBreakdown(input.agreementId, input.amountMinorUnits);
+    return {
+      amountMinorUnits: charge.totalChargeMinorUnits,
+      currency: input.currency,
+      paymentMethod: "debit_card",
+      bankConnectionId: null,
+    };
   }
 
   private async requireActiveUnexpiredCard(agreementId: string): Promise<void> {

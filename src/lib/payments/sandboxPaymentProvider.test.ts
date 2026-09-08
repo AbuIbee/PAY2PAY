@@ -242,4 +242,82 @@ describe("SandboxPaymentProvider (provider adapter)", () => {
     expect(() => provider.parseWebhookEvent("not json")).toThrow(ValidationError);
     expect(() => provider.parseWebhookEvent(JSON.stringify({ eventType: "payment.succeeded" }))).toThrow(ValidationError);
   });
+
+  describe("PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 3): idempotency-key semantics", () => {
+    it("R-B56A: two createPayment calls with the same idempotency key produce the SAME providerPaymentId, never a second payment", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      const input = { idempotencyKey: "same-key-1", amountMinorUnits: 1_500, currency: "USD", payer: PAYER, recipient: RECIPIENT };
+      const first = await provider.createPayment(input);
+      const second = await provider.createPayment(input);
+      expect(second.providerPaymentId).toBe(first.providerPaymentId);
+      expect(second.status).toBe(first.status);
+    });
+
+    it("R-B56B: the same idempotency key reused with materially conflicting request data (amount/currency/either party) is safely rejected, never silently creating or mutating a different payment", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      const base = { idempotencyKey: "same-key-2", amountMinorUnits: 1_000, currency: "USD", payer: PAYER, recipient: RECIPIENT };
+      const first = await provider.createPayment(base);
+
+      await expect(provider.createPayment({ ...base, amountMinorUnits: 2_000 })).rejects.toThrow(ValidationError);
+      await expect(provider.createPayment({ ...base, currency: "EUR" })).rejects.toThrow(ValidationError);
+      await expect(provider.createPayment({ ...base, payer: RECIPIENT })).rejects.toThrow(ValidationError);
+      await expect(provider.createPayment({ ...base, recipient: PAYER })).rejects.toThrow(ValidationError);
+
+      // None of the rejected conflicting calls created or mutated anything — the original is untouched.
+      expect((await provider.retrievePayment(first.providerPaymentId)).status).toBe(first.status);
+    });
+
+    it("R-B56C: after a simulated local-DB crash between a successful provider create and persisting its result, recovery calling createPayment again with the SAME key resolves to one logical payment, the same providerPaymentId, with no duplicate external payment", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      const input = { idempotencyKey: "crash-recovery-key", amountMinorUnits: 750, currency: "USD", payer: PAYER, recipient: RECIPIENT, simulateOutcome: "succeeded" as const };
+
+      // The provider call itself genuinely succeeds...
+      const original = await provider.createPayment(input);
+      // ...then the application "crashes" — nothing local was ever persisted. Recovery re-issues the
+      // EXACT same call with the SAME idempotencyKey (never a freshly-generated one).
+      const recovered = await provider.createPayment(input);
+
+      expect(recovered.providerPaymentId).toBe(original.providerPaymentId); // same providerPaymentId.
+      expect(recovered.status).toBe(original.status);
+      const foundByKey = await provider.retrievePaymentByIdempotencyKey(input.idempotencyKey);
+      expect(foundByKey?.providerPaymentId).toBe(original.providerPaymentId); // one logical provider payment, discoverable by the durable key.
+    });
+
+    it("retrievePaymentByIdempotencyKey returns null for a key the provider has never seen", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      expect(await provider.retrievePaymentByIdempotencyKey("never-submitted-key")).toBeNull();
+    });
+  });
+
+  describe("PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 6): idempotency must compare COMPLETE party identity (profileKind, not merely profileId)", () => {
+    it("R-B66A: same key, same payer profileId, DIFFERENT payer profileKind -> rejected as a conflict", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      const base = { idempotencyKey: "b66a-key", amountMinorUnits: 1_000, currency: "USD", payer: PAYER, recipient: RECIPIENT };
+      await provider.createPayment(base);
+
+      // Same payer.profileId ("payer-1"), but profileKind flips from "personal" to "business" — a
+      // genuinely different real-world party, never the same request replayed.
+      await expect(
+        provider.createPayment({ ...base, payer: { profileKind: "business", profileId: PAYER.profileId } }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("R-B66B: same key, same recipient profileId, DIFFERENT recipient profileKind -> rejected as a conflict", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      const base = { idempotencyKey: "b66b-key", amountMinorUnits: 1_000, currency: "USD", payer: PAYER, recipient: RECIPIENT };
+      await provider.createPayment(base);
+
+      await expect(
+        provider.createPayment({ ...base, recipient: { profileKind: "personal", profileId: RECIPIENT.profileId } }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("R-B66C: same key + identical complete payer/recipient references (profileKind AND profileId) -> the SAME providerPaymentId", async () => {
+      const provider = new SandboxPaymentProvider(SECRET);
+      const base = { idempotencyKey: "b66c-key", amountMinorUnits: 1_000, currency: "USD", payer: PAYER, recipient: RECIPIENT };
+      const first = await provider.createPayment(base);
+      const second = await provider.createPayment({ ...base, payer: { ...PAYER }, recipient: { ...RECIPIENT } });
+      expect(second.providerPaymentId).toBe(first.providerPaymentId);
+    });
+  });
 });

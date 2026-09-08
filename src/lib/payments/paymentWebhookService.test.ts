@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { ForbiddenError } from "@/lib/errors";
+import { ConfigurationError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { FinancialIntegrityError } from "@/lib/ledger/ledgerService";
 import { createTestNotificationService } from "@/lib/notify/testFakes";
 import { createTestPaymentService, createTestPaymentWebhookService } from "./testFakes";
+import { classifyProcessingFailure, ProviderLookupEvidenceError } from "./paymentWebhookService";
 import type { ProfileKind } from "./paymentProvider";
 
 const PAYER_USER_ID = "payer-user-1";
@@ -32,6 +34,10 @@ describe("PaymentWebhookService", () => {
     }
   });
 
+  // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): every payment created via
+  // PaymentService.createPayment now requires a non-null agreementId (submitToProvider rejects
+  // otherwise) — an unregistered id, so the party cross-check this codebase's own convention already
+  // skips for unregistered agreements remains unaffected.
   async function createPendingPayment(idempotencyKey: string) {
     return paymentCtx.paymentService.createPayment({
       idempotencyKey,
@@ -39,6 +45,7 @@ describe("PaymentWebhookService", () => {
       recipient: RECIPIENT,
       amountMinorUnits: 5_000,
       currency: "USD",
+      agreementId: "test-agreement-default",
       actingUserId: PAYER_USER_ID,
       ipAddress: null,
       deviceInfo: null,
@@ -92,14 +99,21 @@ describe("PaymentWebhookService", () => {
     expect(webhookCtx.auditRepo.events.filter((e) => e.action === "payment_webhook_payment.succeeded")).toHaveLength(1);
   });
 
-  it("silently accepts (as processed) an event for an unknown provider payment id", async () => {
+  // R09 corrective pass (Codex blocker 3B): a RECOGNIZED financial event type with no matching
+  // payment must remain unresolved/retryable — never silently "processed" (a real success could have
+  // no ledger entry ever posted if this were treated as a safe no-op). "accepted" means durably
+  // recorded and retryable, not lost.
+  it("does not mark an event for an unknown provider payment id as processed — remains retryable", async () => {
     const { rawBody, signatureHeader } = signedWebhook({
       providerEventId: "evt_unknown",
       eventType: "payment.succeeded",
       providerPaymentId: "sandbox_pay_does_not_exist",
     });
     const result = await webhookCtx.paymentWebhookService.receiveWebhook({ rawBody, signatureHeader });
-    expect(result.status).toBe("processed");
+    expect(result.status).toBe("accepted");
+    const eventRow = await webhookCtx.events.findByProviderEvent("sandbox_mock", "evt_unknown");
+    expect(eventRow?.processingStatus).toBe("failed"); // retryable-failed, not permanently poisoned.
+    expect(eventRow?.nextRetryAt).not.toBeNull();
   });
 
   // SPRINT_19_FraudRisk_SecurityHardening: previously applyEvent applied EVENT_TYPE_TO_STATUS
@@ -207,5 +221,34 @@ describe("PaymentWebhookService", () => {
       );
       expect(result.status).toBe("processed");
     });
+  });
+});
+
+describe("PAID2YOU — PACKAGE B (R06+R09 architectural review remediation, Item 4): ProviderLookupEvidenceError has its own EXPLICITLY-recognized error taxonomy entry", () => {
+  it("classifies ProviderLookupEvidenceError as retryable/unresolved with its own distinct code — never the generic ValidationError code", () => {
+    const result = classifyProcessingFailure(new ProviderLookupEvidenceError("payment_provider_lookup_incomplete_or_mismatched_amount"));
+    expect(result.retryable).toBe(true);
+    expect(result.code).toBe("provider_lookup_evidence_incomplete_or_invalid");
+    expect(result.code).not.toBe("unresolved_financial_prerequisite"); // the generic ValidationError fallback code — must not be reached for this type.
+  });
+
+  it("is an instanceof ValidationError (codebase error-hierarchy consistency) but is checked BEFORE the generic ValidationError branch", () => {
+    const error = new ProviderLookupEvidenceError("payment_provider_lookup_excessive_processor_fee");
+    expect(error).toBeInstanceOf(ValidationError);
+    expect(error.name).toBe("ProviderLookupEvidenceError");
+    expect(classifyProcessingFailure(error).code).toBe("provider_lookup_evidence_incomplete_or_invalid");
+  });
+
+  it("is never classified as FinancialIntegrityError (permanent/poison) — remains retryable even though it represents malformed financial evidence", () => {
+    const result = classifyProcessingFailure(new ProviderLookupEvidenceError("payment_provider_lookup_invalid_combined_fees"));
+    expect(result.retryable).toBe(true);
+    expect(result.code).not.toBe("invalid_financial_data"); // FinancialIntegrityError's own code — reserved for genuinely impossible INTERNAL state.
+  });
+
+  it("regression: FinancialIntegrityError, ordinary ValidationError, and ConfigurationError keep their own EXISTING classification, unaffected by the new branch", () => {
+    expect(classifyProcessingFailure(new FinancialIntegrityError("impossible"))).toEqual({ retryable: false, code: "invalid_financial_data" });
+    expect(classifyProcessingFailure(new ValidationError("ordinary"))).toEqual({ retryable: true, code: "unresolved_financial_prerequisite" });
+    expect(classifyProcessingFailure(new ConfigurationError("config"))).toEqual({ retryable: true, code: "repairable_configuration_defect" });
+    expect(classifyProcessingFailure(new Error("transient"))).toEqual({ retryable: true, code: "transient_processing_error" });
   });
 });

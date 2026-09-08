@@ -56,7 +56,10 @@ describe("PRSprint 20: concurrency and idempotency — genuine adversarial races
       recipient: RECIPIENT,
       amountMinorUnits: 5_000,
       currency: "USD",
-      agreementId: null,
+      // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): provider-routed payments now require
+      // an agreementId — unregistered here since this test's own concern (idempotency-key dedup) has
+      // nothing to do with agreement-party matching.
+      agreementId: "agreement-conc-dup-submit",
       actingUserId: PAYER_USER_ID,
       ipAddress: null,
       deviceInfo: null,
@@ -86,8 +89,15 @@ describe("PRSprint 20: concurrency and idempotency — genuine adversarial races
       ctx.webhookCtx.paymentWebhookService.receiveWebhook(event),
       ctx.webhookCtx.paymentWebhookService.receiveWebhook(event),
     ]);
+    // R06 corrective pass: "duplicate" is now reserved strictly for a genuinely already-*processed*
+    // event (see PaymentWebhookEventRepository's own doc comment) — a second delivery that arrives
+    // while the first is still ACTIVELY processing (a real, live claim/lease, exactly what this
+    // truly-concurrent Promise.all produces) correctly reports "accepted" instead: it was durably
+    // recorded/observed-in-progress, not reapplied, and never needed to be — the financial
+    // invariants below are what actually matter, and are unaffected by which of the two precise
+    // labels the loser gets back.
     const statuses = [first.status, second.status].sort();
-    expect(statuses).toEqual(["duplicate", "processed"]);
+    expect(statuses).toEqual(["accepted", "processed"]);
 
     const entries = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
     expect(entries.filter((e) => e.entryType === "payment_cleared")).toHaveLength(1);
@@ -182,22 +192,28 @@ describe("PRSprint 20: concurrency and idempotency — genuine adversarial races
       recipient: RECIPIENT,
       amountMinorUnits: 3_000,
       currency: "USD",
-      agreementId: null,
+      // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): unregistered — this test's own concern
+      // (out-of-order status transition rejection) has nothing to do with agreement-party matching.
+      agreementId: "agreement-conc-outoforder",
       actingUserId: PAYER_USER_ID,
       ipAddress: null,
       deviceInfo: null,
     });
-    // "payment.refunded" arrives before any "payment.succeeded" — LedgerService.reversePayment
-    // requires a prior payment_cleared entry to reverse; postLedgerEntry catches and logs rather than
-    // corrupting state, and the payment_attempt's own status is still updated to "refunded" per the
-    // webhook's own status mapping (docs/PAYMENT_ARCHITECTURE.md's "webhook status is authoritative
-    // for payment_attempt.status regardless of ledger-posting outcome").
+    // "payment.refunded" arrives before any "payment.succeeded" — R09 corrective pass (Codex blocker
+    // 4A): the legal-transition allow-list only permits "refunded" FROM "succeeded", so this
+    // out-of-order event's status assertion is rejected outright (the payment stays "pending", never
+    // jumps straight to "refunded"). R09 corrective pass (Codex blocker 4B): the ledger effect is
+    // still attempted regardless (never gated on the rejected status transition) — LedgerService
+    // .reversePayment correctly refuses to post a reversal with no clearing entry yet
+    // (ValidationError, classified retryable — see classifyProcessingFailure) rather than silently
+    // dropping it forever, so the event remains "accepted"/retryable, not falsely "processed".
     const result = await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
       signedWebhook({ providerEventId: "conc-evt-outoforder-1", eventType: "payment.refunded", providerPaymentId: payment.providerPaymentId }),
     );
-    expect(result.status).toBe("processed"); // the webhook itself is still accepted and recorded once.
+    expect(result.status).toBe("accepted"); // durably recorded and retryable, never silently dropped.
     const entries = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
-    expect(entries).toHaveLength(0); // but nothing was posted — no phantom reversal of a non-existent clear.
+    expect(entries).toHaveLength(0); // no phantom reversal of a non-existent clear.
+    expect((await ctx.paymentCtx.payments.findById(payment.id))?.status).toBe("pending"); // never jumped straight to "refunded".
   });
 
   it("10. mutation after terminal state: cancelling an already-refunded payment is rejected, and refunding an already-refunded payment is rejected", async () => {

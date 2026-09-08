@@ -1,5 +1,5 @@
 import "server-only";
-import { desc, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/db/client";
 import { auditEvent } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -19,9 +19,18 @@ import type { AuditEventRecord, AuditEventRepository } from "./auditService";
  * make impossible, silently, only during deploys. Never change these values without a coordinated,
  * versioned migration plan (e.g. a dual-lock transition period), and never "clean them up" as a
  * cosmetic refactor.
+ *
+ * PAID2YOU — PACKAGE B (Stage 6 targeted correction — exact-once supersession compensation):
+ * exported (only) so `FailedPaymentRetryCoordinator.coordinateSupersession` can append this SAME
+ * global chain from INSIDE its own already-open installment-lock transaction — calling through
+ * `AuditService`/`appendAtomically` there would deadlock (that method opens its own `db.transaction`
+ * against the same shared, `max: 1`-pooled `getDb()` singleton — see `coordinateSupersession`'s own
+ * doc comment). Reusing this EXACT key pair (never a second, independently-chosen one) is what keeps
+ * that tx-bound append serialized against every other `appendAtomically` caller in the system —
+ * anything else would risk forking the one global chain.
  */
-const AUDIT_CHAIN_LOCK_KEY_A = "audit_event_chain";
-const AUDIT_CHAIN_LOCK_KEY_B = "append";
+export const AUDIT_CHAIN_LOCK_KEY_A = "audit_event_chain";
+export const AUDIT_CHAIN_LOCK_KEY_B = "append";
 
 type AuditEventRow = typeof auditEvent.$inferSelect;
 
@@ -45,6 +54,7 @@ function toRecord(row: AuditEventRow): AuditEventRecord {
     relatedCaseId: row.relatedCaseId,
     targetResourceType: row.targetResourceType,
     targetResourceId: row.targetResourceId,
+    providerEventId: row.providerEventId,
     eventHash: row.eventHash,
     previousEventHash: row.previousEventHash,
   };
@@ -69,9 +79,58 @@ function toInsertValues(record: Omit<AuditEventRecord, "id">) {
     relatedCaseId: record.relatedCaseId,
     targetResourceType: record.targetResourceType ?? undefined,
     targetResourceId: record.targetResourceId ?? undefined,
+    providerEventId: record.providerEventId ?? undefined,
     eventHash: record.eventHash,
     previousEventHash: record.previousEventHash,
   };
+}
+
+/**
+ * PAID2YOU — PACKAGE B (Codex final review — consolidate transaction-bound audit append):
+ * `appendAtomically`'s own tail-read/dedup/hash/insert sequence, extracted so ANY caller that
+ * already holds its OWN open transaction (e.g. `FailedPaymentRetryCoordinator.coordinateSupersession`,
+ * `AgreementCompletionService.recomputeAfterSupersession`) can append to this SAME global chain
+ * atomically alongside its own writes — never a second, independently-diverging audit-chain
+ * implementation. `appendAtomically` itself now just opens a transaction and delegates here, so
+ * there is exactly ONE place this sequence is written.
+ *
+ * Ordering is authoritative and must never be reordered: advisory lock FIRST, then the
+ * `(providerEventId, action)` dedup check, then the chain-tail read, then the insert — identical to
+ * `appendAtomically`'s own original order, because this **is** that order now, not a parallel copy
+ * of it. A caller MUST NOT call this from inside a transaction on a *different* connection/pool than
+ * the one `getDb()`'s advisory lock is scoped to — every caller in this codebase passes the `tx` of
+ * an already-open transaction against the shared, `max: 1`-pooled `getDb()` singleton (or, in
+ * `*.postgres.test.ts`, an explicitly-isolated connection used consistently for that whole test).
+ */
+export async function appendAuditEventTxBound(
+  tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  payload: AuditEventPayload,
+  computeHash: (previousEventHash: string | null) => string,
+): Promise<AuditEventRecord> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${AUDIT_CHAIN_LOCK_KEY_A}), hashtext(${AUDIT_CHAIN_LOCK_KEY_B}))`);
+
+  if (payload.providerEventId) {
+    const existing = await tx
+      .select()
+      .from(auditEvent)
+      .where(and(eq(auditEvent.providerEventId, payload.providerEventId), eq(auditEvent.action, payload.action)))
+      .limit(1);
+    if (existing[0]) return toRecord(existing[0]);
+  }
+
+  const rows = await tx.select().from(auditEvent).orderBy(desc(auditEvent.id)).limit(1);
+  const last = rows[0] ? toRecord(rows[0]) : null;
+  const previousEventHash = last?.eventHash ?? null;
+  const eventHash = computeHash(previousEventHash);
+
+  const [row] = await tx
+    .insert(auditEvent)
+    .values(toInsertValues({ ...payload, eventHash, previousEventHash }))
+    .returning();
+  if (!row) {
+    throw new ConfigurationError("audit_event insert returned no row during tx-bound append");
+  }
+  return toRecord(row);
 }
 
 /**
@@ -133,28 +192,18 @@ export class DrizzleAuditEventRepository implements AuditEventRepository {
    * (src/db/client.ts). Every concurrent `AuditService.record()` call queues behind this lock, so the
    * tail each one reads is always the immediately-preceding committed event — a fork is structurally
    * impossible, not just unlikely.
+   *
+   * PAID2YOU — PACKAGE B (Codex final review — consolidate transaction-bound audit append): this
+   * method's own sequence is now just `db.transaction` + `appendAuditEventTxBound` (this module's
+   * own exported function, above) — the SAME sequence a caller that already holds its own open
+   * transaction (e.g. `coordinateSupersession`, `recomputeAfterSupersession`) calls directly, so
+   * there is exactly one implementation of this correctness-critical logic, never two.
    */
   async appendAtomically(
     payload: AuditEventPayload,
     computeHash: (previousEventHash: string | null) => string,
   ): Promise<AuditEventRecord> {
     const db = this.db;
-    return db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${AUDIT_CHAIN_LOCK_KEY_A}), hashtext(${AUDIT_CHAIN_LOCK_KEY_B}))`);
-
-      const rows = await tx.select().from(auditEvent).orderBy(desc(auditEvent.id)).limit(1);
-      const last = rows[0] ? toRecord(rows[0]) : null;
-      const previousEventHash = last?.eventHash ?? null;
-      const eventHash = computeHash(previousEventHash);
-
-      const [row] = await tx
-        .insert(auditEvent)
-        .values(toInsertValues({ ...payload, eventHash, previousEventHash }))
-        .returning();
-      if (!row) {
-        throw new ConfigurationError("audit_event insert returned no row during atomic append");
-      }
-      return toRecord(row);
-    });
+    return db.transaction(async (tx) => appendAuditEventTxBound(tx, payload, computeHash));
   }
 }

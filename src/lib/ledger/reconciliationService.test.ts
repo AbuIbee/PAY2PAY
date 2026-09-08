@@ -87,12 +87,15 @@ describe("ReconciliationService", () => {
   it("detects amount_mismatch and currency_mismatch from a webhook event's payload", async () => {
     const payment = await insertPayment({ amountMinorUnits: 5_000, currency: "USD" });
     await ctx.paymentCtx.payments.updateStatus(payment.id, "succeeded", { providerPaymentId: "sandbox_pay_mismatch" });
-    await ctx.webhookCtx.events.insert({
+    await ctx.webhookCtx.events.tryInsertAndClaim({
       provider: "sandbox_mock",
       providerEventId: "evt-mismatch",
       eventType: "payment.succeeded",
+      source: "webhook",
       signatureVerified: true,
       payload: { providerPaymentId: "sandbox_pay_mismatch", amountMinorUnits: 4_999, currency: "EUR" },
+      leaseMs: 120_000,
+      now: new Date(),
     });
     const found = await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
     expect(found.map((e) => e.exceptionType)).toEqual(
@@ -139,12 +142,15 @@ describe("ReconciliationService", () => {
   });
 
   it("detects provider_event_without_internal_state for an orphaned webhook event", async () => {
-    await ctx.webhookCtx.events.insert({
+    await ctx.webhookCtx.events.tryInsertAndClaim({
       provider: "sandbox_mock",
       providerEventId: "evt-orphan",
       eventType: "payment.succeeded",
+      source: "webhook",
       signatureVerified: true,
       payload: { providerPaymentId: "sandbox_pay_orphan" },
+      leaseMs: 120_000,
+      now: new Date(),
     });
     const found = await ctx.reconciliationService.reconcileAll();
     expect(found.map((e) => e.exceptionType)).toContain("provider_event_without_internal_state");
@@ -166,6 +172,139 @@ describe("ReconciliationService", () => {
     await ctx.reconciliationService.reconcileAll();
     const exceptions = await ctx.exceptions.listForPaymentAttempt(payment.id);
     expect(exceptions.filter((e) => e.exceptionType === "missing_provider_transaction")).toHaveLength(1);
+  });
+
+  // R09 (payment -> ledger -> agreement-lifecycle consistency/recovery) — corrective pass: reconciliation
+  // must attempt SAFE AUTOMATIC REPAIR before ever recording internal_posting_failure; see
+  // ReconciliationService.tryRepairMissingLedgerEntry's own doc comment for exactly which sources
+  // are trusted enough to repair from.
+  describe("R09: safe automatic repair", () => {
+    it("repairs a missing payment_cleared entry for a manual off-platform payment, reconstructed only from the payment's own trusted fields", async () => {
+      const payment = await insertPayment({ amountMinorUnits: 5_000, currency: "USD", paymentMethod: "manual_off_platform", initialStatus: "succeeded" });
+
+      const found = await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
+      expect(found.map((e) => e.exceptionType)).not.toContain("internal_posting_failure");
+
+      const entries = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
+      expect(entries.filter((e) => e.entryType === "payment_cleared")).toHaveLength(1);
+
+      // Re-running must never duplicate the repair.
+      await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
+      const entriesAfterSecondRun = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
+      expect(entriesAfterSecondRun.filter((e) => e.entryType === "payment_cleared")).toHaveLength(1);
+    });
+
+    it("repairs a missing payment_cleared entry for a provider-routed payment by reconstructing it from the trusted, already-processed payment.succeeded webhook payload — processor fee from provider evidence, platform fee from PlatformFeePolicy, never the payload", async () => {
+      const payment = await insertPayment({ amountMinorUnits: 5_000, currency: "USD" });
+      await ctx.paymentCtx.payments.updateStatus(payment.id, "succeeded", { providerPaymentId: "sandbox_pay_trusted_repair" });
+      const inserted = await ctx.webhookCtx.events.tryInsertAndClaim({
+        provider: "sandbox_mock",
+        providerEventId: "evt-trusted-repair",
+        eventType: "payment.succeeded",
+        source: "webhook",
+        signatureVerified: true,
+        payload: {
+          providerPaymentId: "sandbox_pay_trusted_repair",
+          amountMinorUnits: 5_000,
+          currency: "USD",
+          processorFeeMinorUnits: 100,
+          // PAID2YOU — PACKAGE B (Stage 9 remediation, Root Correction 5): an arbitrary, WRONG external
+          // platformFeeMinorUnits — repair must never read this; the provider is not the authority for
+          // Paid2You's own fee.
+          platformFeeMinorUnits: 999_999,
+        },
+        leaseMs: 120_000,
+        now: new Date(),
+      });
+      await ctx.webhookCtx.events.markProcessed(inserted!.id, inserted!.claimToken!, new Date());
+
+      const found = await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
+      expect(found.map((e) => e.exceptionType)).not.toContain("internal_posting_failure");
+
+      const entries = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
+      const clearEntry = entries.find((e) => e.entryType === "payment_cleared");
+      expect(clearEntry).toBeDefined();
+      // Processor fee remains PROVIDER-authoritative — reconstructed from the trusted payload.
+      const processorLeg = clearEntry!.postings.find((p) => p.accountType === "processor_fee_expense");
+      expect(processorLeg?.amountMinorUnits).toBe(100);
+      // Platform fee is Paid2You-OWNED — the default policy's own 0, NEVER the payload's 999_999.
+      const platformLeg = clearEntry!.postings.find((p) => p.accountType === "platform_fee_revenue");
+      expect(platformLeg).toBeUndefined();
+    });
+
+    it("does NOT repair, and correctly records internal_posting_failure for manual review, when no trusted processed event can be found", async () => {
+      const payment = await insertPayment();
+      await ctx.paymentCtx.payments.updateStatus(payment.id, "succeeded", { providerPaymentId: "sandbox_pay_gap_no_trusted_event" });
+      const found = await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
+      expect(found.map((e) => e.exceptionType)).toContain("internal_posting_failure");
+      const entries = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
+      expect(entries.filter((e) => e.entryType === "payment_cleared")).toHaveLength(0);
+    });
+
+    it("repairs a missing reversal entry (refund) for a provider-routed payment from its trusted, already-processed payment.refunded webhook payload", async () => {
+      const payment = await insertPayment({ amountMinorUnits: 5_000, currency: "USD" });
+      await ctx.paymentCtx.payments.updateStatus(payment.id, "succeeded", { providerPaymentId: "sandbox_pay_refund_repair" });
+      await ctx.ledgerCtx.ledgerService.postPaymentCleared({
+        paymentAttemptId: payment.id,
+        agreementId: payment.agreementId!,
+        currency: payment.currency,
+        grossAmountMinorUnits: payment.amountMinorUnits,
+      });
+      await ctx.paymentCtx.payments.updateStatus(payment.id, "refunded", {});
+      const inserted = await ctx.webhookCtx.events.tryInsertAndClaim({
+        provider: "sandbox_mock",
+        providerEventId: "evt-refund-repair",
+        eventType: "payment.refunded",
+        source: "webhook",
+        signatureVerified: true,
+        payload: { providerPaymentId: "sandbox_pay_refund_repair", reason: "customer requested", amountMinorUnits: 5_000, currency: "USD" },
+        leaseMs: 120_000,
+        now: new Date(),
+      });
+      await ctx.webhookCtx.events.markProcessed(inserted!.id, inserted!.claimToken!, new Date());
+
+      const found = await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
+      expect(found.map((e) => e.exceptionType)).not.toContain("internal_posting_failure");
+      const entries = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
+      expect(entries.filter((e) => e.entryType === "refund")).toHaveLength(1);
+
+      await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
+      const entriesAfterSecondRun = await ctx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(payment.id);
+      expect(entriesAfterSecondRun.filter((e) => e.entryType === "refund")).toHaveLength(1);
+    });
+
+    it("repairs a missed agreement-lifecycle consequence (ledger cleared, agreement never advanced) idempotently", async () => {
+      const agreement = await ctx.agreementRepo.insert({
+        creditorProfileKind: RECIPIENT.profileKind,
+        creditorProfileId: RECIPIENT.profileId,
+        debtorProfileKind: PAYER.profileKind,
+        debtorProfileId: PAYER.profileId,
+        currency: "USD",
+        createdByUserId: "creator-1",
+      });
+      await ctx.agreementRepo.updateStatus(agreement.id, "first_payment_pending");
+      // Principal exceeds this one payment so the balance settles "partially_paid" (-> "active"),
+      // not "paid_in_full" — isolates the "FirstPaymentPending -> Active" edge this test targets.
+      ctx.balanceCtx.terms.set(agreement.id, 10_000, "USD");
+      const payment = await insertPayment({ agreementId: agreement.id, amountMinorUnits: 5_000, currency: "USD" });
+      await ctx.paymentCtx.payments.updateStatus(payment.id, "succeeded", { providerPaymentId: "sandbox_pay_lifecycle_repair" });
+      // Ledger cleared directly (bypassing the webhook's own completion check) — models "ledger
+      // committed but the agreement-lifecycle consequence never ran" (e.g. a crash in between).
+      await ctx.ledgerCtx.ledgerService.postPaymentCleared({
+        paymentAttemptId: payment.id,
+        agreementId: agreement.id,
+        currency: payment.currency,
+        grossAmountMinorUnits: payment.amountMinorUnits,
+      });
+      expect((await ctx.agreementRepo.findById(agreement.id))?.status).toBe("first_payment_pending");
+
+      await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
+      expect((await ctx.agreementRepo.findById(agreement.id))?.status).toBe("active");
+
+      // Idempotent: re-running must not error or regress the status.
+      await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
+      expect((await ctx.agreementRepo.findById(agreement.id))?.status).toBe("active");
+    });
   });
 
   it("resolves an exception, removing it from the open list", async () => {

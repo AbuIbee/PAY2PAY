@@ -179,4 +179,32 @@ export class InMemoryReconciliationExceptionRepository implements Reconciliation
     record.resolutionReason = resolutionReason;
     return record;
   }
+
+  /** Mirrors DrizzleReconciliationExceptionRepository.ensureOpenException's atomic contract — synchronous internally (no `await` between the check and the write), the same no-real-race-window property the real DB's partial unique index + ON CONFLICT gives the Drizzle implementation. */
+  async ensureOpenException(input: {
+    exceptionType: ReconciliationExceptionType;
+    paymentAttemptId: string;
+    providerEventId: string;
+    details: unknown;
+  }): Promise<ReconciliationExceptionRecord | null> {
+    const existing = [...this.byId.values()].find(
+      (e) =>
+        e.exceptionType === input.exceptionType &&
+        e.status === "open" &&
+        e.paymentAttemptId === input.paymentAttemptId &&
+        e.providerEventId === input.providerEventId,
+    );
+    if (existing) return null;
+    const record: ReconciliationExceptionRecord = {
+      id: randomUUID(),
+      status: "open",
+      detectedAt: new Date(),
+      resolvedAt: null,
+      resolvedByUserId: null,
+      resolutionReason: null,
+      ...input,
+    };
+    this.byId.set(record.id, record);
+    return record;
+  }
 }

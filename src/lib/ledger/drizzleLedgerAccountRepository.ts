@@ -1,6 +1,6 @@
 import "server-only";
 import { and, eq } from "drizzle-orm";
-import { getDb } from "@/db/client";
+import { getDb, type Database } from "@/db/client";
 import { ledgerAccount } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
 import type { LedgerAccountRecord, LedgerAccountRepository, LedgerAccountType } from "./ledgerService";
@@ -12,8 +12,15 @@ function toRecord(row: Row): LedgerAccountRecord {
 }
 
 export class DrizzleLedgerAccountRepository implements LedgerAccountRepository {
+  /**
+   * R07-style injectability: `db` defaults to the shared production singleton solely so
+   * `*.postgres.test.ts` concurrency suites can hand this class a genuinely distinct connection.
+   * Every production call site (`new DrizzleLedgerAccountRepository()`, no argument) is unaffected.
+   */
+  constructor(private readonly injectedDb: Database = getDb()) {}
+
   async findOrCreate(accountType: LedgerAccountType, agreementId: string): Promise<LedgerAccountRecord> {
-    const db = getDb();
+    const db = this.injectedDb;
     const existing = await db
       .select()
       .from(ledgerAccount)

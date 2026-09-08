@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, lte } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { paymentRetry } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -20,6 +20,8 @@ function toRecord(row: Row): PaymentRetryRecord {
     canceledAt: row.canceledAt,
     canceledReason: row.canceledReason,
     createdAt: row.createdAt,
+    executionToken: row.executionToken,
+    nextResolutionAttemptAt: row.nextResolutionAttemptAt,
   };
 }
 
@@ -66,13 +68,31 @@ export class DrizzlePaymentRetryRepository implements PaymentRetryRepository {
     return rows[0] ? toRecord(rows[0]) : null;
   }
 
-  async findDueForFiring(now: Date): Promise<PaymentRetryRecord[]> {
+  async findDueForFiring(now: Date, limit: number): Promise<PaymentRetryRecord[]> {
     const db = getDb();
     const rows = await db
       .select()
       .from(paymentRetry)
-      .where(and(eq(paymentRetry.status, "scheduled"), lte(paymentRetry.scheduledFor, now)));
+      .where(and(eq(paymentRetry.status, "scheduled"), lte(paymentRetry.scheduledFor, now)))
+      .orderBy(asc(paymentRetry.scheduledFor), asc(paymentRetry.id))
+      .limit(limit);
     return rows.map(toRecord);
+  }
+
+  async findClaimedForResumption(limit: number, now: Date): Promise<PaymentRetryRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(paymentRetry)
+      .where(and(eq(paymentRetry.status, "claimed"), or(isNull(paymentRetry.nextResolutionAttemptAt), lte(paymentRetry.nextResolutionAttemptAt, now))))
+      .orderBy(sql`${paymentRetry.nextResolutionAttemptAt} ASC NULLS FIRST`, asc(paymentRetry.id))
+      .limit(limit);
+    return rows.map(toRecord);
+  }
+
+  async markResolutionDeferred(id: string, nextAttemptAt: Date): Promise<void> {
+    const db = getDb();
+    await db.update(paymentRetry).set({ nextResolutionAttemptAt: nextAttemptAt }).where(eq(paymentRetry.id, id));
   }
 
   async markFired(id: string, resultingPaymentAttemptId: string, firedAt: Date): Promise<PaymentRetryRecord> {
@@ -86,14 +106,14 @@ export class DrizzlePaymentRetryRepository implements PaymentRetryRepository {
     return toRecord(row);
   }
 
-  async markCanceled(id: string, canceledAt: Date, canceledReason: string): Promise<PaymentRetryRecord> {
+  /** PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 3 — B3): conditional on `status = 'scheduled'` — see `PaymentRetryRepository.markCanceled`'s own doc comment for exactly why. */
+  async markCanceled(id: string, canceledAt: Date, canceledReason: string): Promise<PaymentRetryRecord | null> {
     const db = getDb();
     const [row] = await db
       .update(paymentRetry)
       .set({ status: "canceled", canceledAt, canceledReason })
-      .where(eq(paymentRetry.id, id))
+      .where(and(eq(paymentRetry.id, id), eq(paymentRetry.status, "scheduled")))
       .returning();
-    if (!row) throw new ConfigurationError("payment_retry markCanceled found no row");
-    return toRecord(row);
+    return row ? toRecord(row) : null;
   }
 }
