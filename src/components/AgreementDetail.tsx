@@ -149,6 +149,14 @@ interface PartialPaymentItem {
   proposedDate: string;
   explanation: string | null;
   createdAt: string;
+  /**
+   * R11 PASS B1 (Defect B1-1 — PARTIAL-PAYMENT UI HANDOFF): the installment this request targets —
+   * already returned by GET /api/agreements/partial-payments (PartialPaymentService's own
+   * `PartialPaymentRequestRecord`), just not previously declared on this frontend type. Required so
+   * the accepted-request card below can hand it straight to the actual payment-creation call, rather
+   * than dead-ending at a link to a page with no way to create the payment at all.
+   */
+  installmentScheduleItemId: string | null;
 }
 
 interface SettlementItem {
@@ -971,7 +979,14 @@ export function AgreementDetail() {
         />
       )}
 
-      <PartialPaymentPanel agreementId={data.id} requests={partialPayments} myRole={myRole} onChanged={() => void load()} />
+      <PartialPaymentPanel
+        agreementId={data.id}
+        currency={data.currency}
+        requests={partialPayments}
+        myRole={myRole}
+        nextInstallment={nextPayment?.nextInstallment ?? null}
+        onChanged={() => void load()}
+      />
 
       <SettlementPanel
         agreementId={data.id}
@@ -2088,19 +2103,32 @@ function AmendmentPanel({
 
 function PartialPaymentPanel({
   agreementId,
+  currency,
   requests,
   myRole,
+  nextInstallment,
   onChanged,
 }: {
   agreementId: string;
+  currency: string;
   requests: PartialPaymentItem[];
   myRole: "creditor" | "debtor" | null;
+  /** R11 (Final Open Issue A): the installment this partial payment is intended to satisfy — without this, the resulting request (and the payment eventually made against it) could never be linked to any installment at all. */
+  nextInstallment: { id: string; sequenceNumber: number; dueDate: string; amountMinorUnits: number } | null;
   onChanged: () => void;
 }) {
   const [showForm, setShowForm] = useState(false);
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState("");
   const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
+  // R11 PASS B1 (Defect B1-1/B1-A): per-request pay state — a request-scoped map so paying one
+  // awaiting_payment request never disables/blocks the button on any other. "submitted" (never
+  // "paid"/"succeeded") is the terminal state a successful initiation reaches — the REAL payment is
+  // provider-routed and clears asynchronously, exactly like the ordinary "Make a payment" panel; this
+  // never implies success before the provider actually confirms it.
+  const [payState, setPayState] = useState<Record<string, "idle" | "confirming" | "working" | "submitted" | "error">>({});
+  const [payError, setPayError] = useState<Record<string, string>>({});
+  const [paySubmittedStatus, setPaySubmittedStatus] = useState<Record<string, string>>({});
 
   async function propose(event: React.FormEvent) {
     event.preventDefault();
@@ -2108,7 +2136,15 @@ function PartialPaymentPanel({
     try {
       await apiFetch("/api/agreements/partial-payments/propose", {
         method: "POST",
-        body: JSON.stringify({ agreementId, proposedAmountMinorUnits: Math.round(Number(amount) * 100), proposedDate: date }),
+        body: JSON.stringify({
+          agreementId,
+          proposedAmountMinorUnits: Math.round(Number(amount) * 100),
+          proposedDate: date,
+          // R11 (Final Open Issue A): carries the intended installment through proposal -> payment ->
+          // record-payment, so the eventual payment this request applies to can be created linked,
+          // never unattributable to any installment.
+          installmentScheduleItemId: nextInstallment?.id,
+        }),
       });
       setShowForm(false);
       onChanged();
@@ -2120,6 +2156,50 @@ function PartialPaymentPanel({
   async function decide(partialPaymentRequestId: string, decision: "accept" | "reject") {
     await apiFetch("/api/agreements/partial-payments/decide", { method: "POST", body: JSON.stringify({ partialPaymentRequestId, decision }) });
     onChanged();
+  }
+
+  /**
+   * R11 PASS B1 — TARGETED FINAL CORRECTION (Defect B1-A — "PAY $X NOW" INCORRECTLY USES
+   * OFF-PLATFORM RECORDING): "Pay $X now" initiates a REAL, provider-routed payment through
+   * `/api/agreements/partial-payments/initiate-payment` — the SAME production rail (`AchPaymentService
+   * .createManualPayment` -> `PaymentService.schedulePayment` -> the protected reservation path
+   * every "Make a payment" submission already goes through) — never
+   * `PaymentService.recordManualOffPlatformPayment` (a record-only path for money that already moved
+   * OUTSIDE this platform; that functionality stays behind its own, separately-labeled
+   * "record an off-platform payment" workflow, never disguised as "Pay now" — see this route's own
+   * doc comment for the exact reasoning). The client sends ONLY this request's own id — the server
+   * derives the agreement, installment, and exact approved amount from the STORED, accepted request,
+   * never from a client-editable field, and every existing R11/Pass A gate (ownership, current
+   * schedule, the one-unresolved-attempt invariant, the installment ceiling, idempotency) applies
+   * automatically because this reaches the real production reservation path.
+   *
+   * `payment_cleared` never arises merely from this call returning — a real ACH payment clears
+   * asynchronously, through the normal provider webhook lifecycle, exactly like the ordinary "Make a
+   * payment" panel; this handler only ever reaches "submitted," reflected honestly below, never
+   * "paid." Associating the now-cleared payment with this request (`PartialPaymentService
+   * .recordPayment`) happens at ITS OWN correct lifecycle point once the payment has genuinely
+   * succeeded — never called from here, since it would always fail against a payment that isn't
+   * synchronously "succeeded" yet.
+   */
+  async function payAcceptedRequest(r: PartialPaymentItem) {
+    setPayState((prev) => ({ ...prev, [r.id]: "working" }));
+    setPayError((prev) => {
+      const next = { ...prev };
+      delete next[r.id];
+      return next;
+    });
+    try {
+      const payment = await apiFetch<{ id: string; status: string }>("/api/agreements/partial-payments/initiate-payment", {
+        method: "POST",
+        body: JSON.stringify({ partialPaymentRequestId: r.id }),
+      });
+      setPayState((prev) => ({ ...prev, [r.id]: "submitted" }));
+      setPaySubmittedStatus((prev) => ({ ...prev, [r.id]: payment.status }));
+      onChanged();
+    } catch (e) {
+      setPayState((prev) => ({ ...prev, [r.id]: "error" }));
+      setPayError((prev) => ({ ...prev, [r.id]: e instanceof ApiError ? e.message : "Could not submit this payment. Please try again." }));
+    }
   }
 
   return (
@@ -2156,9 +2236,52 @@ function PartialPaymentPanel({
                   </button>
                 </div>
               )}
-              {r.status === "awaiting_payment" && (
+              {r.status === "awaiting_payment" && myRole === "debtor" && (
+                <div style={{ marginTop: "0.5rem" }}>
+                  {payError[r.id] && (
+                    <p className="field-error" role="alert">
+                      {payError[r.id]}
+                    </p>
+                  )}
+                  {payState[r.id] === "submitted" ? (
+                    <p className="form-status" role="status" style={{ margin: 0 }}>
+                      Payment submitted — status: {(paySubmittedStatus[r.id] ?? "submitted").replaceAll("_", " ")}. This page updates once your bank
+                      finishes processing it.
+                    </p>
+                  ) : (payState[r.id] ?? "idle") === "confirming" ? (
+                    <div style={{ display: "grid", gap: "0.5rem" }}>
+                      <p className="form-status" role="status" style={{ margin: 0 }}>
+                        Confirm payment of {formatMoney(r.proposedAmountMinorUnits, currency)} to settle this partial payment via ACH bank transfer.
+                        This cannot be undone once your bank processes it.
+                      </p>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button type="button" className="button button--primary" onClick={() => void payAcceptedRequest(r)}>
+                          Confirm payment
+                        </button>
+                        <button
+                          type="button"
+                          className="button button--ghost"
+                          onClick={() => setPayState((prev) => ({ ...prev, [r.id]: "idle" }))}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="button button--primary"
+                      disabled={payState[r.id] === "working"}
+                      onClick={() => setPayState((prev) => ({ ...prev, [r.id]: "confirming" }))}
+                    >
+                      {payState[r.id] === "working" ? "Submitting…" : `Pay ${formatMoney(r.proposedAmountMinorUnits, currency)} now`}
+                    </button>
+                  )}
+                </div>
+              )}
+              {r.status === "awaiting_payment" && myRole !== "debtor" && (
                 <p className="confirm-banner" style={{ marginTop: "0.5rem" }}>
-                  Payment required — go to <a href="/payments">My Cash</a> to pay this amount.
+                  Waiting for the debtor to pay {formatMoney(r.proposedAmountMinorUnits, currency)} to settle this partial payment.
                 </p>
               )}
             </div>
@@ -2167,6 +2290,15 @@ function PartialPaymentPanel({
       )}
       {showForm && (
         <form onSubmit={(event) => void propose(event)} className="card" style={{ marginTop: "1rem" }}>
+          {nextInstallment ? (
+            <p className="form-status" style={{ marginTop: 0 }}>
+              This will apply toward installment #{nextInstallment.sequenceNumber + 1}, due {formatDate(nextInstallment.dueDate)}.
+            </p>
+          ) : (
+            <p className="form-status" style={{ marginTop: 0 }}>
+              This agreement has no outstanding scheduled installment to apply this toward.
+            </p>
+          )}
           <div className="early-access-form__row">
             <div className="field">
               <label htmlFor="partial-amount">Amount</label>

@@ -98,16 +98,58 @@ export class InMemoryPartialPaymentRequestRepository implements PartialPaymentRe
     return record;
   }
 
-  async recordExpired(id: string): Promise<PartialPaymentRequestRecord> {
+  async findAwaitingPaymentPastDate(now: Date): Promise<PartialPaymentRequestRecord[]> {
+    return [...this.byId.values()].filter((r) => r.status === "awaiting_payment" && r.proposedDate < now.toISOString().slice(0, 10));
+  }
+
+  async applyIfAwaitingPayment(
+    id: string,
+    paymentAttemptId: string,
+  ): Promise<
+    | { outcome: "applied"; request: PartialPaymentRequestRecord }
+    | { outcome: "already_applied_same"; request: PartialPaymentRequestRecord }
+    | { outcome: "already_applied_different"; request: PartialPaymentRequestRecord }
+    | { outcome: "not_awaiting_payment"; request: PartialPaymentRequestRecord }
+  > {
     const record = this.mustFind(id);
+    if (record.status === "awaiting_payment") {
+      record.status = "applied";
+      record.paymentAttemptId = paymentAttemptId;
+      record.appliedAt = new Date();
+      record.updatedAt = new Date();
+      return { outcome: "applied", request: record };
+    }
+    if (record.status === "applied" && record.paymentAttemptId === paymentAttemptId) {
+      return { outcome: "already_applied_same", request: record };
+    }
+    if (record.status === "applied") {
+      return { outcome: "already_applied_different", request: record };
+    }
+    return { outcome: "not_awaiting_payment", request: record };
+  }
+
+  /**
+   * Single-threaded in-memory fake — no real concurrency to race, so no real lock is needed. This
+   * fake never tracks any correlated payment/ledger data of its own, so it always treats clearing
+   * evidence as absent (`"not_cleared"`) — matching every pre-existing unit test's own expectation
+   * that an overdue awaiting_payment request simply expires.
+   */
+  async expireIfSafe(
+    id: string,
+  ): Promise<
+    | { outcome: "expired"; request: PartialPaymentRequestRecord }
+    | { outcome: "not_awaiting_payment"; request: PartialPaymentRequestRecord }
+    | { outcome: "cleared_skip" }
+    | { outcome: "unknown_skip" }
+  > {
+    const record = this.mustFind(id);
+    if (record.status !== "awaiting_payment") {
+      return { outcome: "not_awaiting_payment", request: record };
+    }
     record.status = "expired";
     record.expiredAt = new Date();
     record.updatedAt = new Date();
-    return record;
-  }
-
-  async findAwaitingPaymentPastDate(now: Date): Promise<PartialPaymentRequestRecord[]> {
-    return [...this.byId.values()].filter((r) => r.status === "awaiting_payment" && r.proposedDate < now.toISOString().slice(0, 10));
+    return { outcome: "expired", request: record };
   }
 }
 

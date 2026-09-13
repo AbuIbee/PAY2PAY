@@ -2,15 +2,13 @@ import "server-only";
 import { and, eq } from "drizzle-orm";
 import { getServerEnv } from "@/config/env";
 import { getDb, type Database } from "@/db/client";
-import { agreement, agreementVersion, auditEvent, installmentScheduleItem, ledgerJournalEntry, ledgerPosting } from "@/db/schema";
+import { agreement, auditEvent } from "@/db/schema";
 import type { AuditService } from "@/lib/audit/auditService";
 import { appendAuditEventTxBound } from "@/lib/audit/drizzleAuditEventRepository";
 import { computeAuditEventHash, type AuditEventPayload } from "@/lib/audit/hash";
-import type { AgreementTerms } from "@/lib/agreements/agreementService";
 import { isPastDate } from "@/lib/agreements/schedule";
 import { ValidationError } from "@/lib/errors";
-import { reconstructPaidAndReversed } from "./balanceService";
-import type { LedgerJournalEntryRecord } from "./ledgerService";
+import { computeAgreementCompletionEvidenceWithinTx } from "./agreementCompletionEvidenceTx";
 
 /**
  * PRSprint 18 (docs/prsprints/PRSPRINT_18_PARTIAL_PAYMENTS_OVERPAYMENTS_COMPLETION_RULES.md): narrow
@@ -77,6 +75,53 @@ export interface AgreementCompletionTestHooks {
 }
 
 /**
+ * R11 (INSTALLMENT AMOUNT-AWARENESS / PARTIAL-PAYMENT CORRECTNESS — ARCHITECT-APPROVED DESIGN,
+ * §8): the SECOND half of the final `paid_in_full` invariant — `checkAndAdvance` may promote to
+ * `paid_in_full` only when the AGGREGATE balance is fully satisfied (the pre-existing
+ * `AgreementBalanceComputer` check) AND every non-waived installment is INDIVIDUALLY amount-
+ * satisfied (this check). Closes Final Open Issue A's own failure mode: an unlinked ordinary payment
+ * (or any payment not attributed to a specific installment) can satisfy the agreement's aggregate
+ * balance while a real, scheduled installment remains genuinely unpaid — without this second check,
+ * `checkAndAdvance` would incorrectly promote the agreement to `paid_in_full` in exactly that case.
+ * Real implementation: `DrizzleAgreementInstallmentSatisfactionReader` — computes fresh from ledger
+ * truth via the same `computeInstallmentSettlement` arithmetic every other R11 call site reuses,
+ * never from cached `installment.status`. A waived installment is excluded by construction — a waiver
+ * is an explicit, separate approval that removes an installment from the debt entirely, not something
+ * amount-aware "payment" evidence could ever satisfy. An agreement with no installment schedule at
+ * all (or none yet resolvable) is vacuously satisfied — unaffected: `AgreementBalanceComputer`'s own
+ * aggregate check remains the sole gate for those.
+ */
+export interface AgreementInstallmentSatisfactionChecker {
+  areAllNonWaivedInstallmentsSatisfied(agreementId: string): Promise<boolean>;
+}
+
+/**
+ * R11 CORRECTION PASS A (Defect A4 — paid_in_full STALE-EVIDENCE RACE): the atomic, tx-bound
+ * counterpart to `checkAndAdvance`'s own separate, unlocked `agreements.findById` / `balances
+ * .getAgreementBalance` / `installmentSatisfaction.areAllNonWaivedInstallmentsSatisfied` reads —
+ * closes the race where a reversal/supersession commits AFTER those reads but BEFORE the eventual
+ * conditional status write, letting `checkAndAdvance` promote an agreement to `paid_in_full` from
+ * evidence already invalidated by the time the write happens. Real implementation
+ * (`DrizzleAtomicAgreementCompletionDecider`) locks the `agreement` row `FOR UPDATE` FIRST, then
+ * computes balance + installment-satisfaction evidence FRESH, tx-bound
+ * (`computeAgreementCompletionEvidenceWithinTx` — the SAME shared evidence computation
+ * `recomputeAfterSupersession` already uses for the identical reason), and performs the conditional
+ * lifecycle write and its audit INSIDE that same transaction — so no concurrent clearing/reversal/
+ * supersession can invalidate the evidence between the read and the write. Returns the applied
+ * transition (if any) so `checkAndAdvance` need not separately re-derive it.
+ *
+ * Optional — mirrors `AgreementInstallmentSatisfactionChecker`'s own established, production-safe
+ * optionality: every pre-Pass-A test that omits it is unaffected (`checkAndAdvance` falls back to its
+ * prior, non-atomic sequence, which remains correct for single-threaded-in-effect fakes, e.g.
+ * `concurrencyAndIdempotency.test.ts`'s in-memory-fake-based race coverage, which relies on no real
+ * Postgres connection ever being opened); production wiring (`getAgreementCompletionService.ts`)
+ * always supplies the real one — this is a genuine financial-correctness control, not a cosmetic one.
+ */
+export interface AtomicAgreementCompletionDecider {
+  decideAndApply(agreementId: string): Promise<{ status: "active" | "paid_in_full"; amountPaidMinorUnits: number } | null>;
+}
+
+/**
  * PRSprint 18: closes the gap identified in docs/prsprints/PHASE_5_PREFLIGHT_FINDINGS.md §6-7 —
  * before this PRSprint, nothing in this codebase ever wrote `agreement.status = "paid_in_full"`; the
  * only existing agreement-completion write path was `SettlementService`'s `"settled_in_full"`, a
@@ -104,6 +149,10 @@ export class AgreementCompletionService {
       agreements: AgreementStatusRepository;
       balances: AgreementBalanceComputer;
       audit: AuditService;
+      /** R11: optional so every pre-R11 test omitting it is unaffected (installment-level satisfaction simply isn't re-checked — the pre-existing aggregate-only behavior). Production wiring (getAgreementCompletionService.ts) always supplies the real one — this is a genuine financial-correctness control, not a cosmetic one. */
+      installmentSatisfaction?: AgreementInstallmentSatisfactionChecker;
+      /** R11 CORRECTION PASS A (Defect A4): see `AtomicAgreementCompletionDecider`'s own doc comment. */
+      atomicCompletion?: AtomicAgreementCompletionDecider;
       /** PAID2YOU — PACKAGE B (Codex final review): injectable for `*.postgres.test.ts` isolated-connection suites; every production call site omits it, defaulting to the shared `getDb()` singleton. Used only by `recomputeAfterSupersession`. */
       db?: Database;
       /** See `AgreementCompletionTestHooks`'s own doc comment. */
@@ -114,6 +163,16 @@ export class AgreementCompletionService {
   }
 
   async checkAndAdvance(agreementId: string): Promise<void> {
+    // R11 CORRECTION PASS A (Defect A4): when the real, tx-bound decider is wired, delegate to it
+    // entirely — it performs the agreement lock, fresh evidence read, conditional lifecycle write, AND
+    // its own audit, all inside one transaction (see `AtomicAgreementCompletionDecider`'s own doc
+    // comment). The non-atomic sequence below is preserved, unmodified, as the fallback for callers
+    // that omit it.
+    if (this.deps.atomicCompletion) {
+      await this.deps.atomicCompletion.decideAndApply(agreementId);
+      return;
+    }
+
     const agreement = await this.deps.agreements.findById(agreementId);
     if (!agreement) return;
     const currentStatus = agreement.status;
@@ -139,6 +198,15 @@ export class AgreementCompletionService {
     // — but a full balance clears the debt either way, so this branch is defense-in-depth, not the
     // primary enforcement point (see PHASE_5_PREFLIGHT_FINDINGS.md §7 item 2 for the actual policy).
     if (balance.settlementState === "paid_in_full" || balance.settlementState === "overpaid") {
+      // R11 §8: the aggregate balance alone is no longer sufficient — every non-waived installment
+      // must ALSO be individually amount-satisfied (see `AgreementInstallmentSatisfactionChecker`'s
+      // own doc comment for exactly which pre-existing gap this closes). Not fully satisfied at the
+      // installment level yet: do NOT promote — leave the agreement in its current status; a later
+      // payment that correctly links to the still-outstanding installment(s) will re-trigger this
+      // check via the normal success path.
+      if (this.deps.installmentSatisfaction && !(await this.deps.installmentSatisfaction.areAllNonWaivedInstallmentsSatisfied(agreementId))) {
+        return;
+      }
       // R09 corrective pass (Codex blocker 6): atomic, conditional on the EXACT status this decision
       // was made from — a concurrent decision that already moved the row (e.g. another call already
       // advanced it, or it moved to a status outside this method's own scope) leaves this a no-op
@@ -232,9 +300,15 @@ export class AgreementCompletionService {
 
       if (this.deps.hooks?.afterAgreementLockBeforeBalanceRead) await this.deps.hooks.afterAgreementLockBeforeBalanceRead();
 
-      const evidence = await this.computeFreshEvidenceWithinTx(tx, agreementId);
+      const evidence = await computeAgreementCompletionEvidenceWithinTx(tx, agreementId);
       if (!evidence) return; // no signed terms yet — mirrors checkAndAdvance's own ValidationError early-return.
-      if (evidence.settlementState === "paid_in_full" || evidence.settlementState === "overpaid") return;
+      // R11 §8: a nominally "paid_in_full"/"overpaid" aggregate is no longer sufficient on its own —
+      // see `AgreementInstallmentSatisfactionChecker`'s own doc comment. If any non-waived installment
+      // is not individually amount-satisfied, this is NOT genuinely still fully settled — fall
+      // through to the normal active/past_due determination below instead of leaving it alone.
+      const stillGenuinelySettled =
+        (evidence.settlementState === "paid_in_full" || evidence.settlementState === "overpaid") && evidence.allNonWaivedInstallmentsSatisfied;
+      if (stillGenuinelySettled) return;
 
       const hasOverdueOutstanding = evidence.installments.some(
         (item) => item.status !== "paid" && item.status !== "waived" && isPastDate(item.dueDate),
@@ -269,61 +343,6 @@ export class AgreementCompletionService {
       };
       await appendAuditEventTxBound(tx, payload, (previousEventHash) => computeAuditEventHash(payload, previousEventHash, secret));
     });
-  }
-
-  /**
-   * See `recomputeAfterSupersession`'s own doc comment (fix #2) for why this exists as a tx-bound
-   * reimplementation rather than a call through `AgreementBalanceComputer`/`AgreementInstallmentStatusReader`.
-   * Mirrors `BalanceService.getAgreementBalance`'s own classification exactly (never a second,
-   * independently-drifting copy of the settlement-state policy) and
-   * `DrizzleAgreementInstallmentStatusReader.listForAgreement`'s own shape for the schedule.
-   */
-  private async computeFreshEvidenceWithinTx(
-    tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
-    agreementId: string,
-  ): Promise<{
-    settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid";
-    amountPaidMinorUnits: number;
-    installments: { status: string; dueDate: string }[];
-  } | null> {
-    const agreementRows = await tx.select({ currentVersionId: agreement.currentVersionId }).from(agreement).where(eq(agreement.id, agreementId)).limit(1);
-    const currentVersionId = agreementRows[0]?.currentVersionId;
-    if (!currentVersionId) return null;
-
-    const versionRows = await tx.select({ terms: agreementVersion.terms }).from(agreementVersion).where(eq(agreementVersion.id, currentVersionId)).limit(1);
-    const versionRow = versionRows[0];
-    if (!versionRow) return null;
-    const principalMinorUnits = (versionRow.terms as AgreementTerms).currentPrincipalMinorUnits;
-
-    const entryRows = await tx.select().from(ledgerJournalEntry).where(eq(ledgerJournalEntry.agreementId, agreementId));
-    const entries: LedgerJournalEntryRecord[] = [];
-    for (const entryRow of entryRows) {
-      const postingRows = await tx.select().from(ledgerPosting).where(eq(ledgerPosting.journalEntryId, entryRow.id));
-      entries.push({
-        id: entryRow.id,
-        entryType: entryRow.entryType,
-        agreementId: entryRow.agreementId,
-        paymentAttemptId: entryRow.paymentAttemptId,
-        currency: entryRow.currency,
-        reason: entryRow.reason,
-        createdAt: entryRow.createdAt,
-        postings: postingRows.map((p) => ({ id: p.id, accountId: p.accountId, accountType: p.accountType, direction: p.direction, amountMinorUnits: p.amountMinorUnits })),
-      });
-    }
-    const { amountPaidMinorUnits } = reconstructPaidAndReversed(entries);
-
-    let settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid";
-    if (amountPaidMinorUnits <= 0) settlementState = "unpaid";
-    else if (amountPaidMinorUnits < principalMinorUnits) settlementState = "partially_paid";
-    else if (amountPaidMinorUnits === principalMinorUnits) settlementState = "paid_in_full";
-    else settlementState = "overpaid";
-
-    const installments = await tx
-      .select({ status: installmentScheduleItem.status, dueDate: installmentScheduleItem.dueDate })
-      .from(installmentScheduleItem)
-      .where(eq(installmentScheduleItem.agreementVersionId, currentVersionId));
-
-    return { settlementState, amountPaidMinorUnits, installments };
   }
 
   private async recordAudit(agreementId: string, action: string, amountPaidMinorUnits: number): Promise<void> {

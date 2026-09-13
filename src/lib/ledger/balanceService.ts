@@ -85,6 +85,27 @@ export class BalanceService {
  * input array first — produces the identical total; see balanceService.test.ts.
  */
 export function reconstructPaidAndReversed(entries: LedgerJournalEntryRecord[]): { amountPaidMinorUnits: number; reversedMinorUnits: number } {
+  let amountPaidMinorUnits = 0;
+  let reversedMinorUnits = 0;
+  for (const { outcome, grossAmountMinorUnits } of classifyPaymentAttempts(entries).values()) {
+    if (outcome === "reversed") reversedMinorUnits += grossAmountMinorUnits;
+    else amountPaidMinorUnits += grossAmountMinorUnits;
+  }
+  return { amountPaidMinorUnits, reversedMinorUnits };
+}
+
+/**
+ * R11 (installment amount-awareness): the per-payment classification `reconstructPaidAndReversed`
+ * itself is built from — extracted, not duplicated, so a caller that needs to know WHICH specific
+ * payment attempts contributed (e.g. `computeInstallmentSettlement`'s "contributing payment
+ * attempts" evidence for a reconciliation exception) can get it from the exact same classification
+ * `reconstructPaidAndReversed` already performs, rather than re-deriving it a second, independently-
+ * drifting way. Same per-payment independence/order-independence guarantee as
+ * `reconstructPaidAndReversed` — see that function's own doc comment.
+ */
+export function classifyPaymentAttempts(
+  entries: LedgerJournalEntryRecord[],
+): Map<string, { outcome: "paid" | "reversed"; grossAmountMinorUnits: number }> {
   const byPayment = new Map<string, LedgerJournalEntryRecord[]>();
   for (const entry of entries) {
     const list = byPayment.get(entry.paymentAttemptId) ?? [];
@@ -92,9 +113,8 @@ export function reconstructPaidAndReversed(entries: LedgerJournalEntryRecord[]):
     byPayment.set(entry.paymentAttemptId, list);
   }
 
-  let amountPaidMinorUnits = 0;
-  let reversedMinorUnits = 0;
-  for (const paymentEntries of byPayment.values()) {
+  const result = new Map<string, { outcome: "paid" | "reversed"; grossAmountMinorUnits: number }>();
+  for (const [paymentAttemptId, paymentEntries] of byPayment) {
     const clearEntry = paymentEntries.find((e) => e.entryType === "payment_cleared");
     if (!clearEntry) continue;
     const grossLeg = clearEntry.postings.find((p) => p.accountType === "processor_clearing" && p.direction === "debit");
@@ -102,8 +122,7 @@ export function reconstructPaidAndReversed(entries: LedgerJournalEntryRecord[]):
     const wasReversed = paymentEntries.some(
       (e) => e.entryType === "refund" || e.entryType === "reversal" || e.entryType === "dispute_adjustment",
     );
-    if (wasReversed) reversedMinorUnits += grossLeg.amountMinorUnits;
-    else amountPaidMinorUnits += grossLeg.amountMinorUnits;
+    result.set(paymentAttemptId, { outcome: wasReversed ? "reversed" : "paid", grossAmountMinorUnits: grossLeg.amountMinorUnits });
   }
-  return { amountPaidMinorUnits, reversedMinorUnits };
+  return result;
 }

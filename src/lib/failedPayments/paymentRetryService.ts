@@ -49,6 +49,15 @@ export interface PaymentRetryRepository {
   }): Promise<PaymentRetryRecord>;
   findByOriginalPaymentAttemptId(originalPaymentAttemptId: string): Promise<PaymentRetryRecord | null>;
   findByResultingPaymentAttemptId(resultingPaymentAttemptId: string): Promise<PaymentRetryRecord | null>;
+  /**
+   * R11 PASS B1 — FINAL LIFECYCLE CLOSURE (Defect 1/5): looks up a retry row by its OWN id — the
+   * robust way to walk retry lineage BACKWARD from a replacement attempt's own deterministic
+   * `retry-<retryId>` idempotencyKey, which never depends on `resultingPaymentAttemptId` having been
+   * populated (a legacy row from before that column was written at Phase-A time can still be found
+   * and its `originalPaymentAttemptId` read correctly). See `PartialPaymentAutoApplicationService
+   * .resolveOriginatingProposalId`'s own doc comment for exactly how this closes the legacy gap.
+   */
+  findById(id: string): Promise<PaymentRetryRecord | null>;
   findScheduledForInstallment(installmentScheduleItemId: string): Promise<PaymentRetryRecord | null>;
   /**
    * PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 4A): bounded (`limit`) and

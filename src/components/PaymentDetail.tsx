@@ -18,6 +18,7 @@ interface PaymentDetailData {
   agreementId: string | null;
   providerName: string;
   paymentMethod: "ach" | "debit_card" | "manual_off_platform" | null;
+  installmentScheduleItemId: string | null;
   recipientConfirmedAt: string | null;
   failureReason: string | null;
   createdAt: string;
@@ -109,6 +110,10 @@ export function PaymentDetail() {
           recipient: payment.recipient,
           amountMinorUnits: payment.amountMinorUnits,
           currency: payment.currency,
+          // R11 (Final Open Issue A): this was previously dropped even though the original payment's
+          // own installment link was known — the manual-retry attempt reached the server as an
+          // unlinked payment against a (possibly scheduled) agreement.
+          installmentScheduleItemId: payment.installmentScheduleItemId ?? undefined,
         }),
       });
       setManualPayStatus("done");

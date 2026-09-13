@@ -115,6 +115,15 @@ export interface AgreementInstallmentStatusReader {
   listForAgreement(agreementId: string): Promise<InstallmentWithStatus[]>;
 }
 
+/**
+ * R11 (PARTIAL PAYMENT UX, §7): the authoritative REMAINING amount for one installment — never the
+ * raw, original `amount_minor_units` once a partial contribution has already reduced it. Real
+ * implementation: `DrizzleAgreementInstallmentSettlementReader`.
+ */
+export interface AgreementInstallmentSettlementReader {
+  getRemainingMinorUnits(installmentScheduleItemId: string, faceAmountMinorUnits: number): Promise<number>;
+}
+
 /** Narrow view onto PaymentAttemptRepository.listByAgreementId — only the fields Step 5 needs to tell "processing" from "failed" from "nothing attempted yet" for the next-due installment. */
 export interface AgreementPaymentAttemptRecord {
   installmentScheduleItemId: string | null;
@@ -155,6 +164,22 @@ export interface AgreementProgressServiceDeps {
    * known" rather than failing the whole progress read, same as every other optional read here).
    */
   partyAccounts?: AgreementPartyAccountsReader;
+  /**
+   * R11 PASS B1 (Defect B1-3 — AGREEMENT PROGRESS STILL TRUSTS CACHED STATUS/FACE AMOUNT):
+   * `activeStep`'s own "next payment due" determination previously used `installments`'s cached
+   * `status`/`amountMinorUnits` alone — which can show "Agreement paid in full" from a stale cached
+   * "paid" status a reversal has since invalidated, or show the installment's original face amount
+   * ("$1,000 due") after a partial contribution has already reduced what's actually owed ("$600"),
+   * inconsistent with `/api/agreements/payment-setup/next-payment` (the "Make Payment" panel's own
+   * data source), which already computes this authoritatively via the SAME reader. Optional so every
+   * pre-existing test that omits it is unaffected (falls back to the prior cached-status-only
+   * behavior); production wiring (`getAgreementProgressService.ts`) always supplies the real one —
+   * this is a genuine financial-correctness control, not a cosmetic one. Never used to silently
+   * rewrite `installment.status` itself — this class remains read-only; see `activeStep`'s own doc
+   * comment for exactly how a cached-vs-authoritative disagreement is handled (report via the
+   * authoritative value, never mutate the cached one).
+   */
+  installmentSettlements?: AgreementInstallmentSettlementReader;
 }
 
 /**
@@ -787,8 +812,36 @@ export class AgreementProgressService {
       };
     }
 
+    // R11 PASS B1 (Defect B1-3): the next-due installment and its own amount are now determined from
+    // AUTHORITATIVE, amount-aware settlement — never cached `status`/face `amountMinorUnits` alone —
+    // when the real reader is wired (see `AgreementProgressServiceDeps.installmentSettlements`'s own
+    // doc comment). Mirrors `/api/agreements/payment-setup/next-payment`'s own identical loop exactly
+    // (never a second, independently-drifting copy of the same "first installment with authoritative
+    // remaining > 0, waived excluded" rule) — this is what keeps Step 5 consistent with what "Make
+    // Payment" itself will actually charge. A cached "paid" status that authoritative evidence
+    // disagrees with is never silently rewritten here (this class stays read-only) — it simply stops
+    // being treated as paid for THIS read, exactly like the historical-reconciliation sweep's own
+    // report-only policy elsewhere in R11.
     const installments = await this.deps.installments.listForAgreement(agreementId);
-    const nextUnpaid = installments.find((i) => i.status !== "paid" && i.status !== "waived");
+    let nextUnpaid: InstallmentWithStatus | null = null;
+    let nextUnpaidAmountMinorUnits = 0;
+    if (this.deps.installmentSettlements) {
+      const settlements = this.deps.installmentSettlements;
+      for (const item of installments) {
+        if (item.status === "waived") continue;
+        const remaining = await settlements.getRemainingMinorUnits(item.id, item.amountMinorUnits);
+        if (remaining > 0) {
+          nextUnpaid = item;
+          nextUnpaidAmountMinorUnits = remaining;
+          break;
+        }
+      }
+    } else {
+      // Fallback for callers that omit the optional reader (pre-existing tests) — the prior,
+      // cached-status-only behavior, unchanged.
+      nextUnpaid = installments.find((i) => i.status !== "paid" && i.status !== "waived") ?? null;
+      nextUnpaidAmountMinorUnits = nextUnpaid?.amountMinorUnits ?? 0;
+    }
     if (!nextUnpaid) {
       return {
         key: "active",
@@ -840,7 +893,7 @@ export class AgreementProgressService {
       };
     }
 
-    const amount = formatMoney(nextUnpaid.amountMinorUnits, currency);
+    const amount = formatMoney(nextUnpaidAmountMinorUnits, currency);
     const overdue = isPastDate(nextUnpaid.dueDate);
     const remainingSuffix = await this.remainingBalanceSuffix(agreementId, currency);
     if (myRole === "debtor") {

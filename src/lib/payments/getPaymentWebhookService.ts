@@ -6,6 +6,7 @@ import { getAgreementCompletionService } from "@/lib/ledger/getAgreementCompleti
 import { DrizzleReconciliationExceptionRepository } from "@/lib/ledger/drizzleReconciliationExceptionRepository";
 import { getLedgerService } from "@/lib/ledger/getLedgerService";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
+import { getPartialPaymentAutoApplicationService } from "@/lib/partialPayments/getPartialPaymentAutoApplicationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { getRiskEventService } from "@/lib/risk/getRiskEventService";
 import { DrizzlePaymentAttemptRepository } from "./drizzlePaymentAttemptRepository";
@@ -37,6 +38,9 @@ export function getPaymentWebhookService(): PaymentWebhookService {
       // PAID2YOU — PACKAGE B (R06+R09 architectural review remediation, Item 2): the SAME shared
       // singleton `resolveAmbiguousRetry` also uses — see `getPlatformFeePolicy`'s own doc comment.
       platformFeePolicy: getPlatformFeePolicy(),
+      // R11 PASS B1 — FINAL TARGETED CORRECTION (Defect 1): the missing production integration point
+      // — see PartialPaymentAutoApplicationService's own doc comment.
+      partialPaymentApplication: getPartialPaymentAutoApplicationService(),
     });
   }
   return cached;

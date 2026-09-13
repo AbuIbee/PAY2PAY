@@ -7,6 +7,22 @@ import type { PaymentProvider } from "@/lib/payments/paymentProvider";
 import { DefaultPlatformFeePolicy, type PlatformFeePolicy } from "@/lib/payments/platformFeePolicy";
 import type { AutomaticReversalEntryType, LedgerService } from "./ledgerService";
 
+/**
+ * R11 PASS B1 — FINAL LEGACY RECOVERY CORRECTION (Defect 2). Narrow, consumer-defined view onto
+ * `FailedPaymentRetryCoordinator.repairLegacyRetryLineage` — this codebase's interface-segregation
+ * precedent (e.g. `AgreementTermsReader`). Declared here, not imported from that module, to avoid
+ * this file depending on the full failed-payments module surface for one method.
+ */
+export interface LegacyRetryLineageRepairer {
+  /**
+   * R11 PASS B1 — SURGICAL FINAL PATCH (Part 1C/1D): `now` (defaults to `new Date()`) is the SAME
+   * backoff-eligibility clock the retry's own `nextResolutionAttemptAt` is compared against —
+   * `repairBatch` threads its own already-established `now` through here rather than a second,
+   * independently drifting clock.
+   */
+  repairLegacyRetryLineage(limit?: number, now?: Date): Promise<{ scanned: number }>;
+}
+
 export type ReconciliationExceptionType =
   | "missing_provider_transaction"
   | "unmatched_provider_transaction"
@@ -27,6 +43,27 @@ export type ReconciliationExceptionType =
   // evidence a retry can never resolve. See `PaymentWebhookService.recordProviderIdentityMismatch`'s
   // own doc comment.
   | "provider_identity_mismatch";
+
+/**
+ * R11 (HISTORICAL DATA, §9): the minimal read surface `reconcileInstallmentAmountAwareness` needs —
+ * every installment for an agreement's current version, with its OWN cached status (never trusted as
+ * financial evidence, only as the "current visible status" half of the comparison). Real
+ * implementation: `DrizzleAgreementInstallmentReader`.
+ */
+export interface AgreementInstallmentReader {
+  listForAgreement(agreementId: string): Promise<{ id: string; amountMinorUnits: number; status: string }[]>;
+}
+
+/**
+ * R11 (HISTORICAL DATA, §9): the authoritative per-installment settlement computation, reused from
+ * (never duplicated from) the same arithmetic every other R11 call site shares. Real implementation:
+ * `DrizzleInstallmentSettlementComputer`.
+ */
+export interface InstallmentSettlementComputer {
+  computeSettlement(
+    installmentScheduleItemId: string,
+  ): Promise<{ amountMinorUnits: number; settledMinorUnits: number; remainingMinorUnits: number; isSatisfied: boolean; contributingPaymentAttemptIds: string[] } | null>;
+}
 
 export interface ReconciliationExceptionRecord {
   id: string;
@@ -162,6 +199,12 @@ export class ReconciliationService {
        * unaffected — the default IS the real production behavior, not a test-only stand-in.
        */
       platformFeePolicy?: PlatformFeePolicy;
+      /** R11 (HISTORICAL DATA, §9): optional — every pre-R11 caller/test omitting it is unaffected; `reconcileInstallmentAmountAwareness` requires both this and `installmentSettlements` to be wired. */
+      installments?: AgreementInstallmentReader;
+      /** R11 (HISTORICAL DATA, §9): see `installments`'s own doc comment. */
+      installmentSettlements?: InstallmentSettlementComputer;
+      /** R11 PASS B1 — FINAL LEGACY RECOVERY CORRECTION: optional — every pre-existing caller/test omitting it is unaffected. See `repairBatch`'s own doc comment for where this is invoked from. */
+      legacyRetryLineageRepair?: LegacyRetryLineageRepairer;
     },
   ) {
     this.platformFeePolicy = deps.platformFeePolicy ?? new DefaultPlatformFeePolicy();
@@ -576,7 +619,67 @@ export class ReconciliationService {
       const found = await this.repairFinancialEffectsForCandidate(payment, now, true);
       exceptionsFound += found.length;
     }
-    return { scanned: candidates.size, exceptionsFound };
+
+    // R11 PASS B1 — FINAL CORRECTION (Defect 1 — MAKE REPAIR A REAL PRODUCTION PATH): folded directly
+    // into THIS existing, already-scheduled production entry point (`/api/scheduler/recover-payment-webhooks`)
+    // rather than a separate, unused public method nothing in production ever calls. A no-op when
+    // `legacyRetryLineageRepair` isn't wired (every pre-existing test context that doesn't exercise
+    // partial payments) — see `FailedPaymentRetryCoordinator.repairLegacyRetryLineage`'s own doc
+    // comment for the actual bounded, starvation-free candidate selection and repair logic.
+    let legacyLineageScanned = 0;
+    if (this.deps.legacyRetryLineageRepair) {
+      const legacyResult = await this.deps.legacyRetryLineageRepair.repairLegacyRetryLineage(limit, now);
+      legacyLineageScanned = legacyResult.scanned;
+    }
+
+    return { scanned: candidates.size + legacyLineageScanned, exceptionsFound };
+  }
+
+  /**
+   * R11 (HISTORICAL DATA, §9 — ARCHITECT DECISION): does NOT silently reopen or otherwise mutate any
+   * existing installment whose cached `status` disagrees with the newly-authoritative amount-aware
+   * expected state — this is a REPORT-ONLY sweep. For each installment on this agreement, computes
+   * the authoritative expected status (`"paid"` if amount-satisfied, else the installment's own
+   * cached non-paid status is left as the "expected" value too — there is no amount-aware basis to
+   * assert past_due vs. scheduled here, since due-date evaluation is out of this report's scope) and
+   * compares it to the currently-visible cached status; where they disagree, records a reconciliation
+   * exception carrying every piece of evidence an admin needs to review (installment id, required
+   * amount, authoritative net settlement, difference, current status, expected status, contributing
+   * payment attempts) — reusing the existing `amount_mismatch` exception type (no new enum value/
+   * migration needed) with a synthetic, installment-scoped `providerEventId` so `findOpen`'s existing
+   * `(exceptionType, paymentAttemptId, providerEventId)` idempotency identity correctly distinguishes
+   * one installment's exception from another's (mirrors this codebase's own established synthetic-id
+   * convention — e.g. `FailedPaymentRetryCoordinator`'s `ambiguity-resolution:${idempotencyKey}`).
+   * Deliberately does NOT attempt to also decide waived-installment or a full admin remediation
+   * workflow — see R11's own §9 instruction ("if a full admin workflow would materially expand scope,
+   * report it rather than inventing one"); this method's own scope ends at producing the exception
+   * record.
+   */
+  async reconcileInstallmentAmountAwareness(agreementId: string): Promise<ReconciliationExceptionRecord[]> {
+    if (!this.deps.installments || !this.deps.installmentSettlements) {
+      throw new ValidationError("Installment amount-awareness reconciliation requires both installments and installmentSettlements dependencies.");
+    }
+    const items = await this.deps.installments.listForAgreement(agreementId);
+    const found: ReconciliationExceptionRecord[] = [];
+    for (const item of items) {
+      if (item.status === "waived") continue; // an explicit waiver is never something amount-aware evidence could contradict.
+      const settlement = await this.deps.installmentSettlements.computeSettlement(item.id);
+      if (!settlement) continue;
+      const expectedStatus = settlement.isSatisfied ? "paid" : item.status === "paid" ? "scheduled" : item.status;
+      if (expectedStatus === item.status) continue; // authoritative evidence agrees with the cached status — nothing to report.
+      found.push(
+        await this.recordException("amount_mismatch", null, `installment_reconciliation:${item.id}`, {
+          installmentScheduleItemId: item.id,
+          requiredAmountMinorUnits: settlement.amountMinorUnits,
+          authoritativeNetSettledMinorUnits: settlement.settledMinorUnits,
+          differenceMinorUnits: settlement.amountMinorUnits - settlement.settledMinorUnits,
+          currentStatus: item.status,
+          expectedStatus,
+          contributingPaymentAttemptIds: settlement.contributingPaymentAttemptIds,
+        }),
+      );
+    }
+    return found;
   }
 
   async listOpenExceptions(): Promise<ReconciliationExceptionRecord[]> {

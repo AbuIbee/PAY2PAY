@@ -80,4 +80,23 @@ describe("PAID2YOU — PACKAGE B (Codex final remaining blockers, Section B1): p
     expect(service).toBeDefined();
     expect(getFailedPaymentWorkflowService()).toBe(service);
   });
+
+  /**
+   * R11 PASS B1 (Defect B1-2 — MANUAL/OFF-PLATFORM PAYMENT DOES NOT RUN INSTALLMENT COMPLETION):
+   * `getPaymentService.ts` now wires `installmentHook` via the SAME lazy-thunk pattern
+   * `getPaymentRetryService.ts` already uses for `effectApplier` — closing a NEW circular edge this
+   * fix introduces: `getPaymentService -> getFailedPaymentWorkflowService -> getPaymentRetryService ->
+   * getAchPaymentService`/`getDebitCardPaymentService` -> `getPaymentService`. This proves a cold call
+   * to `getPaymentService()` itself — not merely the other three factories already covered above —
+   * completes without recursing back into its own still-under-construction singleton.
+   */
+  it("R-B67D — a cold call to getPaymentService() returns normally: no recursion, no RangeError (Defect B1-2's new installmentHook wiring)", async () => {
+    const { getPaymentService } = await import("@/lib/payments/getPaymentService");
+    let service: unknown;
+    expect(() => {
+      service = getPaymentService();
+    }).not.toThrow();
+    expect(service).toBeDefined();
+    expect(getPaymentService()).toBe(service);
+  });
 });

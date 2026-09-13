@@ -296,6 +296,63 @@ export interface AgreementBalanceReader {
 }
 
 /**
+ * R11 (INSTALLMENT AMOUNT-AWARENESS — PAYMENT INITIATION CEILING, ARCHITECT-APPROVED DESIGN):
+ * atomically reserves a new `payment_attempt` row linked to a specific installment, under that
+ * installment's own row lock, only after re-verifying (fresh, inside the lock) that the requested
+ * amount does not exceed the installment's own authoritative remaining amount. Mirrors
+ * `AtomicManualPaymentPoster`'s identical "read-check-insert must be one atomic unit, not a separate
+ * pre-check plus a later insert" rationale, narrowed to the installment level rather than the
+ * agreement level — the two are complementary, never a substitute for one another: the agreement-level
+ * `assertNotOverpaying` pre-check in `reserveAttempt` runs first (unchanged), and this is an
+ * ADDITIONAL, narrower gate applied only when a specific installment is targeted. Real implementation:
+ * `DrizzleInstallmentAwarePaymentReserver`. Optional on `PaymentServiceDeps` so every pre-R11 test that
+ * never targets an installment (or never cares about this specific race) is unaffected — production
+ * wiring (`getPaymentService.ts`) always supplies the real one for every installment-linked creation
+ * path (`createPayment`, `schedulePayment` — the ACH/debit-card scheduling path).
+ */
+export interface InstallmentPaymentReserver {
+  reserveWithinInstallmentCeiling(input: {
+    idempotencyKey: string;
+    payerProfileKind: ProfileKind;
+    payerProfileId: string;
+    recipientProfileKind: ProfileKind;
+    recipientProfileId: string;
+    amountMinorUnits: number;
+    currency: string;
+    agreementId: string;
+    providerName: string;
+    installmentScheduleItemId: string;
+    initialStatus?: PaymentAttemptStatus;
+    paymentMethod?: PaymentMethod | null;
+    bankConnectionId?: string | null;
+  }): Promise<PaymentAttemptRecord>;
+}
+
+/**
+ * R11 (Final Open Issue A — ORDINARY-PAYMENT LINKAGE REQUIREMENT, ARCHITECT-APPROVED DESIGN): is this
+ * agreement's current version a SCHEDULED agreement (does it have any installment_schedule_item rows
+ * at all)? The linkage requirement below only ever applies to a scheduled agreement — an agreement
+ * with no schedule keeps its pre-existing, valid agreement-level-only payment behavior unchanged. Real
+ * implementation: `DrizzleAgreementScheduleReader`. Optional — every pre-R11 test that omits it is
+ * unaffected (the linkage requirement simply never triggers), but production wiring always supplies it.
+ */
+export interface AgreementScheduleReader {
+  hasInstallmentSchedule(agreementId: string): Promise<boolean>;
+}
+
+/**
+ * R11 (Final Open Issue A — SETTLEMENT EXEMPTION, ARCHITECT-APPROVED DESIGN): the ONLY sanctioned way
+ * an ordinary payment-creation path may be exempted from the new installment-linkage requirement — a
+ * caller-supplied `settlementProposalId`, verified here against real, current settlement state, never
+ * merely a boolean flag a caller could set unconditionally (the Architect's own explicit instruction:
+ * "Do NOT implement 'installment id null = settlement' as a generic bypass"). Real implementation:
+ * `DrizzleSettlementContextVerifier`.
+ */
+export interface SettlementContextVerifier {
+  isAwaitingPaymentForAgreement(settlementProposalId: string, agreementId: string): Promise<boolean>;
+}
+
+/**
  * PRSprint 18: narrow view onto `LedgerService` — `recordManualOffPlatformPayment` is the one place
  * in this class that ever posts a ledger entry directly (every provider-routed payment's ledger entry
  * is posted by `PaymentWebhookService`, from the provider's own webhook, never from here).
@@ -370,6 +427,8 @@ export interface AtomicManualPaymentPoster {
     amountMinorUnits: number;
     currency: string;
     recordedByUserId: string;
+    /** R11: which installment this manual payment satisfies, if any — re-verified against the installment's own ceiling under its own row lock, in the SAME transaction as the agreement-level check. */
+    installmentScheduleItemId?: string | null;
   }): Promise<PaymentAttemptRecord>;
 }
 
@@ -404,6 +463,12 @@ export class PaymentService {
       installmentHook?: ManualPaymentInstallmentHook;
       /** PRSprint 20: optional — see AtomicManualPaymentPoster's own doc comment for why production always wires the real one, and most unit tests don't need to. */
       atomicManualPayments?: AtomicManualPaymentPoster;
+      /** R11: optional — see InstallmentPaymentReserver's own doc comment. */
+      installmentReserver?: InstallmentPaymentReserver;
+      /** R11: optional — see AgreementScheduleReader's own doc comment. */
+      scheduleReader?: AgreementScheduleReader;
+      /** R11: optional — see SettlementContextVerifier's own doc comment. */
+      settlementContext?: SettlementContextVerifier;
       /**
        * Restore agreement payment functionality: `payment_scheduled`/`payment_processing` were
        * defined NotificationEventType values with real templates but were never fired anywhere —
@@ -426,6 +491,10 @@ export class PaymentService {
     ipAddress: string | null;
     deviceInfo: unknown;
     paymentMethod?: PaymentMethod | null;
+    /** R11: which installment this payment satisfies, if any — required server-side (see `assertInstallmentLinkageRequirement`) for a scheduled agreement unless `settlementProposalId` is supplied and verified. */
+    installmentScheduleItemId?: string | null;
+    /** R11: the ONLY sanctioned exemption from the linkage requirement above — see `SettlementContextVerifier`'s own doc comment. */
+    settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord> {
     const reserved = await this.reserveAttempt(input);
     if (reserved.alreadyResolved) return reserved.record;
@@ -450,6 +519,7 @@ export class PaymentService {
       agreementId?: string | null;
       actingUserId: string;
       installmentScheduleItemId?: string | null;
+      settlementProposalId?: string | null;
       paymentMethod?: PaymentMethod | null;
       bankConnectionId?: string | null;
     },
@@ -516,6 +586,7 @@ export class PaymentService {
       agreementId?: string | null;
       actingUserId: string;
       installmentScheduleItemId?: string | null;
+      settlementProposalId?: string | null;
       paymentMethod?: PaymentMethod | null;
       bankConnectionId?: string | null;
     },
@@ -530,6 +601,24 @@ export class PaymentService {
     // already succeeded; it only ever blocks genuinely *new* activity.
     if (!isFeatureEnabled("paymentInitiationEnabled")) {
       throw new DependencyError("New payment initiation is temporarily disabled. Please try again shortly.");
+    }
+
+    // R11 PASS A — FINAL TARGETED CORRECTION (Defect 1 — GENERIC PAYMENT SERVICE RESERVATION
+    // BYPASS): the reservation branch below routes through the protected, ownership-validated,
+    // ceiling-checked `installmentReserver` ONLY when BOTH `installmentScheduleItemId` AND
+    // `agreementId` are present — otherwise it falls through to the plain, unlocked
+    // `payments.insertPending`, which performs NONE of that validation. `installmentScheduleItemId`
+    // with no `agreementId` must therefore be rejected HERE, before any `payment_attempt` row is ever
+    // created — never inferred from untrusted client input, and never left to be caught later by
+    // `submitToProvider`'s own "a provider-routed payment must be linked to an agreement" check (by
+    // then an invalid, unresolved, installment-linked row already exists and can wrongly block a
+    // later legitimate reservation against that same installment). The formal settlement exception
+    // (`settlementProposalId`, verified against a real agreement) is unaffected — it is itself only
+    // ever exempt from the LINKAGE requirement below, never a route around THIS structural check,
+    // since a settlement payment never carries a non-null `installmentScheduleItemId` in the first
+    // place (see `assertInstallmentLinkageRequirement`'s own doc comment).
+    if (input.installmentScheduleItemId && !input.agreementId) {
+      throw new ValidationError("A payment linked to a specific installment must also specify the agreement it belongs to.");
     }
 
     const payerOwnerUserId = await this.deps.profileOwners.getOwnerUserId(
@@ -589,6 +678,10 @@ export class PaymentService {
     }
     if (input.agreementId) {
       await this.assertNotOverpaying(input.agreementId, input.amountMinorUnits);
+      // R11 (Final Open Issue A): a scheduled agreement's ordinary payment must be linked to the
+      // specific installment it satisfies — see `assertInstallmentLinkageRequirement`'s own doc
+      // comment for the settlement exemption and the "no schedule at all" carve-out.
+      await this.assertInstallmentLinkageRequirement(input.agreementId, input.installmentScheduleItemId ?? null, input.settlementProposalId ?? null);
     }
 
     const [payerVerified, recipientVerified] = await Promise.all([
@@ -603,21 +696,42 @@ export class PaymentService {
     }
 
     try {
-      const record = await this.deps.payments.insertPending({
-        idempotencyKey: input.idempotencyKey,
-        payerProfileKind: input.payer.profileKind,
-        payerProfileId: input.payer.profileId,
-        recipientProfileKind: input.recipient.profileKind,
-        recipientProfileId: input.recipient.profileId,
-        amountMinorUnits: input.amountMinorUnits,
-        currency: input.currency,
-        agreementId: input.agreementId ?? null,
-        providerName: this.deps.provider.providerName,
-        installmentScheduleItemId: input.installmentScheduleItemId ?? null,
-        initialStatus,
-        paymentMethod: input.paymentMethod ?? null,
-        bankConnectionId: input.bankConnectionId ?? null,
-      });
+      // R11 (INSTALLMENT AMOUNT-AWARENESS — PAYMENT INITIATION CEILING): when this payment targets a
+      // specific installment and the atomic reserver is wired, reservation happens under that
+      // installment's own row lock with a fresh, authoritative remaining-amount check — never the
+      // plain, unlocked `insertPending` a non-installment-linked (or pre-R11 test) payment still uses.
+      const record =
+        input.installmentScheduleItemId && input.agreementId && this.deps.installmentReserver
+          ? await this.deps.installmentReserver.reserveWithinInstallmentCeiling({
+              idempotencyKey: input.idempotencyKey,
+              payerProfileKind: input.payer.profileKind,
+              payerProfileId: input.payer.profileId,
+              recipientProfileKind: input.recipient.profileKind,
+              recipientProfileId: input.recipient.profileId,
+              amountMinorUnits: input.amountMinorUnits,
+              currency: input.currency,
+              agreementId: input.agreementId,
+              providerName: this.deps.provider.providerName,
+              installmentScheduleItemId: input.installmentScheduleItemId,
+              initialStatus,
+              paymentMethod: input.paymentMethod ?? null,
+              bankConnectionId: input.bankConnectionId ?? null,
+            })
+          : await this.deps.payments.insertPending({
+              idempotencyKey: input.idempotencyKey,
+              payerProfileKind: input.payer.profileKind,
+              payerProfileId: input.payer.profileId,
+              recipientProfileKind: input.recipient.profileKind,
+              recipientProfileId: input.recipient.profileId,
+              amountMinorUnits: input.amountMinorUnits,
+              currency: input.currency,
+              agreementId: input.agreementId ?? null,
+              providerName: this.deps.provider.providerName,
+              installmentScheduleItemId: input.installmentScheduleItemId ?? null,
+              initialStatus,
+              paymentMethod: input.paymentMethod ?? null,
+              bankConnectionId: input.bankConnectionId ?? null,
+            });
       // PRSprint 33: master-spec item 155, "high-risk situations should be reviewable without
       // rewriting database records manually" — never blocks; a payment at/above the review threshold
       // is created normally and simply surfaced via the existing audit log (already admin-searchable
@@ -812,6 +926,10 @@ export class PaymentService {
     agreementId: string;
     amountMinorUnits: number;
     actingUserId: string;
+    /** R11: which installment this manual payment satisfies, if any — see `assertInstallmentLinkageRequirement`'s own doc comment. */
+    installmentScheduleItemId?: string | null;
+    /** R11: the ONLY sanctioned exemption from the linkage requirement above. */
+    settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord> {
     if (!this.deps.ledger) {
       throw new ConfigurationError("Manual off-platform payment recording requires a ledger dependency.");
@@ -835,6 +953,10 @@ export class PaymentService {
     // poster below re-verifies this exact same invariant again, inside its lock, which is the actual
     // enforcement point for a genuinely concurrent race — see AtomicManualPaymentPoster's doc comment.
     await this.assertNotOverpaying(input.agreementId, input.amountMinorUnits);
+    // R11 (Final Open Issue A — manual/off-platform payment rule): identical linkage requirement as
+    // every other ordinary payment-creation path — see `assertInstallmentLinkageRequirement`'s own
+    // doc comment.
+    await this.assertInstallmentLinkageRequirement(input.agreementId, input.installmentScheduleItemId ?? null, input.settlementProposalId ?? null);
 
     let record: PaymentAttemptRecord;
     if (this.deps.atomicManualPayments) {
@@ -848,6 +970,7 @@ export class PaymentService {
         amountMinorUnits: input.amountMinorUnits,
         currency: "USD",
         recordedByUserId: input.actingUserId,
+        installmentScheduleItemId: input.installmentScheduleItemId ?? null,
       });
     } else {
       // No atomic poster wired (most unit tests, which aren't exercising this specific race) — the
@@ -866,6 +989,7 @@ export class PaymentService {
           initialStatus: "succeeded",
           paymentMethod: "manual_off_platform",
           recordedByUserId: input.actingUserId,
+          installmentScheduleItemId: input.installmentScheduleItemId ?? null,
         });
       } catch (error) {
         const raced = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
@@ -927,6 +1051,37 @@ export class PaymentService {
    */
   private async assertNotOverpaying(agreementId: string, amountMinorUnits: number): Promise<void> {
     await sharedAssertNotOverpaying(this.deps.balances, agreementId, amountMinorUnits);
+  }
+
+  /**
+   * R11 (Final Open Issue A — ORDINARY-PAYMENT LINKAGE REQUIREMENT, ARCHITECT-APPROVED DESIGN): for
+   * an agreement WITH an installment schedule, every ordinary payment intended to satisfy scheduled
+   * debt must be linked to exactly one installment — closes the traced gap where
+   * `PaymentDetail.tsx`'s manual-retry flow and the partial-payment proposal flow could otherwise
+   * produce a payment that reduces the agreement's aggregate balance while remaining unattributable to
+   * any specific installment (see `AgreementInstallmentSatisfactionChecker`'s own doc comment for why
+   * that is unsafe for the `paid_in_full` invariant). Skipped entirely when `scheduleReader` is not
+   * wired (pre-R11 test convention) or when the agreement has no schedule at all (an unlinked
+   * agreement-level payment remains valid under the existing agreement-level rules). The ONLY
+   * exemption is a caller-supplied `settlementProposalId` that independently verifies against real,
+   * current `settlement_proposal` state — never a bare boolean a caller could set unconditionally.
+   */
+  private async assertInstallmentLinkageRequirement(
+    agreementId: string,
+    installmentScheduleItemId: string | null,
+    settlementProposalId: string | null,
+  ): Promise<void> {
+    if (installmentScheduleItemId) return;
+    if (!this.deps.scheduleReader) return;
+    const scheduled = await this.deps.scheduleReader.hasInstallmentSchedule(agreementId);
+    if (!scheduled) return;
+    if (settlementProposalId && this.deps.settlementContext) {
+      const verified = await this.deps.settlementContext.isAwaitingPaymentForAgreement(settlementProposalId, agreementId);
+      if (verified) return;
+    }
+    throw new ValidationError(
+      "This agreement has an installment schedule — every ordinary payment must be linked to the specific installment it satisfies.",
+    );
   }
 
   private async getAuthorizedRecord(

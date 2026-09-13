@@ -6,6 +6,7 @@ import { getBalanceService } from "@/lib/ledger/getBalanceService";
 import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAttemptRepository";
 import { DrizzleAgreementCancellationReader } from "./drizzleAgreementCancellationReader";
 import { DrizzleAgreementInstallmentStatusReader } from "./drizzleAgreementInstallmentStatusReader";
+import { DrizzleAgreementInstallmentSettlementReader } from "./drizzleAgreementInstallmentSettlementReader";
 import { AgreementProgressService } from "./agreementProgressService";
 
 let cached: AgreementProgressService | null = null;
@@ -22,6 +23,9 @@ export function getAgreementProgressService(): AgreementProgressService {
       paymentAttempts: new DrizzlePaymentAttemptRepository(),
       balance: getBalanceService(),
       partyAccounts: getRelationshipFinancialAccountService(),
+      // R11 PASS B1 (Defect B1-3): see `AgreementProgressServiceDeps.installmentSettlements`'s own doc
+      // comment — the SAME authoritative reader `/api/agreements/payment-setup/next-payment` uses.
+      installmentSettlements: new DrizzleAgreementInstallmentSettlementReader(),
     });
   }
   return cached;

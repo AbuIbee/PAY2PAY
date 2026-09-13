@@ -1,12 +1,33 @@
 import "server-only";
 import { and, eq } from "drizzle-orm";
-import { getDb } from "@/db/client";
-import { agreement, agreementVersion, ledgerAccount, ledgerJournalEntry, ledgerPosting, paymentAttempt } from "@/db/schema";
+import { getDb, type Database } from "@/db/client";
+import { agreement, agreementVersion, installmentScheduleItem, ledgerAccount, ledgerJournalEntry, ledgerPosting, paymentAttempt } from "@/db/schema";
 import type { AgreementTerms } from "@/lib/agreements/agreementService";
 import { ConfigurationError, ValidationError } from "@/lib/errors";
 import { reconstructPaidAndReversed } from "@/lib/ledger/balanceService";
+import {
+  assertInstallmentBelongsToAgreementWithinTx,
+  assertNoCompetingUnresolvedInstallmentAttemptWithinTx,
+  computeInstallmentSettlementWithinTx,
+} from "@/lib/ledger/installmentSettlementTx";
 import type { LedgerJournalEntryRecord, LedgerPostingRecord } from "@/lib/ledger/ledgerService";
 import type { AtomicManualPaymentPoster, PaymentAttemptRecord } from "./paymentService";
+
+/**
+ * R11 CORRECTION PASS A (Defect A3 — AGREEMENT/INSTALLMENT DEADLOCK CYCLE): the same kind of
+ * production-safe, no-op-by-default test-only affordance as `InstallmentReservationTestHooks`
+ * (`drizzleInstallmentAwarePaymentReserver.ts`) — lets a `*.postgres.test.ts` suite deterministically
+ * pause this transaction the instant it genuinely holds the `agreement` row lock (this class's own
+ * PRE-EXISTING, already-correct first lock — see `DrizzleAtomicManualPaymentPoster`'s own top-level
+ * doc comment), long enough to prove a concurrently-racing provider reservation/retry dispatch on the
+ * SAME agreement/installment queues behind it rather than crossing it out of order. Defaults to
+ * `undefined`; every production call site (`new DrizzleAtomicManualPaymentPoster()`, no argument)
+ * never sets it.
+ */
+export interface AtomicManualPaymentPosterTestHooks {
+  /** Awaited immediately after the `agreement` row lock has been GRANTED — before the installment row (if any) is ever locked. */
+  afterAgreementLock?: () => Promise<void>;
+}
 
 type LedgerEntryRow = typeof ledgerJournalEntry.$inferSelect;
 type LedgerPostingRow = typeof ledgerPosting.$inferSelect;
@@ -69,17 +90,35 @@ function toEntryRecord(row: LedgerEntryRow, postings: LedgerPostingRow[]): Ledge
  * left untouched (still correct, still used for every other read/write path).
  */
 export class DrizzleAtomicManualPaymentPoster implements AtomicManualPaymentPoster {
+  /**
+   * R11 CORRECTION PASS A: `db` is injectable (defaulting to the shared production singleton) so
+   * `*.postgres.test.ts` concurrency suites can hand two instances of this class two genuinely
+   * distinct PostgreSQL connections — mirrors `DrizzleAgreementRepository`'s identical precedent. Every
+   * production call site (`new DrizzleAtomicManualPaymentPoster()`, no argument) is unaffected.
+   */
+  constructor(
+    private readonly db: Database = getDb(),
+    private readonly hooks?: AtomicManualPaymentPosterTestHooks,
+  ) {}
+
   async postManualPaymentAtomically(input: Parameters<AtomicManualPaymentPoster["postManualPaymentAtomically"]>[0]): Promise<PaymentAttemptRecord> {
-    const db = getDb();
+    const db = this.db;
     return db.transaction(async (tx) => {
       // Row lock on the agreement itself — this is the serialization point. A second, concurrent
       // call for the SAME agreementId blocks here until this transaction commits or rolls back, then
       // re-reads the now-current state below, exactly like applySigningAtomically's identical
       // "re-read fresh inside the transaction" precedent for a double-signature race.
+      //
+      // R11 CORRECTION PASS A (Defect A3): this `agreement -> installment` order is the CANONICAL
+      // order every other transaction that needs both locks now also follows (see
+      // `DrizzleInstallmentAwarePaymentReserver`'s own top-level doc comment) — this class needed no
+      // change to its own lock ORDER, only this test hook to prove the fixed system-wide order is now
+      // deadlock-free under genuine concurrent contention.
       const agreementRows = await tx.select().from(agreement).where(eq(agreement.id, input.agreementId)).for("update");
       const agreementRow = agreementRows[0];
       if (!agreementRow) throw new ValidationError("Agreement not found.");
       if (!agreementRow.currentVersionId) throw new ValidationError("Agreement not found, or has no signed terms to compute a balance against yet.");
+      if (this.hooks?.afterAgreementLock) await this.hooks.afterAgreementLock();
 
       const versionRows = await tx.select().from(agreementVersion).where(eq(agreementVersion.id, agreementRow.currentVersionId)).limit(1);
       const versionRow = versionRows[0];
@@ -104,6 +143,30 @@ export class DrizzleAtomicManualPaymentPoster implements AtomicManualPaymentPost
         );
       }
 
+      // R11 (INSTALLMENT AMOUNT-AWARENESS — PAYMENT INITIATION CEILING): when this manual payment
+      // targets a specific installment, additionally lock that installment row and re-verify its own
+      // remaining amount, in this SAME transaction — the agreement-level check above is preserved
+      // unchanged; this is an additional, narrower gate.
+      if (input.installmentScheduleItemId) {
+        await tx.select({ id: installmentScheduleItem.id }).from(installmentScheduleItem).where(eq(installmentScheduleItem.id, input.installmentScheduleItemId)).for("update");
+        // R11 CORRECTION PASS A (Defect A2): the target installment must genuinely belong to THIS
+        // agreement's own CURRENT schedule — see `assertInstallmentBelongsToAgreementWithinTx`'s own
+        // doc comment.
+        await assertInstallmentBelongsToAgreementWithinTx(tx, input.installmentScheduleItemId, input.agreementId);
+        // R11 TARGETED PROVIDER-RESERVATION CORRECTION: "at most one unresolved payment attempt per
+        // installment" applies across BOTH rails — a manual payment must be rejected if a DIFFERENT,
+        // still-unresolved PROVIDER-routed attempt already reserves this same installment, exactly
+        // like the reverse case. Excludes this request's own idempotency key (see
+        // `assertNoCompetingUnresolvedInstallmentAttemptWithinTx`'s own doc comment).
+        await assertNoCompetingUnresolvedInstallmentAttemptWithinTx(tx, input.installmentScheduleItemId, input.idempotencyKey);
+        const settlement = await computeInstallmentSettlementWithinTx(tx, input.installmentScheduleItemId);
+        if (settlement && input.amountMinorUnits > settlement.remainingMinorUnits) {
+          throw new ValidationError(
+            `This payment of ${input.amountMinorUnits} minor units would exceed this installment's remaining amount of ${settlement.remainingMinorUnits} minor units. Overpayment against a single installment is not permitted.`,
+          );
+        }
+      }
+
       const [paymentRow] = await tx
         .insert(paymentAttempt)
         .values({
@@ -119,6 +182,7 @@ export class DrizzleAtomicManualPaymentPoster implements AtomicManualPaymentPost
           providerName: "manual",
           paymentMethod: "manual_off_platform",
           recordedByUserId: input.recordedByUserId,
+          installmentScheduleItemId: input.installmentScheduleItemId ?? null,
         })
         .returning();
       if (!paymentRow) throw new ConfigurationError("payment_attempt insert returned no row during atomic manual payment posting");
