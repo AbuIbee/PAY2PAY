@@ -31,6 +31,7 @@ function toPaymentRecord(row: PaymentAttemptRow): PaymentAttemptRecord {
     bankConnectionId: row.bankConnectionId,
     lifecycleCheckedAt: row.lifecycleCheckedAt,
     financialRepairNextAttemptAt: row.financialRepairNextAttemptAt,
+    settlementProposalId: row.settlementProposalId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

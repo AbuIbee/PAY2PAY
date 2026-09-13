@@ -127,6 +127,13 @@ export interface PaymentAttemptRecord {
   lifecycleCheckedAt: Date | null;
   /** PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 4B): see the schema column's own doc comment. */
   financialRepairNextAttemptAt: Date | null;
+  /**
+   * R11 PASS B2 (Check 2 — DURABLE SETTLEMENT PAYMENT IDENTITY): the settlement proposal this exact
+   * attempt was verified against at CREATION time (see `verifySettlementProposalIdForPersistence`'s
+   * own doc comment) — never a caller-supplied value trusted at attribution time. Null for every
+   * ordinary (non-settlement) payment and every pre-existing row.
+   */
+  settlementProposalId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -159,6 +166,8 @@ export interface PaymentAttemptRepository {
     recordedByUserId?: string | null;
     /** Phase 6A: which internal financial_account (bank connection) funded this attempt, if known. */
     bankConnectionId?: string | null;
+    /** R11 PASS B2: the settlement proposal this attempt was verified against at creation time, if any — see `PaymentAttemptRecord.settlementProposalId`'s own doc comment. */
+    settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord>;
   updateStatus(
     id: string,
@@ -325,6 +334,8 @@ export interface InstallmentPaymentReserver {
     initialStatus?: PaymentAttemptStatus;
     paymentMethod?: PaymentMethod | null;
     bankConnectionId?: string | null;
+    /** R11 PASS B2: see `PaymentAttemptRepository.insertPending`'s identical field doc comment. */
+    settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord>;
 }
 
@@ -429,6 +440,8 @@ export interface AtomicManualPaymentPoster {
     recordedByUserId: string;
     /** R11: which installment this manual payment satisfies, if any — re-verified against the installment's own ceiling under its own row lock, in the SAME transaction as the agreement-level check. */
     installmentScheduleItemId?: string | null;
+    /** R11 PASS B2: see `PaymentAttemptRepository.insertPending`'s identical field doc comment. */
+    settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord>;
 }
 
@@ -592,8 +605,17 @@ export class PaymentService {
     },
     initialStatus?: PaymentAttemptStatus,
   ): Promise<{ record: PaymentAttemptRecord; alreadyResolved: boolean }> {
+    // R11 PASS B2 (Checks 6/7 — STRICT IDEMPOTENCY REQUEST IDENTITY): an existing row for this
+    // idempotency key is trusted as "the same operation, replayed" only after it is proven to
+    // materially match this exact request AND the caller is re-authorized as its payer — never
+    // returned bare. See `assertExistingPaymentMatchesRequest`/`assertReplayCallerIsAuthorizedPayer`'s
+    // own doc comments; the concurrent insert-race recovery path below calls the SAME two helpers.
     const existing = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
-    if (existing) return { record: existing, alreadyResolved: true };
+    if (existing) {
+      this.assertExistingPaymentMatchesRequest(existing, input);
+      await this.assertReplayCallerIsAuthorizedPayer(existing, input.actingUserId);
+      return { record: existing, alreadyResolved: true };
+    }
 
     // PRSprint 29 (docs/prsprints/PRSPRINT_29_BACKUPS_RECOVERY_ROLLBACK_INCIDENT_CONTROLS.md):
     // financial kill switch — checked only after the idempotent-replay lookup above, so an operator
@@ -695,6 +717,11 @@ export class PaymentService {
       throw new ValidationError("The recipient must complete identity verification before a payment can be created.");
     }
 
+    // R11 PASS B2 (Checks 2-5 — DURABLE SETTLEMENT PAYMENT IDENTITY): resolved ONCE, here, and
+    // persisted on the row below — never re-derived or trusted again later. See this method's own doc
+    // comment for exactly what "verified" means and why an unverified value is simply never persisted.
+    const verifiedSettlementProposalId = await this.verifySettlementProposalIdForPersistence(input.agreementId ?? null, input.settlementProposalId ?? null);
+
     try {
       // R11 (INSTALLMENT AMOUNT-AWARENESS — PAYMENT INITIATION CEILING): when this payment targets a
       // specific installment and the atomic reserver is wired, reservation happens under that
@@ -716,6 +743,7 @@ export class PaymentService {
               initialStatus,
               paymentMethod: input.paymentMethod ?? null,
               bankConnectionId: input.bankConnectionId ?? null,
+              settlementProposalId: verifiedSettlementProposalId,
             })
           : await this.deps.payments.insertPending({
               idempotencyKey: input.idempotencyKey,
@@ -731,6 +759,7 @@ export class PaymentService {
               initialStatus,
               paymentMethod: input.paymentMethod ?? null,
               bankConnectionId: input.bankConnectionId ?? null,
+              settlementProposalId: verifiedSettlementProposalId,
             });
       // PRSprint 33: master-spec item 155, "high-risk situations should be reviewable without
       // rewriting database records manually" — never blocks; a payment at/above the review threshold
@@ -747,8 +776,16 @@ export class PaymentService {
       }
       return { record, alreadyResolved: false };
     } catch (error) {
+      // R11 PASS B2 (Check 7 — CONCURRENT INSERT-RACE IDENTITY): the SAME validation the initial
+      // existing-row path above applies — a winner created for K/$1000/I1 must never be silently
+      // adopted by a losing request for K/$500/I2. Validated against the ORIGINAL request `input`,
+      // never a second, independently-diverging comparison.
       const raced = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
-      if (raced) return { record: raced, alreadyResolved: true };
+      if (raced) {
+        this.assertExistingPaymentMatchesRequest(raced, input);
+        await this.assertReplayCallerIsAuthorizedPayer(raced, input.actingUserId);
+        return { record: raced, alreadyResolved: true };
+      }
       throw error;
     }
   }
@@ -934,14 +971,31 @@ export class PaymentService {
     if (!this.deps.ledger) {
       throw new ConfigurationError("Manual off-platform payment recording requires a ledger dependency.");
     }
-    const existing = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
-    if (existing) return existing;
 
+    // R11 PASS B2 (Check 8 — MANUAL OFF-PLATFORM REPLAY REQUEST IDENTITY): parties are loaded BEFORE
+    // the existing-key check (moved up from below) so an exact replay can be validated against the
+    // SAME canonical debtor/creditor a brand-new request would be — never two independently-diverging
+    // reads of "who the parties are."
     const parties = await this.deps.agreements.getParties(input.agreementId);
     if (!parties) {
       throw new ValidationError("Agreement not found.");
     }
     const debtorOwnerUserId = await this.deps.profileOwners.getOwnerUserId(parties.debtor.profileKind, parties.debtor.profileId);
+
+    // R11 PASS B2 (Check 8): an existing row for this idempotency key is trusted as "this exact
+    // manual request, replayed" only after `assertExistingManualPaymentMatchesRequest` proves it —
+    // never returned merely because the key matched (that would let, e.g., a provider-routed payment
+    // be silently adopted as a "manual replay", or a materially different manual request silently
+    // reuse someone else's payment).
+    const existing = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
+    if (existing) {
+      this.assertExistingManualPaymentMatchesRequest(existing, input, parties);
+      if (debtorOwnerUserId !== input.actingUserId) {
+        throw new ForbiddenError("Only the borrower may record a manual off-platform payment.");
+      }
+      return existing;
+    }
+
     if (debtorOwnerUserId !== input.actingUserId) {
       throw new ForbiddenError("Only the borrower may record a manual off-platform payment.");
     }
@@ -957,21 +1011,39 @@ export class PaymentService {
     // every other ordinary payment-creation path — see `assertInstallmentLinkageRequirement`'s own
     // doc comment.
     await this.assertInstallmentLinkageRequirement(input.agreementId, input.installmentScheduleItemId ?? null, input.settlementProposalId ?? null);
+    // R11 PASS B2 (Checks 2-5): same verify-once-and-persist rule as every other creation path — see
+    // `verifySettlementProposalIdForPersistence`'s own doc comment.
+    const verifiedSettlementProposalId = await this.verifySettlementProposalIdForPersistence(input.agreementId, input.settlementProposalId ?? null);
 
     let record: PaymentAttemptRecord;
     if (this.deps.atomicManualPayments) {
-      record = await this.deps.atomicManualPayments.postManualPaymentAtomically({
-        idempotencyKey: input.idempotencyKey,
-        agreementId: input.agreementId,
-        payerProfileKind: parties.debtor.profileKind,
-        payerProfileId: parties.debtor.profileId,
-        recipientProfileKind: parties.creditor.profileKind,
-        recipientProfileId: parties.creditor.profileId,
-        amountMinorUnits: input.amountMinorUnits,
-        currency: "USD",
-        recordedByUserId: input.actingUserId,
-        installmentScheduleItemId: input.installmentScheduleItemId ?? null,
-      });
+      // R11 PASS B2 (Check 8 / B6 — MANUAL RACE RECOVERY): wrapped in the SAME catch-and-validate
+      // shape as the non-atomic branch below — a genuinely concurrent duplicate submission through
+      // the atomic poster previously propagated a raw unique-constraint error all the way to the
+      // caller instead of resolving idempotently; now it is validated and adopted exactly like every
+      // other race-recovery path in this class, never a bare `catch -> findByIdempotencyKey -> return`.
+      try {
+        record = await this.deps.atomicManualPayments.postManualPaymentAtomically({
+          idempotencyKey: input.idempotencyKey,
+          agreementId: input.agreementId,
+          payerProfileKind: parties.debtor.profileKind,
+          payerProfileId: parties.debtor.profileId,
+          recipientProfileKind: parties.creditor.profileKind,
+          recipientProfileId: parties.creditor.profileId,
+          amountMinorUnits: input.amountMinorUnits,
+          currency: "USD",
+          recordedByUserId: input.actingUserId,
+          installmentScheduleItemId: input.installmentScheduleItemId ?? null,
+          settlementProposalId: verifiedSettlementProposalId,
+        });
+      } catch (error) {
+        const raced = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
+        if (raced) {
+          this.assertExistingManualPaymentMatchesRequest(raced, input, parties);
+          return raced;
+        }
+        throw error;
+      }
     } else {
       // No atomic poster wired (most unit tests, which aren't exercising this specific race) — the
       // ordinary insert-then-post sequence, protected only by the pre-check above, not by a lock.
@@ -990,10 +1062,15 @@ export class PaymentService {
           paymentMethod: "manual_off_platform",
           recordedByUserId: input.actingUserId,
           installmentScheduleItemId: input.installmentScheduleItemId ?? null,
+          settlementProposalId: verifiedSettlementProposalId,
         });
       } catch (error) {
+        // R11 PASS B2 (Check 8 / B6): same identity validation as every other race-recovery path.
         const raced = await this.deps.payments.findByIdempotencyKey(input.idempotencyKey);
-        if (raced) return raced;
+        if (raced) {
+          this.assertExistingManualPaymentMatchesRequest(raced, input, parties);
+          return raced;
+        }
         throw error;
       }
       // No processor/platform fee on a manual, off-platform payment — the gross amount is exactly the
@@ -1082,6 +1159,123 @@ export class PaymentService {
     throw new ValidationError(
       "This agreement has an installment schedule — every ordinary payment must be linked to the specific installment it satisfies.",
     );
+  }
+
+  /**
+   * R11 PASS B2 (Checks 2-5 — DURABLE SETTLEMENT PAYMENT IDENTITY). The ONLY place a
+   * `settlementProposalId` is ever verified and cleared for persistence — every payment-creation path
+   * (`reserveAttempt`, `recordManualOffPlatformPayment`) calls this ONCE, before its own insert, and
+   * persists exactly what this returns. An unverified or unverifiable value is never persisted (the
+   * payment itself still proceeds normally as an ordinary, non-settlement payment) — this method never
+   * throws for "doesn't verify", only for the structurally-invalid "no agreement to verify it against"
+   * case, since a settlement can never bind to a payment with no agreement at all.
+   */
+  private async verifySettlementProposalIdForPersistence(
+    agreementId: string | null,
+    settlementProposalId: string | null,
+  ): Promise<string | null> {
+    if (!settlementProposalId) return null;
+    if (!agreementId) {
+      throw new ValidationError("A settlement payment must specify the agreement it belongs to.");
+    }
+    if (!this.deps.settlementContext) return null;
+    const verified = await this.deps.settlementContext.isAwaitingPaymentForAgreement(settlementProposalId, agreementId);
+    return verified ? settlementProposalId : null;
+  }
+
+  /**
+   * R11 PASS B2 (Checks 6/7 — STRICT IDEMPOTENCY REQUEST IDENTITY). The ONE shared comparison every
+   * normal (provider-routed) idempotency-key replay path uses — `reserveAttempt`'s initial existing-row
+   * lookup AND its concurrent insert-race recovery both call this exact method, never two independently-
+   * diverging comparisons. Every nullable field is explicitly normalized (`?? null`) before comparison
+   * — `undefined` (omitted) is never treated as equivalent to a persisted, materially different value.
+   */
+  private assertExistingPaymentMatchesRequest(
+    existing: PaymentAttemptRecord,
+    expectedRequest: {
+      payer: ProfileRef;
+      recipient: ProfileRef;
+      agreementId?: string | null;
+      amountMinorUnits: number;
+      currency: string;
+      installmentScheduleItemId?: string | null;
+      paymentMethod?: PaymentMethod | null;
+      bankConnectionId?: string | null;
+      settlementProposalId?: string | null;
+    },
+  ): void {
+    const mismatches: string[] = [];
+    if (existing.payerProfileKind !== expectedRequest.payer.profileKind || existing.payerProfileId !== expectedRequest.payer.profileId) {
+      mismatches.push("payer");
+    }
+    if (existing.recipientProfileKind !== expectedRequest.recipient.profileKind || existing.recipientProfileId !== expectedRequest.recipient.profileId) {
+      mismatches.push("recipient");
+    }
+    if (existing.agreementId !== (expectedRequest.agreementId ?? null)) mismatches.push("agreementId");
+    if (existing.amountMinorUnits !== expectedRequest.amountMinorUnits) mismatches.push("amountMinorUnits");
+    if (existing.currency !== expectedRequest.currency) mismatches.push("currency");
+    if (existing.installmentScheduleItemId !== (expectedRequest.installmentScheduleItemId ?? null)) mismatches.push("installmentScheduleItemId");
+    if (existing.paymentMethod !== (expectedRequest.paymentMethod ?? null)) mismatches.push("paymentMethod");
+    if (existing.bankConnectionId !== (expectedRequest.bankConnectionId ?? null)) mismatches.push("bankConnectionId");
+    if (existing.settlementProposalId !== (expectedRequest.settlementProposalId ?? null)) mismatches.push("settlementProposalId");
+    if (mismatches.length > 0) {
+      throw new ValidationError(
+        `This idempotency key was already used with a materially different payment request (${mismatches.join(", ")}). Do not reuse an idempotency key for a different request.`,
+      );
+    }
+  }
+
+  /**
+   * R11 PASS B2 (Check 6 — REPLAY MUST STILL AUTHORIZE THE ACTING PAYER). An exact replay never
+   * re-runs mutable financial eligibility (balance, settlement state, unresolved-attempt state,
+   * feature flags) — those legitimately change after the original creation and must never make an
+   * already-created payment un-repeatable — but it MUST still confirm the caller is authorized as the
+   * persisted payer, exactly like a brand-new request would be.
+   */
+  private async assertReplayCallerIsAuthorizedPayer(existing: PaymentAttemptRecord, actingUserId: string): Promise<void> {
+    const payerOwnerUserId = await this.deps.profileOwners.getOwnerUserId(existing.payerProfileKind, existing.payerProfileId);
+    if (payerOwnerUserId !== actingUserId) {
+      throw new ForbiddenError("You may only create a payment as the payer.");
+    }
+  }
+
+  /**
+   * R11 PASS B2 (Check 8 — MANUAL OFF-PLATFORM REPLAY REQUEST IDENTITY). The manual-specific
+   * counterpart to `assertExistingPaymentMatchesRequest` — a manual off-platform request has its own
+   * identity shape (`recordedByUserId` instead of a generic acting payer authorization, canonical
+   * debtor/creditor derived from the agreement rather than caller-supplied `payer`/`recipient`) and
+   * must never adopt a NON-manual (provider-routed) existing row merely because the idempotency key
+   * matches — checked FIRST, before any other field.
+   */
+  private assertExistingManualPaymentMatchesRequest(
+    existing: PaymentAttemptRecord,
+    request: {
+      agreementId: string;
+      amountMinorUnits: number;
+      actingUserId: string;
+      installmentScheduleItemId?: string | null;
+      settlementProposalId?: string | null;
+    },
+    canonicalParties: { creditor: ProfileRef; debtor: ProfileRef },
+  ): void {
+    const mismatches: string[] = [];
+    if (existing.paymentMethod !== "manual_off_platform") mismatches.push("paymentMethod (existing payment is not manual off-platform)");
+    if (existing.agreementId !== request.agreementId) mismatches.push("agreementId");
+    if (existing.amountMinorUnits !== request.amountMinorUnits) mismatches.push("amountMinorUnits");
+    if (existing.installmentScheduleItemId !== (request.installmentScheduleItemId ?? null)) mismatches.push("installmentScheduleItemId");
+    if (existing.settlementProposalId !== (request.settlementProposalId ?? null)) mismatches.push("settlementProposalId");
+    if (existing.recordedByUserId !== request.actingUserId) mismatches.push("actingUserId");
+    if (existing.payerProfileKind !== canonicalParties.debtor.profileKind || existing.payerProfileId !== canonicalParties.debtor.profileId) {
+      mismatches.push("payer (does not match this agreement's debtor)");
+    }
+    if (existing.recipientProfileKind !== canonicalParties.creditor.profileKind || existing.recipientProfileId !== canonicalParties.creditor.profileId) {
+      mismatches.push("recipient (does not match this agreement's creditor)");
+    }
+    if (mismatches.length > 0) {
+      throw new ValidationError(
+        `This idempotency key was already used with a materially different manual payment request (${mismatches.join(", ")}). Do not reuse an idempotency key for a different request.`,
+      );
+    }
   }
 
   private async getAuthorizedRecord(

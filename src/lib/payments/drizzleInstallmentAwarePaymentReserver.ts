@@ -62,6 +62,7 @@ function toPaymentAttemptRecord(row: PaymentAttemptRow): PaymentAttemptRecord {
     bankConnectionId: row.bankConnectionId,
     lifecycleCheckedAt: row.lifecycleCheckedAt,
     financialRepairNextAttemptAt: row.financialRepairNextAttemptAt,
+    settlementProposalId: row.settlementProposalId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -160,6 +161,7 @@ export class DrizzleInstallmentAwarePaymentReserver implements InstallmentPaymen
           status: input.initialStatus ?? "pending",
           paymentMethod: input.paymentMethod ?? null,
           bankConnectionId: input.bankConnectionId ?? null,
+          settlementProposalId: input.settlementProposalId ?? null,
         })
         .returning();
       if (!inserted) throw new ConfigurationError("payment_attempt insert returned no row during installment-ceiling-aware reservation");

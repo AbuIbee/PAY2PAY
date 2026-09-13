@@ -57,6 +57,7 @@ function toPaymentAttemptRecord(row: PaymentAttemptRow): PaymentAttemptRecord {
     bankConnectionId: row.bankConnectionId,
     lifecycleCheckedAt: row.lifecycleCheckedAt,
     financialRepairNextAttemptAt: row.financialRepairNextAttemptAt,
+    settlementProposalId: row.settlementProposalId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -183,6 +184,7 @@ export class DrizzleAtomicManualPaymentPoster implements AtomicManualPaymentPost
           paymentMethod: "manual_off_platform",
           recordedByUserId: input.recordedByUserId,
           installmentScheduleItemId: input.installmentScheduleItemId ?? null,
+          settlementProposalId: input.settlementProposalId ?? null,
         })
         .returning();
       if (!paymentRow) throw new ConfigurationError("payment_attempt insert returned no row during atomic manual payment posting");

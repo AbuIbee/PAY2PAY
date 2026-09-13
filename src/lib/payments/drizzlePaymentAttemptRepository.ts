@@ -32,6 +32,7 @@ function toRecord(row: Row): PaymentAttemptRecord {
     bankConnectionId: row.bankConnectionId,
     lifecycleCheckedAt: row.lifecycleCheckedAt,
     financialRepairNextAttemptAt: row.financialRepairNextAttemptAt,
+    settlementProposalId: row.settlementProposalId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -62,6 +63,7 @@ export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository
     paymentMethod?: PaymentMethod | null;
     recordedByUserId?: string | null;
     bankConnectionId?: string | null;
+    settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord> {
     const db = this.db;
     const { initialStatus, ...rest } = input;

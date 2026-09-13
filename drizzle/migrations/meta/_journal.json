@@ -344,6 +344,13 @@
       "when": 1788831949008,
       "tag": "0048_stage6_provider_identity_mismatch",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1789275796380,
+      "tag": "0049_r11_pass_b2_settlement_binding",
+      "breakpoints": true
     }
   ]
 }
