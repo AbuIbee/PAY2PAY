@@ -27,6 +27,8 @@ const manualSchema = z.object({
    * "pay this amount" flow and any off-schedule manual payment still have no installment to tag.
    */
   installmentScheduleItemId: z.string().uuid().optional(),
+  /** R11 (Final Open Issue A — SETTLEMENT EXEMPTION): the ONLY sanctioned way this payment may be created without an installment link against a scheduled agreement — see `SettlementContextVerifier`'s own doc comment. */
+  settlementProposalId: z.string().uuid().optional(),
 });
 
 export function createAchManualPaymentHandler(authService: AuthService, achPaymentService: AchPaymentService) {

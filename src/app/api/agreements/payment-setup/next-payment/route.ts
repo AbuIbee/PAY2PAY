@@ -2,8 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { withErrorHandling } from "@/lib/api-handler";
 import type { AgreementService } from "@/lib/agreements/agreementService";
 import { getAgreementService } from "@/lib/agreements/getAgreementService";
-import type { AgreementInstallmentStatusReader } from "@/lib/agreements/agreementProgressService";
+import type { AgreementInstallmentSettlementReader, AgreementInstallmentStatusReader } from "@/lib/agreements/agreementProgressService";
 import { DrizzleAgreementInstallmentStatusReader } from "@/lib/agreements/drizzleAgreementInstallmentStatusReader";
+import { DrizzleAgreementInstallmentSettlementReader } from "@/lib/agreements/drizzleAgreementInstallmentSettlementReader";
 import type { BalanceService } from "@/lib/ledger/balanceService";
 import { getBalanceService } from "@/lib/ledger/getBalanceService";
 import type { RelationshipFinancialAccountService } from "@/lib/relationships/relationshipFinancialAccountService";
@@ -37,6 +38,7 @@ export function createAgreementNextPaymentHandler(
   balance: BalanceService,
   relationshipAccounts: RelationshipFinancialAccountService,
   profileDisplay: ProfileDisplayReader,
+  installmentSettlements: AgreementInstallmentSettlementReader,
 ) {
   return async function handleGet(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
@@ -47,7 +49,22 @@ export function createAgreementNextPaymentHandler(
     const myRole = await agreementService.resolvePartyRole(id, userId);
 
     const items = await installments.listForAgreement(id);
-    const nextUnpaid = items.find((i) => i.status !== "paid" && i.status !== "waived") ?? null;
+    // R11 (PARTIAL PAYMENT UX, §7): never trust cached `status` alone to decide payability, and never
+    // return the raw face amount once a partial contribution has reduced it — both computed fresh
+    // from ledger truth. An installment remains selectable for its true remaining amount until that
+    // reaches zero, even if its cached status still reads "scheduled"/"past_due" from before a partial
+    // contribution landed.
+    let nextUnpaid: (typeof items)[number] | null = null;
+    let nextUnpaidRemainingMinorUnits = 0;
+    for (const item of items) {
+      if (item.status === "waived") continue;
+      const remaining = await installmentSettlements.getRemainingMinorUnits(item.id, item.amountMinorUnits);
+      if (remaining > 0) {
+        nextUnpaid = item;
+        nextUnpaidRemainingMinorUnits = remaining;
+        break;
+      }
+    }
 
     let remainingBalanceMinorUnits: number | null = null;
     try {
@@ -82,7 +99,7 @@ export function createAgreementNextPaymentHandler(
     return NextResponse.json(
       {
         nextInstallment: nextUnpaid
-          ? { id: nextUnpaid.id, sequenceNumber: nextUnpaid.sequenceNumber, dueDate: nextUnpaid.dueDate, amountMinorUnits: nextUnpaid.amountMinorUnits }
+          ? { id: nextUnpaid.id, sequenceNumber: nextUnpaid.sequenceNumber, dueDate: nextUnpaid.dueDate, amountMinorUnits: nextUnpaidRemainingMinorUnits }
           : null,
         remainingBalanceMinorUnits,
         fundingAccountLabel,
@@ -101,6 +118,7 @@ async function handleGet(request: NextRequest): Promise<Response> {
     getBalanceService(),
     getRelationshipFinancialAccountService(),
     new DrizzleProfileDisplayReader(),
+    new DrizzleAgreementInstallmentSettlementReader(),
   )(request);
 }
 

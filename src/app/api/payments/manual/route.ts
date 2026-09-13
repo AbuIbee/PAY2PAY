@@ -22,6 +22,10 @@ const recordManualPaymentSchema = z.object({
   idempotencyKey: z.string().trim().min(1).max(200),
   agreementId: z.string().uuid(),
   amountMinorUnits: z.number().int().positive(),
+  /** R11 (Final Open Issue A — manual/off-platform payment rule): required, server-side, for a scheduled agreement. */
+  installmentScheduleItemId: z.string().uuid().optional(),
+  /** R11 (Final Open Issue A — SETTLEMENT EXEMPTION): see `SettlementContextVerifier`'s own doc comment. */
+  settlementProposalId: z.string().uuid().optional(),
 });
 
 /**
@@ -48,6 +52,8 @@ export function createManualPaymentHandler(authService: AuthService, paymentServ
       agreementId: parsed.data.agreementId,
       amountMinorUnits: parsed.data.amountMinorUnits,
       actingUserId: userId,
+      installmentScheduleItemId: parsed.data.installmentScheduleItemId ?? null,
+      settlementProposalId: parsed.data.settlementProposalId ?? null,
     });
     return NextResponse.json({ id: record.id, status: record.status }, { status: 201 });
   };

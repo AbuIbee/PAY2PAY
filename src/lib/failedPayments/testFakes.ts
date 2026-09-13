@@ -78,6 +78,10 @@ export class InMemoryPaymentRetryRepository implements PaymentRetryRepository {
     return record;
   }
 
+  async findById(id: string): Promise<PaymentRetryRecord | null> {
+    return this.byId.get(id) ?? null;
+  }
+
   async findByOriginalPaymentAttemptId(originalPaymentAttemptId: string): Promise<PaymentRetryRecord | null> {
     return [...this.byId.values()].find((r) => r.originalPaymentAttemptId === originalPaymentAttemptId) ?? null;
   }

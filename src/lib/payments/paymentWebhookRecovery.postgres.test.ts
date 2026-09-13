@@ -254,6 +254,34 @@ async function seedInstallmentPayment(
   return payments.updateStatus(inserted.id, "pending", { providerPaymentId });
 }
 
+/**
+ * R11 (INSTALLMENT AMOUNT-AWARENESS): posts a real `payment_cleared` ledger entry for `paymentAttemptId`
+ * — every pre-R11 test in this file that calls `coordinateSuccess`/`coordinateSupersession` expecting
+ * the installment to become (or remain) "paid" must now seed genuine ledger evidence for it, since
+ * both methods recompute the installment's authoritative net contribution fresh from the ledger
+ * rather than unconditionally trusting "a success happened." Defaults to the SAME 5_000 face amount
+ * `seedAgreementWithInstallment`'s own default principal uses, so a bare call satisfies the
+ * installment in full unless a caller passes a smaller `amountMinorUnits` to model a genuine partial
+ * contribution.
+ */
+async function postClearedForInstallment(agreementId: string, paymentAttemptId: string, amountMinorUnits = 5_000): Promise<void> {
+  const ledger = new LedgerService({
+    accounts: new DrizzleLedgerAccountRepository(),
+    entries: new DrizzleLedgerJournalEntryRepository(),
+    audit: new AuditService(new DrizzleAuditEventRepository()),
+  });
+  await ledger.postPaymentCleared({ paymentAttemptId, agreementId, currency: "USD", grossAmountMinorUnits: amountMinorUnits });
+  // R11 TARGETED PROVIDER-RESERVATION CORRECTION: a real `payment_cleared` ledger entry can only ever
+  // exist, in production, for a payment that reached "succeeded" — this helper previously left the
+  // row's own cached status untouched (harmless before this correction, since coordinateSuccess/
+  // coordinateSupersession's own amount-aware arithmetic only ever reads ledger truth). Now that "at
+  // most one unresolved payment attempt per installment" is also enforced, leaving this row
+  // indefinitely "pending" would make it wrongly compete with a later, genuinely different reservation
+  // against the same installment — so it is marked terminal here too, matching reality.
+  const db = getDb();
+  await db.update(paymentAttempt).set({ status: "succeeded" }).where(eq(paymentAttempt.id, paymentAttemptId));
+}
+
 /** `seedInstallmentPayment` never sets `paymentMethod` (most tests bypass `fireDueRetries` entirely, going straight to the coordinator) — the REAL `fireDueRetries` entry point requires it to look up an initiator. Used only by tests that exercise `fireDueRetries` itself. */
 async function seedInstallmentPaymentWithMethod(
   agreementId: string,
@@ -1640,13 +1668,24 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     expect(manualRecord.agreementId).toBe(manualAgreementId);
   });
 
-  it("B31 — failed-payment retry race, order 1: attempt A's failure decision is paused mid-transaction while genuinely holding the installment lock; attempt B succeeds and commits fully before A resumes — A must then see the installment already settled and create no retry", async () => {
+  it("B31 — failed-payment retry race, order 1: attempt A's failure decision is paused mid-transaction while genuinely holding the installment lock, with B's own real cleared money already present BEFORE the race starts; A must resume and correctly report already_settled (never a spurious retry), and B's own coordinateSuccess (genuinely queued behind A's held lock) finds nothing left to cancel", async () => {
+    // R11 PASS B1 (Defect B1-4 — RETRY ELIGIBILITY STILL USES CACHED-PAID GATES): `coordinateFailure`
+    // now decides "already settled, no retry needed" from AUTHORITATIVE, tx-bound settlement — never
+    // `installment.status === "paid"` alone (see that method's own doc comment). Under the OLD,
+    // status-only check, A's decision (paused, mid-transaction, BEFORE ever reading anything) could
+    // resume and still see a stale "not yet paid" cached status even though B's own money had
+    // ALREADY, genuinely cleared before the race even began — creating a spurious retry the OLD test
+    // asserted as "expected." That is now structurally impossible: A's own fresh, authoritative read
+    // (taken strictly AFTER it resumes from this pause) ALWAYS sees B's already-committed money,
+    // regardless of any pause/race timing — Postgres's READ COMMITTED guarantee, not a race outcome.
     const { creditor, debtor } = await seedTwoParties();
     const { agreementId, installmentScheduleItemId } = await seedAgreementWithInstallment(creditor.profileId, debtor.profileId, creditor.userId, 5_000);
     const paymentA = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
-    // A second attempt (paymentB) for the same installment exists conceptually — coordinateSuccess
-    // itself only needs the installment id, not a specific payment record, to settle it.
-    await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+    // A second attempt (paymentB) for the same installment — a real, fully-covering payment_cleared
+    // ledger entry, posted BEFORE the race starts, so BOTH A's and B's own authoritative recomputes
+    // find the installment genuinely satisfied.
+    const paymentB = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+    await postClearedForInstallment(agreementId, paymentB.id);
 
     const isolatedA = createIsolatedDb(DATABASE_URL);
     const isolatedB = createIsolatedDb(DATABASE_URL);
@@ -1674,19 +1713,14 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       releaseA.resolve();
       const [failureResult] = await Promise.all([failurePromise, successPromise]);
 
-      // A's transaction was still mid-flight (holding the OLD lock) when B's request queued — so
-      // Postgres's own lock-queue ordering guarantees A's transaction commits FIRST. A had not yet
-      // decided anything (it paused immediately after acquiring the lock, before reading status), so
-      // when it resumes it still sees the installment "not yet paid" and creates the one retry.
-      // B then must fully supersede it once it finally gets the lock.
-      expect(failureResult.outcome).toBe("retry_scheduled");
+      // A resumes, reads FRESH authoritative state (B's money was already committed before the race
+      // even started) and correctly reports already_settled — never creating a spurious retry.
+      expect(failureResult.outcome).toBe("already_settled");
 
       const finalStatus = await installmentStatus(installmentScheduleItemId);
-      expect(finalStatus).toBe("paid"); // B's success always wins in final state, regardless of ordering.
+      expect(finalStatus).toBe("paid");
       const retries = await listRetriesForInstallment(installmentScheduleItemId);
-      expect(retries).toHaveLength(1);
-      expect(retries[0]?.status).toBe("canceled"); // B's success superseded/canceled A's retry — nothing stale remains executable.
-      expect(retries[0]?.originalPaymentAttemptId).toBe(paymentA.id);
+      expect(retries).toHaveLength(0); // A never created one — nothing for B to cancel either.
     } finally {
       await isolatedA.close();
       await isolatedB.close();
@@ -1697,9 +1731,18 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     const { creditor, debtor } = await seedTwoParties();
     const { agreementId, installmentScheduleItemId } = await seedAgreementWithInstallment(creditor.profileId, debtor.profileId, creditor.userId, 5_000);
     const paymentA = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
-    // A second attempt (paymentB) for the same installment exists conceptually — coordinateSuccess
-    // itself only needs the installment id, not a specific payment record, to settle it.
-    await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+    // A second attempt (paymentB) for the same installment — its own row is created now (so no later
+    // FK-referencing insert can ever deadlock against a held installment lock — see
+    // computeInstallmentSettlementWithinTx's own "LOCK-ORDERING NOTE"), but its real, fully-covering
+    // payment_cleared ledger entry is deliberately posted LATER, only AFTER A's own first
+    // coordinateFailure call below has already committed.
+    //
+    // R11 PASS B1 (Defect B1-4 — RETRY ELIGIBILITY STILL USES CACHED-PAID GATES): `coordinateFailure`
+    // now decides "already settled" from AUTHORITATIVE, tx-bound settlement, never cached status alone
+    // (see that method's own doc comment) — so A's own first call here MUST see zero cleared money at
+    // the moment it runs, or it would correctly (and no longer merely "eventually") report
+    // already_settled instead of creating the one retry this test's own later assertions depend on.
+    const paymentB = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
 
     // A obtains the authoritative lock/decision FIRST and fully commits — creating the one allowed
     // retry and marking the installment past_due — before B ever starts.
@@ -1707,6 +1750,11 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     const firstResult = await coordinatorA.coordinateFailure({ installmentScheduleItemId, payment: paymentA });
     expect(firstResult.outcome).toBe("retry_scheduled");
     expect(await installmentStatus(installmentScheduleItemId)).toBe("past_due");
+
+    // NOW paymentB's real money clears — strictly after A's own retry-scheduling decision already
+    // committed, so the race below (a stale replay of A vs. B's genuine success) starts from exactly
+    // the state this test's own narrative requires.
+    await postClearedForInstallment(agreementId, paymentB.id);
 
     const isolatedA = createIsolatedDb(DATABASE_URL);
     const isolatedB = createIsolatedDb(DATABASE_URL);
@@ -1850,6 +1898,10 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     expect(retriesBefore).toHaveLength(2);
     expect(retriesBefore.every((r) => r.status === "scheduled")).toBe(true);
 
+    // R11: a third, real fully-covering payment settles the installment — coordinateSuccess's
+    // amount-aware recompute needs genuine ledger evidence to find it satisfied.
+    const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+    await postClearedForInstallment(agreementId, settlingPayment.id);
     const { canceledRetryIds } = await coordinator.coordinateSuccess({ installmentScheduleItemId });
     expect(canceledRetryIds).toHaveLength(2);
 
@@ -1875,6 +1927,8 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
 
     // Worker is now paused, about to call the provider. A DIFFERENT payment for the same installment
     // succeeds first and settles it — revoking the claimed retry.
+    const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+    await postClearedForInstallment(agreementId, settlingPayment.id);
     await coordinator.coordinateSuccess({ installmentScheduleItemId });
     expect((await listRetriesForInstallment(installmentScheduleItemId)).find((r) => r.id === retryId)?.status).toBe("canceled");
 
@@ -1939,6 +1993,9 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     const claimA = await coordinator.claimRetryForExecution({ installmentScheduleItemId, retryId: failureA.retryId });
     if (claimA.outcome !== "claimed") throw new Error("expected A's retry to be claimable");
 
+    // R11: a real, fully-covering settling payment for coordinateSuccess's amount-aware recompute.
+    const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+    await postClearedForInstallment(agreementId, settlingPayment.id);
     const { canceledRetryIds } = await coordinator.coordinateSuccess({ installmentScheduleItemId });
     expect(canceledRetryIds.sort()).toEqual([failureA.retryId, failureB.retryId].sort());
 
@@ -1984,7 +2041,10 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     const failure = await coordinator.coordinateFailure({ installmentScheduleItemId, payment });
     if (failure.outcome !== "retry_scheduled") throw new Error("expected a retry to be scheduled");
 
-    // Connection B: coordinateSuccess obtains the installment lock, marks paid, cancels the retry, commits.
+    // Connection B: coordinateSuccess obtains the installment lock, marks paid, cancels the retry,
+    // commits. R11: a real, fully-covering settling payment for its amount-aware recompute.
+    const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+    await postClearedForInstallment(agreementId, settlingPayment.id);
     const { canceledRetryIds } = await coordinator.coordinateSuccess({ installmentScheduleItemId });
     expect(canceledRetryIds).toEqual([failure.retryId]);
     expect(await installmentStatus(installmentScheduleItemId)).toBe("paid");
@@ -2021,6 +2081,37 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     if (failure.outcome !== "retry_scheduled") throw new Error("expected a retry to be scheduled");
     const idempotencyKey = `retry-${failure.retryId}`;
 
+    // R11 (INSTALLMENT AMOUNT-AWARENESS — DEADLOCK ROOT CAUSE, FOUND AND FIXED): the settling
+    // payment_attempt ROW must be inserted here, BEFORE any connection acquires the installment's own
+    // `FOR UPDATE` lock — never during A's paused window below. Inserting a NEW `payment_attempt` row
+    // whose `installment_schedule_item_id` foreign key references this installment requires Postgres
+    // to take an implicit FOR KEY SHARE lock on the REFERENCED installment row; if a DIFFERENT,
+    // already-open transaction holds that exact row FOR UPDATE (as A deliberately does, paused, below),
+    // the insert blocks at the SQL level until A's transaction resolves — a genuine circular wait
+    // Postgres's own deadlock detector cannot see (A's own "wait" is entirely in application code,
+    // invisible to the database), so it never times out or gets killed — it hangs forever. FIX: the
+    // payment_attempt ROW (the FK-locking write) is created here, before the race.
+    //
+    // R11 CORRECTION PASS A (Defect A1 — SUCCEEDED-BEFORE-LEDGER RESERVATION GAP): the PRIOR fix
+    // marked this row "succeeded" here too (before the race) — sufficient under the OLD, status-only
+    // competing-attempt check, but `assertNoCompetingUnresolvedInstallmentAttemptWithinTx` now ALSO
+    // treats a `succeeded`-but-not-yet-`payment_cleared` attempt as competing (see that function's own
+    // doc comment for exactly why), so leaving it "succeeded"-but-uncleared here would now wrongly make
+    // Phase A (`establishDurableDispatchIntent`, which runs BEFORE A's own pause below) refuse A's own
+    // retry before it ever begins. FIX: mark it "failed" here instead — a genuinely terminal, NON-
+    // succeeded status that is excluded from BOTH halves of the competing-attempt check by construction
+    // (neither an `UNRESOLVED_PAYMENT_ATTEMPT_STATUSES` member nor `succeeded`) — Phase A sees a row
+    // that reserves nothing. It is then revived to "succeeded" AND given its real `payment_cleared`
+    // ledger entry TOGETHER, atomically from this test's own perspective, during A's paused window
+    // below (`postClearedForInstallment` posts the ledger entry then sets status "succeeded" as its own
+    // last step) — a plain UPDATE to this already-existing row's own status column (not its FK column)
+    // needs no lock on `installment_schedule_item` at all, so it is never blocked by A's held lock,
+    // exactly like the ledger entry insert itself (no FK to `installment_schedule_item`) — A's own
+    // 5_000 retry still sees $0 settled at its own Phase B ceiling-check time, exactly as intended
+    // ("RETRY WINS").
+    const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+    await getDb().update(paymentAttempt).set({ status: "failed" }).where(eq(paymentAttempt.id, settlingPayment.id));
+
     const isolatedA = createIsolatedDb(DATABASE_URL);
     const isolatedB = createIsolatedDb(DATABASE_URL);
     try {
@@ -2053,7 +2144,15 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
 
       // B: coordinateSuccess for the SAME installment, on a genuinely independent connection —
       // proven via pg_stat_activity-backed lock observation to be blocked on A's held lock, never a
-      // sleep-based assumption.
+      // sleep-based assumption. R11: the sandbox provider's default "pending" response means A's own
+      // retry dispatch never itself posts a `payment_cleared` entry in this test — `settlingPayment`
+      // (its own payment_attempt ROW already created before the race — see this test's own
+      // top-of-function comment for exactly why) is revived from "failed" to "succeeded" AND given its
+      // real ledger entry here, models the money B's coordinateSuccess is meant to observe. Neither
+      // write here can ever be blocked by A's held installment-row lock (see this test's own
+      // top-of-function comment for exactly why both are safe: no FK to `installment_schedule_item` on
+      // either the ledger insert or this plain status UPDATE).
+      await postClearedForInstallment(agreementId, settlingPayment.id);
       const pidB = await warmUp(isolatedB.client);
       const successPromise = coordinatorB.coordinateSuccess({ installmentScheduleItemId });
       await waitUntilPidBlockedOnLock(DATABASE_URL, pidB);
@@ -2306,6 +2405,8 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     await backdateRetryScheduledFor(failure.retryId);
 
     // A different payment for the same installment settles it BEFORE retry authorization runs.
+    const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+    await postClearedForInstallment(agreementId, settlingPayment.id);
     await coordinator.coordinateSuccess({ installmentScheduleItemId });
 
     await retryService.fireDueRetries(new Date());
@@ -2647,7 +2748,10 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       const barrier = createDeferred<void>();
       const callsBefore = providerCallCount;
       const workerA = fireOneRetryPausingBeforeFinalCheck(agreementId, installmentScheduleItemId, failure.retryId, claim.executionToken, barrier.promise);
-      // Worker B settles the installment WHILE A is suspended before its final check.
+      // Worker B settles the installment WHILE A is suspended before its final check. R11: a real,
+      // fully-covering settling payment for coordinateSuccess's amount-aware recompute.
+      const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+      await postClearedForInstallment(agreementId, settlingPayment.id);
       await coordinator.coordinateSuccess({ installmentScheduleItemId });
       barrier.resolve();
       const outcome = await workerA;
@@ -4855,7 +4959,10 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       });
       if (dispatchOutcome.outcome !== "ambiguous") throw new Error("expected ambiguous");
 
-      // A DIFFERENT payment settles the SAME installment.
+      // A DIFFERENT payment settles the SAME installment. R11: a real, fully-covering settling
+      // payment for coordinateSuccess's amount-aware recompute.
+      const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+      await postClearedForInstallment(agreementId, settlingPayment.id);
       await coordinator.coordinateSuccess({ installmentScheduleItemId });
       expect(await installmentStatus(installmentScheduleItemId)).toBe("paid");
 
@@ -4951,6 +5058,9 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       });
       if (dispatchOutcome.outcome !== "ambiguous") throw new Error("expected ambiguous");
 
+      // R11: a real, fully-covering settling payment for coordinateSuccess's amount-aware recompute.
+      const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+      await postClearedForInstallment(agreementId, settlingPayment.id);
       await coordinator.coordinateSuccess({ installmentScheduleItemId });
       expect(await installmentStatus(installmentScheduleItemId)).toBe("paid");
 
@@ -6180,12 +6290,19 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       );
       expect(disputeResult.status).toBe("accepted"); // recompute failed -> not processed.
       expect((await ctx.payments.findById(paymentA.id))?.status).toBe("disputed");
-      // Durable "not required" disposition marker for THIS event — never inferred from installment
-      // status on a future attempt.
-      const notRequiredMarkers = await findAuditEventsByProviderEvent(disputeEventId, "installment_reopen_not_required_by_supersession");
-      expect(notRequiredMarkers).toHaveLength(1);
-      expect(await installmentStatus(installmentScheduleItemId)).not.toBe("paid"); // untouched — nothing to reopen.
-      expect(await findCompensationAudit(installmentScheduleItemId)).toHaveLength(0); // never a "reopened" marker — it was never paid by A.
+      // R11 (INSTALLMENT AMOUNT-AWARENESS): paymentA's money WAS genuinely cleared, then reversed by
+      // this dispute — coordinateSupersession now decides from that authoritative net contribution,
+      // never from the cached `status` column (which this scenario deliberately never flipped to
+      // "paid" at all — see webhookNoWorkflow's own comment above). This correctly REOPENS the
+      // installment even though its cached status was never "paid" in the first place — exactly the
+      // PRE-EXISTING INSTALLMENT AMOUNT-AWARENESS GAP this event's own OLD behavior depended on
+      // (pre-R11, this durably recorded "not required" instead, purely because the cached status
+      // happened to never say "paid" — provably wrong once the reversal actually zeroed out real,
+      // previously-cleared money).
+      const reopenedMarkers = await findAuditEventsByProviderEvent(disputeEventId, "installment_reopened_by_supersession");
+      expect(reopenedMarkers).toHaveLength(1);
+      expect(await installmentStatus(installmentScheduleItemId)).toBe("scheduled"); // reopened — due date (2099) is in the future.
+      expect(await findCompensationAudit(installmentScheduleItemId)).toHaveLength(1); // the "reopened" marker for A's event.
 
       // Payment B subsequently, legitimately pays the SAME (still-payable, never-paid) installment.
       const webhookB = ctx.buildWebhookService({ failedPaymentWorkflow: workflow });
@@ -6203,12 +6320,13 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       const disputeRow = (await ctx.events.findByProviderEvent(ctx.provider.providerName, disputeEventId))!;
       await webhookDisputeFlaky.recoverBatch(100, new Date(disputeRow.nextRetryAt!.getTime() + 1));
 
-      // FINAL: B's installment remains paid — A's OLD "not_paid" disposition, once durably recorded,
-      // is NEVER re-examined against installment status again, no matter what legitimately changes it.
+      // FINAL: B's installment remains paid — A's OLD "reopened" disposition, once durably recorded,
+      // is NEVER re-examined against installment status again, no matter what legitimately changes it
+      // afterward (B's own later, unrelated, legitimate payment).
       expect(await installmentStatus(installmentScheduleItemId)).toBe("paid");
       expect((await ctx.payments.findById(paymentB.id))?.status).toBe("succeeded");
-      expect(await findAuditEventsByProviderEvent(disputeEventId, "installment_reopen_not_required_by_supersession")).toHaveLength(1); // still exactly one.
-      expect(await findCompensationAudit(installmentScheduleItemId)).toHaveLength(0); // never a "reopened" marker for A's event.
+      expect(await findAuditEventsByProviderEvent(disputeEventId, "installment_reopened_by_supersession")).toHaveLength(1); // still exactly one.
+      expect(await findCompensationAudit(installmentScheduleItemId)).toHaveLength(1); // the same one "reopened" marker for A's event — never duplicated, never re-decided.
       expect((await ctx.events.findByProviderEvent(ctx.provider.providerName, disputeEventId))?.processingStatus).toBe("processed");
 
       const entriesA = await ctx.ledger.listEntriesForPaymentAttempt(paymentA.id);
@@ -6363,6 +6481,15 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
 
       const paymentForRace = (await ctx.payments.findById(paymentA.id))!;
 
+      // R11 (INSTALLMENT AMOUNT-AWARENESS): in real production, `postLedgerEntryRequired` ALWAYS
+      // posts the reversal ledger entry before `coordinateSupersession` is ever invoked (see
+      // `PaymentWebhookService`'s own dispatch ordering) — this direct-coordinator race needs that
+      // SAME real reversal to already exist, so its amount-aware recompute sees genuinely reversed
+      // money, exactly as it would in the real pipeline. Without this, the money would still appear
+      // fully paid (the flaky-ledger failure above never actually posted it), and the race would
+      // correctly (but here, un-illustratively) decide "still_satisfied" instead of "reopened".
+      await ctx.ledger.reversePayment({ paymentAttemptId: paymentA.id, entryType: "dispute_adjustment", reason: null });
+
       const isolatedX = createIsolatedDb(DATABASE_URL);
       const isolatedY = createIsolatedDb(DATABASE_URL);
       let paymentB: PaymentAttemptRecord;
@@ -6464,14 +6591,28 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       );
       const paymentA = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
       const providerPaymentId = paymentA.providerPaymentId!;
+      // R11 (INSTALLMENT AMOUNT-AWARENESS): a SECOND, independent payment for the SAME installment —
+      // once A is disputed/reversed below, C's own still-valid 5_000 alone continues to fully cover
+      // the installment's 5_000 face amount, so the authoritative disposition is "still_satisfied"
+      // (no reopen), never a bare, amount-blind "not_paid". This is what genuinely produces the
+      // `installment_reopen_not_required_by_supersession` marker this test's title names — under
+      // amount-awareness, "the installment's cached status was never flipped to paid" alone (the
+      // pre-R11 model this test used to rely on) no longer implies "nothing to compensate": A's own
+      // money WAS genuinely cleared and would otherwise need reopening once reversed, exactly like
+      // CONCURRENCY A — only a genuinely still-covering second contribution makes "not required" the
+      // correct disposition here.
+      const paymentC = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+      const providerPaymentIdC = paymentC.providerPaymentId!;
 
       // No `failedPaymentWorkflow` wired for EITHER delivery below — the installment is never marked
-      // "paid" by A, and the real pipeline never calls `coordinateSupersession` itself; the two
-      // concurrent workers raced directly below are the ONLY callers, isolating this test to
-      // `coordinateSupersession`'s own concurrency safety for the "not required" disposition.
+      // "paid" by A/C's cached status, and the real pipeline never calls `coordinateSupersession`
+      // itself; the two concurrent workers raced directly below are the ONLY callers, isolating this
+      // test to `coordinateSupersession`'s own concurrency safety for the "not required" disposition.
       const webhookNormal = ctx.buildWebhookService();
       const successEventId = `evt-${randomUUID()}`;
       await webhookNormal.receiveWebhook(signedWebhook(ctx.provider, { providerEventId: successEventId, eventType: "payment.succeeded", providerPaymentId }));
+      const successCEventId = `evt-${randomUUID()}`;
+      await webhookNormal.receiveWebhook(signedWebhook(ctx.provider, { providerEventId: successCEventId, eventType: "payment.succeeded", providerPaymentId: providerPaymentIdC }));
       expect(await installmentStatus(installmentScheduleItemId)).not.toBe("paid");
 
       const disputeEventId = `evt-${randomUUID()}`;
@@ -6504,10 +6645,12 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
         const resultXPromise = coordinatorX.coordinateSupersession({ installmentScheduleItemId, payment: paymentForRace, providerEventId: disputeEventId });
         await xAtLock.promise;
 
-        // Worker Y processes the SAME superseding event to completion while X is still paused — the
-        // installment is not currently "paid" (A's own workflow never ran), so Y decides "not required".
+        // Worker Y processes the SAME superseding event to completion while X is still paused — C's
+        // own still-valid money continues to fully cover the installment even after A's reversal, so
+        // Y decides "still_satisfied" (no reopen) — the "not required" disposition this test's title
+        // names, now amount-aware rather than merely cached-status-based.
         const resultY = await coordinatorY.coordinateSupersession({ installmentScheduleItemId, payment: paymentForRace, providerEventId: disputeEventId });
-        expect(resultY.outcome).toBe("not_paid");
+        expect(resultY.outcome).toBe("still_satisfied");
 
         // Payment B subsequently, legitimately pays the SAME (still-payable, never-paid) installment.
         paymentB = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
@@ -6525,7 +6668,7 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
         // never re-derive one from installment.status (which is NOW "paid" — because of B).
         releaseX.resolve();
         const resultX = await resultXPromise;
-        expect(resultX.outcome).toBe("not_paid");
+        expect(resultX.outcome).toBe("still_satisfied");
       } finally {
         await isolatedX.close();
         await isolatedY.close();
@@ -6986,7 +7129,10 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       const anchor = await ctx.payments.findByIdempotencyKey(idempotencyKey);
       expect(anchor?.status).toBe("submitted");
 
-      // A DIFFERENT payment settles the SAME installment.
+      // A DIFFERENT payment settles the SAME installment. R11: a real, fully-covering settling
+      // payment for coordinateSuccess's amount-aware recompute.
+      const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+      await postClearedForInstallment(agreementId, settlingPayment.id);
       const { canceledRetryIds } = await seedCoordinator.coordinateSuccess({ installmentScheduleItemId });
       // B1-B: FUTURE dispatch is revoked (this retry is never cancelable-and-redispatchable again in
       // the normal "claim from scheduled" sense — it is not among the newly-canceled ids because its
@@ -7032,7 +7178,10 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       });
       expect(dispatchOutcome.outcome).toBe("ambiguous"); // the provider genuinely never received it.
 
-      // A DIFFERENT payment settles the installment.
+      // A DIFFERENT payment settles the installment. R11: a real, fully-covering settling payment for
+      // coordinateSuccess's amount-aware recompute.
+      const settlingPayment = await seedInstallmentPayment(agreementId, installmentScheduleItemId, debtor, creditor);
+      await postClearedForInstallment(agreementId, settlingPayment.id);
       await coordinator.coordinateSuccess({ installmentScheduleItemId });
       expect(await installmentStatus(installmentScheduleItemId)).toBe("paid");
 

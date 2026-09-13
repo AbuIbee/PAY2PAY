@@ -38,6 +38,10 @@ const createPaymentSchema = z.object({
   // PaymentService.submitToProvider's own (still-authoritative) same-invariant check.
   agreementId: z.string().uuid(),
   deviceInfo: z.unknown().optional(),
+  /** R11 (Final Open Issue A): required, server-side, for a scheduled agreement — see `PaymentService.assertInstallmentLinkageRequirement`'s own doc comment. */
+  installmentScheduleItemId: z.string().uuid().optional(),
+  /** R11 (Final Open Issue A — SETTLEMENT EXEMPTION): see `SettlementContextVerifier`'s own doc comment. */
+  settlementProposalId: z.string().uuid().optional(),
 });
 
 /**
@@ -68,6 +72,8 @@ export function createPaymentCreateHandler(authService: AuthService, paymentServ
       actingUserId: userId,
       ipAddress: getClientIp(request),
       deviceInfo: parsed.data.deviceInfo ?? null,
+      installmentScheduleItemId: parsed.data.installmentScheduleItemId ?? null,
+      settlementProposalId: parsed.data.settlementProposalId ?? null,
     });
     return NextResponse.json(
       { id: record.id, status: record.status, providerName: record.providerName },

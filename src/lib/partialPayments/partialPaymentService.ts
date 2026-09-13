@@ -58,9 +58,53 @@ export interface PartialPaymentRequestRepository {
   updateStatus(id: string, status: PartialPaymentRequestStatus): Promise<PartialPaymentRequestRecord>;
   recordRejection(id: string, reason: string | null): Promise<PartialPaymentRequestRecord>;
   recordApplied(id: string, paymentAttemptId: string): Promise<PartialPaymentRequestRecord>;
-  recordExpired(id: string): Promise<PartialPaymentRequestRecord>;
   /** Cron-scan entry point, mirroring PaymentRetryRepository.findDueForFiring's precedent. */
   findAwaitingPaymentPastDate(now: Date): Promise<PartialPaymentRequestRecord[]>;
+  /**
+   * R11 PASS B1 — FINAL TARGETED CORRECTION (Defect 1 — CLEARED PARTIAL PAYMENT IS NOT DURABLY
+   * APPLIED). A single, atomic, conditional `awaiting_payment -> applied` transition — see
+   * `PartialPaymentAutoApplicationService`'s own doc comment for why an unconditional `recordApplied`
+   * (which blindly overwrites whatever is there) is unsafe for duplicate webhook/recovery execution.
+   * `"applied"` means THIS call performed the transition just now. `"already_applied_same"` means the
+   * request was already `"applied"` to this EXACT `paymentAttemptId` — a safe, successful no-op
+   * (duplicate webhook/recovery replay). `"already_applied_different"` means the request was already
+   * `"applied"` to a DIFFERENT `paymentAttemptId` — a genuine conflict, NEVER silently overwritten.
+   * `"not_awaiting_payment"` covers every other current status (`proposed`/`rejected`/`expired`) —
+   * also never overwritten. The single `UPDATE ... WHERE status = 'awaiting_payment'` this performs is
+   * atomic by construction (ordinary Postgres row-level MVCC), so two concurrent callers racing the
+   * SAME request can never both report `"applied"`.
+   */
+  applyIfAwaitingPayment(
+    id: string,
+    paymentAttemptId: string,
+  ): Promise<
+    | { outcome: "applied"; request: PartialPaymentRequestRecord }
+    | { outcome: "already_applied_same"; request: PartialPaymentRequestRecord }
+    | { outcome: "already_applied_different"; request: PartialPaymentRequestRecord }
+    | { outcome: "not_awaiting_payment"; request: PartialPaymentRequestRecord }
+  >;
+  /**
+   * R11 PASS B1 — ASYNC CORRELATION CORRECTION (Defect 2 — EXPIRATION CHECK/WRITE RACE). Atomic,
+   * race-safe expiration: locks the proposal row, then determines FRESH, authoritative
+   * payment-clearing evidence for its correlated payment WITHIN THIS SAME transaction/lock (never a
+   * separate, pre-transaction read) before ever writing `"expired"` — closing the TOCTOU window
+   * where a plain check-then-`UPDATE...WHERE status`, or worse an unconditional `UPDATE...WHERE id`
+   * alone, could expire a proposal whose money cleared (or was even fully applied) in between.
+   * `"expired"` — this call performed the transition. `"not_awaiting_payment"` — the row had already
+   * moved on (e.g. genuinely applied first) by the time the lock was acquired; never overwritten.
+   * `"cleared_skip"` — durable clearing evidence exists; correctly left `awaiting_payment` for the
+   * normal application path to pick up. `"unknown_skip"` — evidence resolution could not be
+   * conclusively determined (Defect 4); fails safe by never expiring rather than guessing.
+   */
+  expireIfSafe(
+    id: string,
+  ): Promise<
+    | { outcome: "expired"; request: PartialPaymentRequestRecord }
+    | { outcome: "not_awaiting_payment"; request: PartialPaymentRequestRecord }
+    | { outcome: "cleared_skip" }
+    | { outcome: "in_flight_skip" }
+    | { outcome: "unknown_skip" }
+  >;
 }
 
 /**
@@ -69,7 +113,7 @@ export interface PartialPaymentRequestRepository {
  * this codebase's interface-segregation precedent (e.g. AgreementTermsReader).
  */
 export interface PaymentAttemptReader {
-  findById(id: string): Promise<{ id: string; status: string; amountMinorUnits: number } | null>;
+  findById(id: string): Promise<{ id: string; status: string; amountMinorUnits: number; installmentScheduleItemId: string | null } | null>;
 }
 
 export interface PartialPaymentServiceDeps {
@@ -216,6 +260,14 @@ export class PartialPaymentService {
     if (attempt.amountMinorUnits !== request.proposedAmountMinorUnits) {
       throw new ValidationError("The linked payment does not match the agreed partial payment amount.");
     }
+    // R11 (Final Open Issue A): if this request itself named a target installment, the payment being
+    // linked to it must be linked to that SAME installment — otherwise this request could be
+    // satisfied by a payment that (per the R11 per-installment invariant) never actually contributes
+    // to that installment's own amount-satisfaction, silently reintroducing the exact gap R11 exists
+    // to close.
+    if (request.installmentScheduleItemId && attempt.installmentScheduleItemId !== request.installmentScheduleItemId) {
+      throw new ValidationError("The linked payment is not linked to the installment this partial payment request targets.");
+    }
 
     const updated = await this.deps.requests.recordApplied(request.id, attempt.id);
     await this.recordAudit(updated, input.actingUserId, "partial_payment_applied", { paymentAttemptId: attempt.id });
@@ -227,14 +279,31 @@ export class PartialPaymentService {
    * "background job/scheduler abstraction" precedent — Vercel has no persistent worker process).
    * "AwaitingPayment --> Expired: not paid within proposed window" (`docs/STATE_MACHINES.md` §5) —
    * `proposedDate` is that window's boundary.
+   *
+   * R11 PASS B1 — FINAL TARGETED CORRECTION (Defect 1, requirement 6 — EXPIRATION SAFETY), extended
+   * by R11 PASS B1 — ASYNC CORRELATION CORRECTION (Defect 2 — EXPIRATION CHECK/WRITE RACE): the
+   * narrowest possible guard, not a redesign of expiration policy. A real, narrow race exists between
+   * a partial-payment attempt's own provider clearing durably posting (or its
+   * `awaiting_payment -> applied` association completing) and this cron sweep's own expiration
+   * decision. `PartialPaymentRequestRepository.expireIfSafe` closes this atomically — it locks the
+   * proposal row and re-derives fresh clearing evidence WITHIN that same transaction/lock before
+   * ever writing `"expired"`, never a plain pre-transaction check followed by an unconditional write
+   * (see that method's own doc comment for the exact outcomes and why "unknown" evidence never
+   * authorizes expiration either — Defect 4). This method never itself performs the application
+   * (that remains exclusively the auto-application effect's job, run from the real payment/webhook
+   * lifecycle, never from this cron sweep) — only a correctly-atomic decision whether to expire.
    */
   async expireOverdue(now: Date = new Date()): Promise<{ expired: number }> {
     const due = await this.deps.requests.findAwaitingPaymentPastDate(now);
+    let expired = 0;
     for (const request of due) {
-      const updated = await this.deps.requests.recordExpired(request.id);
-      await this.recordAudit(updated, null, "partial_payment_expired", null);
+      const result = await this.deps.requests.expireIfSafe(request.id);
+      if (result.outcome === "expired") {
+        await this.recordAudit(result.request, null, "partial_payment_expired", null);
+        expired += 1;
+      }
     }
-    return { expired: due.length };
+    return { expired };
   }
 
   async getPartialPaymentRequest(partialPaymentRequestId: string, actingUserId: string): Promise<PartialPaymentRequestRecord> {

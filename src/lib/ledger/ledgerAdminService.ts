@@ -103,13 +103,19 @@ export class LedgerAdminService {
       this.deps.ledger.listEntriesForAgreement(agreementId),
     ]);
     const paymentAttemptIds = [...new Set(entries.map((e) => e.paymentAttemptId))];
+    // R11 (HISTORICAL DATA, §9): opportunistic, report-only — never mutates any installment status,
+    // never blocks the ledger view on failure (mirrors ReconciliationService's own "reconciliation
+    // must not silently ignore mismatches, but must also never itself become a required-effect
+    // failure point" precedent). Surfaced as ordinary reconciliation exceptions in the SAME list an
+    // admin already reviews here.
+    const installmentExceptions = await this.deps.reconciliation.reconcileInstallmentAmountAwareness(agreementId).catch(() => []);
     const [exceptionLists, paymentAttempts, activeAchMandate, activeDebitCard] = await Promise.all([
       Promise.all(paymentAttemptIds.map((id) => this.deps.reconciliation.listExceptionsForPaymentAttempt(id))),
       this.deps.payments?.listByAgreementId(agreementId) ?? Promise.resolve([]),
       this.deps.achMandates?.findActiveForAgreement(agreementId) ?? Promise.resolve(null),
       this.deps.debitCards?.findActiveForAgreement(agreementId) ?? Promise.resolve(null),
     ]);
-    return { balance, entries, exceptions: exceptionLists.flat(), paymentAttempts, activeAchMandate, activeDebitCard };
+    return { balance, entries, exceptions: [...exceptionLists.flat(), ...installmentExceptions], paymentAttempts, activeAchMandate, activeDebitCard };
   }
 
   async listOpenExceptions(actingRole: PlatformRole): Promise<ReconciliationExceptionRecord[]> {

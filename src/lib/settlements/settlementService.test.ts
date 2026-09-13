@@ -37,6 +37,38 @@ function settlementTerms(overrides: Partial<SettlementTerms> = {}): SettlementTe
   };
 }
 
+/**
+ * R11 PASS B2 (Checks 2-4): seeds a settlement-authorized payment the new binding/agreement/party
+ * invariants actually accept — the agreement's REAL canonical debtor/creditor (never a random,
+ * unrelated profile pair) and the durable, verified `settlementProposalId` PaymentService itself would
+ * have persisted after a real `SettlementContextVerifier` check. This is a fixture-only change (this
+ * test suite calls the fake repository directly, bypassing PaymentService's own verification flow, so
+ * there is nothing to re-verify here) — it does not weaken any financial assertion these tests make.
+ */
+async function insertVerifiedSettlementPayment(
+  ctx: ReturnType<typeof createTestSettlementService>,
+  agreementId: string,
+  proposalId: string,
+  amountMinorUnits: number,
+  idempotencyKeySuffix: string,
+) {
+  const agreement = await ctx.agreementCtx.agreements.findById(agreementId);
+  if (!agreement) throw new Error("test setup: agreement not found");
+  return ctx.paymentCtx.payments.insertPending({
+    idempotencyKey: `settlement-${idempotencyKeySuffix}`,
+    payerProfileKind: agreement.debtorProfileKind,
+    payerProfileId: agreement.debtorProfileId,
+    recipientProfileKind: agreement.creditorProfileKind,
+    recipientProfileId: agreement.creditorProfileId,
+    amountMinorUnits,
+    currency: "USD",
+    agreementId,
+    providerName: "sandbox",
+    initialStatus: "succeeded",
+    settlementProposalId: proposalId,
+  });
+}
+
 describe("SettlementService", () => {
   let ctx: ReturnType<typeof createTestSettlementService>;
   let creditorUserId: string;
@@ -351,18 +383,7 @@ describe("SettlementService", () => {
       decision: "accept",
     });
 
-    const attempt = await ctx.paymentCtx.payments.insertPending({
-      idempotencyKey: `settlement-${proposal.id}`,
-      payerProfileKind: "personal",
-      payerProfileId: randomUUID(),
-      recipientProfileKind: "personal",
-      recipientProfileId: randomUUID(),
-      amountMinorUnits: 60_000,
-      currency: "USD",
-      agreementId,
-      providerName: "sandbox",
-      initialStatus: "succeeded",
-    });
+    const attempt = await insertVerifiedSettlementPayment(ctx, agreementId, proposal.id, 60_000, proposal.id);
 
     const completed = await ctx.settlementService.recordSettlementPayment({
       settlementProposalId: proposal.id,
@@ -391,18 +412,7 @@ describe("SettlementService", () => {
       decision: "accept",
     });
 
-    const first = await ctx.paymentCtx.payments.insertPending({
-      idempotencyKey: `settlement-1-${proposal.id}`,
-      payerProfileKind: "personal",
-      payerProfileId: randomUUID(),
-      recipientProfileKind: "personal",
-      recipientProfileId: randomUUID(),
-      amountMinorUnits: 30_000,
-      currency: "USD",
-      agreementId,
-      providerName: "sandbox",
-      initialStatus: "succeeded",
-    });
+    const first = await insertVerifiedSettlementPayment(ctx, agreementId, proposal.id, 30_000, `1-${proposal.id}`);
     const afterFirst = await ctx.settlementService.recordSettlementPayment({
       settlementProposalId: proposal.id,
       paymentAttemptId: first.id,
@@ -410,18 +420,7 @@ describe("SettlementService", () => {
     });
     expect(afterFirst.status).toBe("awaiting_payment");
 
-    const second = await ctx.paymentCtx.payments.insertPending({
-      idempotencyKey: `settlement-2-${proposal.id}`,
-      payerProfileKind: "personal",
-      payerProfileId: randomUUID(),
-      recipientProfileKind: "personal",
-      recipientProfileId: randomUUID(),
-      amountMinorUnits: 30_000,
-      currency: "USD",
-      agreementId,
-      providerName: "sandbox",
-      initialStatus: "succeeded",
-    });
+    const second = await insertVerifiedSettlementPayment(ctx, agreementId, proposal.id, 30_000, `2-${proposal.id}`);
     const afterSecond = await ctx.settlementService.recordSettlementPayment({
       settlementProposalId: proposal.id,
       paymentAttemptId: second.id,
@@ -441,18 +440,11 @@ describe("SettlementService", () => {
       actingSessionId: creditorSessionId,
       decision: "accept",
     });
-    const attempt = await ctx.paymentCtx.payments.insertPending({
-      idempotencyKey: `settlement-${proposal.id}`,
-      payerProfileKind: "personal",
-      payerProfileId: randomUUID(),
-      recipientProfileKind: "personal",
-      recipientProfileId: randomUUID(),
-      amountMinorUnits: 10_000,
-      currency: "USD",
-      agreementId,
-      providerName: "sandbox",
-      initialStatus: "succeeded",
-    });
+    // R11 PASS B2: bound to THIS settlement via the same verified-fixture helper as every other
+    // recordSettlementPayment test — this test is specifically about the one-time exact-amount rule
+    // (Check 8), so binding/agreement/party identity must all already be valid, isolating the amount
+    // mismatch as the actual, sole reason for rejection.
+    const attempt = await insertVerifiedSettlementPayment(ctx, agreementId, proposal.id, 10_000, proposal.id);
     await expect(
       ctx.settlementService.recordSettlementPayment({ settlementProposalId: proposal.id, paymentAttemptId: attempt.id, actingUserId: debtorUserId }),
     ).rejects.toThrow(ValidationError);
@@ -477,18 +469,7 @@ describe("SettlementService", () => {
 
     it("restore_original: restores the pre-settlement balance minus whatever partial settlement payments already cleared", async () => {
       const proposal = await proposeAcceptedSettlement({ failureConsequence: "restore_original", paymentMode: "scheduled" });
-      const partial = await ctx.paymentCtx.payments.insertPending({
-        idempotencyKey: `settlement-partial-${proposal.id}`,
-        payerProfileKind: "personal",
-        payerProfileId: randomUUID(),
-        recipientProfileKind: "personal",
-        recipientProfileId: randomUUID(),
-        amountMinorUnits: 20_000,
-        currency: "USD",
-        agreementId,
-        providerName: "sandbox",
-        initialStatus: "succeeded",
-      });
+      const partial = await insertVerifiedSettlementPayment(ctx, agreementId, proposal.id, 20_000, `partial-${proposal.id}`);
       await ctx.settlementService.recordSettlementPayment({ settlementProposalId: proposal.id, paymentAttemptId: partial.id, actingUserId: debtorUserId });
 
       const result = await ctx.settlementService.expireOverdueSettlements(new Date("2026-04-02T00:00:00Z"));

@@ -1,12 +1,13 @@
 import "server-only";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
-import { getDb } from "@/db/client";
+import { getDb, type Database } from "@/db/client";
 import { settlementPayment, settlementProposal } from "@/db/schema";
 import type { PartyRole } from "@/lib/agreements/agreementService";
 import type { ProfileKind } from "@/lib/profiles/verificationService";
 import { ConfigurationError } from "@/lib/errors";
 import type {
   NormalizedSettlementTerms,
+  RecordWithinSettlementCeilingResult,
   SettlementFailureConsequence,
   SettlementPaymentRepository,
   SettlementProposalRecord,
@@ -148,20 +149,78 @@ export class DrizzleSettlementRepository implements SettlementProposalRepository
   }
 }
 
-export class DrizzleSettlementPaymentRepository implements SettlementPaymentRepository {
-  async insert(input: { settlementProposalId: string; paymentAttemptId: string; amountMinorUnits: number }): Promise<void> {
-    const db = getDb();
-    await db.insert(settlementPayment).values(input);
-  }
+/**
+ * R11 PASS B2: the same kind of production-safe, no-op-by-default test-only affordance as
+ * `AtomicManualPaymentPosterTestHooks`/`InstallmentReservationTestHooks` — lets a `*.postgres.test.ts`
+ * suite deterministically pause this transaction the instant it genuinely holds the
+ * `settlement_proposal` row lock, long enough to prove a second, concurrently-racing recording attempt
+ * against the SAME settlement queues behind it. Defaults to `undefined`; every production call site
+ * (`new DrizzleSettlementPaymentRepository()`, no argument) never sets it.
+ */
+export interface SettlementPaymentTestHooks {
+  /** Awaited immediately after the `settlement_proposal` row lock has been GRANTED — before the duplicate-link check, the sum, or the insert. */
+  afterProposalLock?: () => Promise<void>;
+}
 
-  async isPaymentLinked(paymentAttemptId: string): Promise<boolean> {
-    const db = getDb();
-    const rows = await db.select().from(settlementPayment).where(eq(settlementPayment.paymentAttemptId, paymentAttemptId)).limit(1);
-    return rows.length > 0;
+/**
+ * R11 PASS B2 (Check 5 — MAKE SCHEDULED SETTLEMENT CEILING ATOMIC): real implementation of
+ * `SettlementPaymentRepository` — see that interface's own doc comment for the concurrent-overpayment
+ * race `recordWithinSettlementCeiling` closes. Mirrors `DrizzleAtomicManualPaymentPoster`'s established
+ * "single, hand-written transaction, writing directly against raw Drizzle table objects" pattern.
+ */
+export class DrizzleSettlementPaymentRepository implements SettlementPaymentRepository {
+  /**
+   * R11 PASS B2: `db` is injectable (defaulting to the shared production singleton) so
+   * `*.postgres.test.ts` concurrency suites can hand two instances of this class two genuinely
+   * distinct PostgreSQL connections — mirrors `DrizzleAtomicManualPaymentPoster`'s identical
+   * precedent. Every production call site (`new DrizzleSettlementPaymentRepository()`, no argument)
+   * is unaffected.
+   */
+  constructor(
+    private readonly db: Database = getDb(),
+    private readonly hooks?: SettlementPaymentTestHooks,
+  ) {}
+
+  async recordWithinSettlementCeiling(input: {
+    settlementProposalId: string;
+    paymentAttemptId: string;
+    amountMinorUnits: number;
+  }): Promise<RecordWithinSettlementCeilingResult> {
+    const db = this.db;
+    return db.transaction(async (tx) => {
+      // The settlement_proposal row lock is THE serialization point — a second, concurrent call for
+      // the SAME settlement blocks here until this transaction commits or rolls back, then re-reads
+      // the now-current collected total below. Never a separate "read sum, compare, later insert"
+      // sequence outside this lock, which two genuinely concurrent payments could both pass.
+      const proposalRows = await tx.select().from(settlementProposal).where(eq(settlementProposal.id, input.settlementProposalId)).for("update").limit(1);
+      if (this.hooks?.afterProposalLock) await this.hooks.afterProposalLock();
+      const proposalRow = proposalRows[0];
+      if (!proposalRow || proposalRow.status !== "awaiting_payment") {
+        return { outcome: "not_awaiting_payment" };
+      }
+
+      const linkedRows = await tx.select({ id: settlementPayment.id }).from(settlementPayment).where(eq(settlementPayment.paymentAttemptId, input.paymentAttemptId)).limit(1);
+      if (linkedRows[0]) {
+        return { outcome: "already_linked" };
+      }
+
+      const sumRows = await tx
+        .select({ total: sql<string>`coalesce(sum(${settlementPayment.amountMinorUnits}), 0)` })
+        .from(settlementPayment)
+        .where(eq(settlementPayment.settlementProposalId, input.settlementProposalId));
+      const existingTotal = Number(sumRows[0]?.total ?? 0);
+      const newTotal = existingTotal + input.amountMinorUnits;
+      if (newTotal > proposalRow.settlementAmountMinorUnits) {
+        return { outcome: "would_exceed_settlement_amount", totalCollectedMinorUnits: existingTotal };
+      }
+
+      await tx.insert(settlementPayment).values(input);
+      return { outcome: "recorded", totalCollectedMinorUnits: newTotal };
+    });
   }
 
   async sumForSettlement(settlementProposalId: string): Promise<number> {
-    const db = getDb();
+    const db = this.db;
     const rows = await db
       .select({ total: sql<string>`coalesce(sum(${settlementPayment.amountMinorUnits}), 0)` })
       .from(settlementPayment)

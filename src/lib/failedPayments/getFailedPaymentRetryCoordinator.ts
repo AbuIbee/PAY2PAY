@@ -1,6 +1,7 @@
 import "server-only";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
+import { getPartialPaymentAutoApplicationService } from "@/lib/partialPayments/getPartialPaymentAutoApplicationService";
 import { getPlatformFeePolicy } from "@/lib/payments/getPlatformFeePolicy";
 import { DEFAULT_RETRY_DELAY_BUSINESS_DAYS } from "./paymentRetryService";
 import { DrizzleFailedPaymentRetryCoordinator, type FailedPaymentRetryCoordinator } from "./failedPaymentRetryCoordinator";
@@ -19,6 +20,9 @@ export function getFailedPaymentRetryCoordinator(): FailedPaymentRetryCoordinato
       // singleton `PaymentWebhookService`'s own normal webhook-receipt ledger posting uses — see
       // `getPlatformFeePolicy`'s own doc comment.
       getPlatformFeePolicy(),
+      // R11 PASS B1 — FINAL LIFECYCLE CLOSURE (Defect 1B): see
+      // `DrizzleFailedPaymentRetryCoordinator.repairLegacyLineageAndApply`'s own doc comment.
+      getPartialPaymentAutoApplicationService(),
     );
   }
   return cached;

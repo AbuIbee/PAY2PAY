@@ -45,13 +45,14 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     paymentMethod?: PaymentMethod | null;
     recordedByUserId?: string | null;
     bankConnectionId?: string | null;
+    settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord> {
     if (this.idempotencyKeys.has(input.idempotencyKey)) {
       throw new Error("duplicate idempotency key");
     }
     this.idempotencyKeys.add(input.idempotencyKey);
     const now = new Date();
-    const { initialStatus, installmentScheduleItemId, paymentMethod, recordedByUserId, bankConnectionId, ...rest } = input;
+    const { initialStatus, installmentScheduleItemId, paymentMethod, recordedByUserId, bankConnectionId, settlementProposalId, ...rest } = input;
     const record: PaymentAttemptRecord = {
       id: randomUUID(),
       status: initialStatus ?? "pending",
@@ -66,6 +67,7 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
       bankConnectionId: bankConnectionId ?? null,
       lifecycleCheckedAt: null,
       financialRepairNextAttemptAt: null,
+      settlementProposalId: settlementProposalId ?? null,
       createdAt: now,
       updatedAt: now,
       ...rest,

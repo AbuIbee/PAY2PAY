@@ -108,6 +108,22 @@ export const paymentAttempt = pgTable(
     // Cleared implicitly the moment repair succeeds (the row then drops out of the candidate query
     // entirely, since its ledger entry now exists) — never read once that happens.
     financialRepairNextAttemptAt: timestamp("financial_repair_next_attempt_at", { withTimezone: true }),
+    // R11 PASS B2 (Check 2 — DURABLE SETTLEMENT PAYMENT IDENTITY): the durable, persisted binding
+    // between a payment attempt and the settlement proposal it was verified against at creation time
+    // (see PaymentService's own settlement-verification helper) — the boolean SettlementContextVerifier
+    // check alone is insufficient because it only ever gates payment CREATION; nothing durable survived
+    // to let SettlementService.recordSettlementPayment later confirm THIS EXACT attempt was actually
+    // verified for THIS EXACT settlement, rather than trusting a caller-supplied settlementProposalId
+    // at attribution time. Deliberately a plain nullable UUID with NO `.references()` FK to
+    // `settlementProposal.id` — settlement.ts already imports `paymentAttempt` (for
+    // `settlementPayment.paymentAttemptId`), so a reverse FK reference here would create a runtime
+    // circular schema import; application-level integrity (verified once, at persist time, never
+    // re-derived) is the enforcement mechanism instead, exactly like every other cross-domain id this
+    // table already carries with no FK (e.g. none of the profile-kind/id pairs are FK-constrained
+    // either, since `profile` isn't a single physical table). Nullable: an ordinary installment payment
+    // or manual payment never sets this, and every historical row predating this column is NULL — never
+    // backfilled/invented.
+    settlementProposalId: uuid("settlement_proposal_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

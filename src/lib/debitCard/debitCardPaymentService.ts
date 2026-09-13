@@ -120,6 +120,8 @@ export class DebitCardPaymentService {
     currency: string;
     actingUserId: string;
     installmentScheduleItemId?: string;
+    /** R11 (Final Open Issue A — SETTLEMENT EXEMPTION): the ONLY sanctioned way this payment may be created without an installment link against a scheduled agreement. */
+    settlementProposalId?: string;
     /** See `RetryPaymentMethodInitiator.createManualPayment`'s own doc comment — passed straight through to `PaymentService.submitPending`. */
     finalGuard?: () => Promise<void>;
   }): Promise<PaymentAttemptRecord & { charge: DebitCardChargeBreakdown }> {
@@ -135,6 +137,7 @@ export class DebitCardPaymentService {
         agreementId: input.agreementId,
         actingUserId: input.actingUserId,
         installmentScheduleItemId: input.installmentScheduleItemId,
+        settlementProposalId: input.settlementProposalId,
         paymentMethod: "debit_card",
       },
       "scheduled",

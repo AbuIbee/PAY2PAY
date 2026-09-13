@@ -4,6 +4,7 @@ import { ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/erro
 import type { ProfileKind } from "@/lib/profiles/verificationService";
 import type { AgreementRepository, AgreementService, PartyRole } from "@/lib/agreements/agreementService";
 import type { MfaService } from "@/lib/auth/mfaService";
+import type { ProfileRef } from "@/lib/payments/paymentProvider";
 
 export type SettlementProposalStatus = "proposed" | "awaiting_payment" | "rejected" | "completed" | "failure_consequence_applied";
 export type SettlementPaymentMode = "one_time" | "scheduled";
@@ -75,19 +76,60 @@ export interface SettlementProposalRepository {
   findAwaitingPaymentPastDeadline(now: Date): Promise<SettlementProposalRecord[]>;
 }
 
+/**
+ * R11 PASS B2 (Check 5 — SCHEDULED SETTLEMENT CUMULATIVE AMOUNT CEILING). Explicit disposition for
+ * `SettlementPaymentRepository.recordWithinSettlementCeiling` — see that method's own doc comment.
+ */
+export type RecordWithinSettlementCeilingResult =
+  /** The payment was durably linked; `totalCollectedMinorUnits` is the authoritative post-insert total. */
+  | { outcome: "recorded"; totalCollectedMinorUnits: number }
+  /** This exact payment attempt was already linked (to any settlement) — never re-recorded. */
+  | { outcome: "already_linked" }
+  /** The settlement proposal was not found, or is no longer `awaiting_payment` — never mutated. */
+  | { outcome: "not_awaiting_payment" }
+  /** Recording this amount would push the settlement's total collected past its own settlement amount — never inserted. */
+  | { outcome: "would_exceed_settlement_amount"; totalCollectedMinorUnits: number };
+
 /** Links succeeded payment_attempts collected toward a settlement — see settlement.ts's doc comment. */
 export interface SettlementPaymentRepository {
-  insert(input: { settlementProposalId: string; paymentAttemptId: string; amountMinorUnits: number }): Promise<void>;
-  isPaymentLinked(paymentAttemptId: string): Promise<boolean>;
+  /**
+   * R11 PASS B2 (Check 5 — MAKE SCHEDULED SETTLEMENT CEILING ATOMIC). The ONLY sanctioned way to link
+   * a payment toward a settlement — replaces the prior non-atomic "check duplicate -> insert -> sum ->
+   * discover total is too large after insertion" sequence, which let two genuinely concurrent scheduled
+   * payments each individually pass the pre-insert check and jointly exceed the settlement amount. The
+   * real (Drizzle) implementation performs the whole read-check-insert sequence inside ONE transaction,
+   * under a `SELECT ... FOR UPDATE` lock on the settlement_proposal row itself — that row lock is the
+   * actual serialization point: a second, concurrent call for the SAME settlement blocks here until the
+   * first commits or rolls back, then re-reads the now-current collected total before deciding.
+   */
+  recordWithinSettlementCeiling(input: { settlementProposalId: string; paymentAttemptId: string; amountMinorUnits: number }): Promise<RecordWithinSettlementCeilingResult>;
   sumForSettlement(settlementProposalId: string): Promise<number>;
 }
 
 /**
  * Narrow, consumer-defined view onto a payment_attempt — mirrors PartialPaymentService's identical
  * PaymentAttemptReader (this codebase's interface-segregation precedent, e.g. AgreementTermsReader).
+ *
+ * R11 PASS B2 (Checks 2-4 — DURABLE SETTLEMENT BINDING / AGREEMENT OWNERSHIP / PARTY IDENTITY):
+ * widened from `{id, status, amountMinorUnits}` — `recordSettlementPayment` needs the payment's own
+ * durable `agreementId`/party identity/`settlementProposalId` to validate attribution BEFORE ever
+ * inserting a `settlement_payment` row, never merely trusting a caller-supplied
+ * `settlementProposalId`. Backed by the SAME persisted `payment_attempt` row every other payment
+ * reader uses — never a second, duplicate payment lookup service (real implementation:
+ * `DrizzlePaymentAttemptRepository`, already structurally compatible).
  */
 export interface PaymentAttemptReader {
-  findById(id: string): Promise<{ id: string; status: string; amountMinorUnits: number } | null>;
+  findById(id: string): Promise<{
+    id: string;
+    status: string;
+    amountMinorUnits: number;
+    agreementId: string | null;
+    payerProfileKind: ProfileKind;
+    payerProfileId: string;
+    recipientProfileKind: ProfileKind;
+    recipientProfileId: string;
+    settlementProposalId: string | null;
+  } | null>;
 }
 
 export interface SettlementServiceDeps {
@@ -257,9 +299,26 @@ export class SettlementService {
   /**
    * Links an already-succeeded payment_attempt toward this settlement (never a separate
    * money-movement path — see PartialPaymentService.recordPayment's identical reasoning), supporting
-   * both one-time and scheduled payment modes (§12). Once the linked total meets or exceeds the full
+   * both one-time and scheduled payment modes (§12). Once the linked total reaches EXACTLY the full
    * settlement amount, completes the settlement and — the one and only place this ever happens —
    * marks the agreement `settled_in_full`, never `paid_in_full`.
+   *
+   * R11 PASS B2 (Checks 2-5, ARCHITECT-APPROVED DESIGN). Four mandatory checks now gate attribution,
+   * in this exact order, all BEFORE any `settlement_payment` row is ever inserted:
+   *   1. (Check 2) `P.settlementProposalId === S.id` — the payment must have been durably verified
+   *      against THIS EXACT settlement at its own creation time (never a generic succeeded payment
+   *      attached to an arbitrary settlement by a caller-supplied id alone).
+   *   2. (Check 3) `P.agreementId === S.agreementId` — never null, never a different agreement.
+   *   3. (Check 4) `P`'s payer/recipient must be exactly this agreement's canonical debtor/creditor —
+   *      acting-user authorization (`resolvePartyRole`, still performed) is never a substitute for
+   *      this comparison.
+   *   4. (Check 8, unchanged) `paymentMode === "one_time"` still requires an exact amount match.
+   * Finally (Check 5), the actual linking + cumulative-ceiling enforcement is delegated to
+   * `SettlementPaymentRepository.recordWithinSettlementCeiling` — a single atomic operation, never the
+   * prior "check duplicate -> insert -> sum -> discover too large" sequence — and completion is
+   * decided from its returned total being EXACTLY the settlement amount (`>=` is never used: the
+   * repository itself refuses any insert that would exceed it, so a returned total can never legally
+   * be greater).
    */
   async recordSettlementPayment(input: { settlementProposalId: string; paymentAttemptId: string; actingUserId: string }): Promise<SettlementProposalRecord> {
     const proposal = await this.requireProposal(input.settlementProposalId);
@@ -272,17 +331,51 @@ export class SettlementService {
     if (!attempt || attempt.status !== "succeeded") {
       throw new ValidationError("A succeeded payment is required to record it against a settlement.");
     }
+    // Check 2 — DURABLE SETTLEMENT BINDING: never attachable merely because it's succeeded.
+    if (attempt.settlementProposalId !== proposal.id) {
+      throw new ValidationError("This payment was not verified against this settlement and cannot be recorded against it.");
+    }
+    // Check 3 — SAME AGREEMENT: NULL or a different agreement is invalid.
+    if (attempt.agreementId !== proposal.agreementId) {
+      throw new ValidationError("This payment does not belong to this settlement's agreement.");
+    }
+    // Check 4 — CANONICAL DEBTOR/CREDITOR PARTIES: acting-user authorization above is never a
+    // substitute for this comparison.
+    const detail = await this.deps.agreementService.getAgreement(proposal.agreementId, input.actingUserId);
+    const debtor: ProfileRef = { profileKind: detail.agreement.debtorProfileKind, profileId: detail.agreement.debtorProfileId };
+    const creditor: ProfileRef = { profileKind: detail.agreement.creditorProfileKind, profileId: detail.agreement.creditorProfileId };
+    if (attempt.payerProfileKind !== debtor.profileKind || attempt.payerProfileId !== debtor.profileId) {
+      throw new ValidationError("This payment's payer does not match this agreement's debtor.");
+    }
+    if (attempt.recipientProfileKind !== creditor.profileKind || attempt.recipientProfileId !== creditor.profileId) {
+      throw new ValidationError("This payment's recipient does not match this agreement's creditor.");
+    }
+    // Check 8 (preserved, unchanged): a one-time settlement payment must equal the full amount exactly.
     if (proposal.paymentMode === "one_time" && attempt.amountMinorUnits !== proposal.settlementAmountMinorUnits) {
       throw new ValidationError("A one-time settlement payment must equal the full settlement amount.");
     }
-    if (await this.deps.settlementPayments.isPaymentLinked(attempt.id)) {
+
+    const recorded = await this.deps.settlementPayments.recordWithinSettlementCeiling({
+      settlementProposalId: proposal.id,
+      paymentAttemptId: attempt.id,
+      amountMinorUnits: attempt.amountMinorUnits,
+    });
+    if (recorded.outcome === "already_linked") {
       throw new ValidationError("This payment has already been recorded against a settlement.");
     }
-
-    await this.deps.settlementPayments.insert({ settlementProposalId: proposal.id, paymentAttemptId: attempt.id, amountMinorUnits: attempt.amountMinorUnits });
+    if (recorded.outcome === "not_awaiting_payment") {
+      throw new ValidationError(`This action requires status "awaiting_payment", but the settlement is no longer awaiting payment.`);
+    }
+    if (recorded.outcome === "would_exceed_settlement_amount") {
+      throw new ValidationError(
+        `This payment of ${attempt.amountMinorUnits} minor units would push the settlement's total collected past its own settlement amount of ${proposal.settlementAmountMinorUnits} minor units. Overpayment against a settlement is not permitted.`,
+      );
+    }
+    const totalCollected = recorded.totalCollectedMinorUnits;
     await this.recordAudit(proposal, input.actingUserId, "settlement_payment_recorded", { paymentAttemptId: attempt.id, amountMinorUnits: attempt.amountMinorUnits });
 
-    const totalCollected = await this.deps.settlementPayments.sumForSettlement(proposal.id);
+    // Never `>=` — the atomic repository operation above already refuses any insert that would push
+    // the total past the settlement amount, so a returned total can never legally exceed it.
     if (totalCollected < proposal.settlementAmountMinorUnits) {
       return this.requireProposal(proposal.id);
     }

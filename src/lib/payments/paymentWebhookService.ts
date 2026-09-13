@@ -321,6 +321,27 @@ export type ReceiveWebhookResult = {
     | "accepted";
 };
 
+/**
+ * R11 PASS B1 — FINAL TARGETED CORRECTION (Defect 1 — CLEARED PARTIAL PAYMENT IS NOT DURABLY
+ * APPLIED). Real implementation: `PartialPaymentAutoApplicationService`. Declared here, not imported
+ * from that module — the same narrow, consumer-defined-interface precedent `FailedPaymentWorkflow`
+ * right below already establishes in this file. See `applyPartialPaymentRequired`'s own doc comment
+ * for exactly when/why this is called.
+ */
+export interface PartialPaymentApplication {
+  applyClearedPayment(paymentAttemptId: string): Promise<{ outcome: string }>;
+}
+
+/**
+ * R11 PASS B1 — FINAL LIFECYCLE CLOSURE (Defect 4 — APPLICATION OUTCOME CONTRACT). The ONLY outcome
+ * `PartialPaymentApplication.applyClearedPayment` returns that is NOT safe to finalize on — every
+ * other outcome (`applied`/`already_applied`/`not_correlated`/`conflict`) means the required effect
+ * genuinely completed (including "durably recorded a conflict, nothing more to retry"). An
+ * `"unknown"`-lineage resolution is signaled by the service THROWING, never by a return value — see
+ * `PartialPaymentAutoApplicationService`'s own doc comment.
+ */
+const PARTIAL_PAYMENT_RETRYABLE_OUTCOME = "not_yet_durable";
+
 export interface FailedPaymentWorkflow {
   handlePaymentFailed(payment: PaymentAttemptRecord, failureCategory: string | null): Promise<void>;
   handlePaymentSucceeded(payment: PaymentAttemptRecord): Promise<void>;
@@ -462,6 +483,13 @@ export class PaymentWebhookService {
        * real production behavior, not a test-only stand-in.
        */
       platformFeePolicy?: PlatformFeePolicy;
+      /**
+       * R11 PASS B1 — FINAL TARGETED CORRECTION (Defect 1). Optional so every pre-existing test
+       * context that never wires this is unaffected — every real production wiring
+       * (`getPaymentWebhookService.ts`) supplies it. See `applyPartialPaymentRequired`'s own doc
+       * comment for exactly when/why this is called.
+       */
+      partialPaymentApplication?: PartialPaymentApplication;
     },
   ) {
     this.platformFeePolicy = deps.platformFeePolicy ?? new DefaultPlatformFeePolicy();
@@ -730,6 +758,17 @@ export class PaymentWebhookService {
     // clearing entry exists) throws a retryable `ValidationError` (see `classifyProcessingFailure`),
     // not a silent skip.
     await this.postLedgerEntryRequired(eventType, current, data, claimed.source);
+
+    // R11 PASS B1 — FINAL TARGETED CORRECTION (Defect 1 — CLEARED PARTIAL PAYMENT IS NOT DURABLY
+    // APPLIED): a REQUIRED effect of THIS event's own historical transition, exactly like the ledger
+    // posting immediately above — attempted on every attempt (including a retry/recovery completing
+    // work a prior attempt left unfinished), never gated on the payment's CURRENT status (which, like
+    // the ledger entry itself, is a historical fact tied to this event's own clearing, not to whatever
+    // legitimately happens to the payment afterward). See `applyPartialPaymentRequired`'s own doc
+    // comment.
+    if (eventType === "payment.succeeded") {
+      await this.applyPartialPaymentRequired(current);
+    }
 
     // PAID2YOU — PACKAGE B (Stage 6 final historical-effect closure). `runFailedPaymentWorkflowRequired`
     // (installment success/failure semantics, retry cancellation) and `checkCompletionRequired`
@@ -1353,6 +1392,36 @@ export class PaymentWebhookService {
     if (reversalEntryType) {
       const reason = typeof data.reason === "string" ? data.reason : null;
       await this.deps.ledger.reversePayment({ paymentAttemptId: payment.id, entryType: reversalEntryType, reason });
+    }
+  }
+
+  /**
+   * R11 PASS B1 — FINAL TARGETED CORRECTION (Defect 1 — CLEARED PARTIAL PAYMENT IS NOT DURABLY
+   * APPLIED). Called immediately after `postLedgerEntryRequired` for a `"payment.succeeded"` event —
+   * i.e., only once this event's OWN `payment_cleared` entry is durably known to exist (whether
+   * posted just now, or on an earlier attempt; `LedgerService`'s own idempotent get-or-post makes
+   * re-entry here always safe). REQUIRED, not caught here: `PartialPaymentAutoApplicationService
+   * .applyClearedPayment` itself never throws for an ordinary non-partial-payment attempt or for one
+   * not yet durably clearable (both are normal returns — see that method's own doc comment) — a
+   * throw here means a genuine, retryable failure (e.g. a transient DB error), and letting it
+   * propagate keeps this event's own `payment_webhook_event` row unprocessed, so `recoverBatch`
+   * converges it later exactly like every other required effect. A no-op when this dependency isn't
+   * wired (pre-existing test contexts that never exercise partial payments).
+   */
+  private async applyPartialPaymentRequired(payment: PaymentAttemptRecord): Promise<void> {
+    if (!this.deps.partialPaymentApplication) return;
+    const result = await this.deps.partialPaymentApplication.applyClearedPayment(payment.id);
+    // R11 PASS B1 — FINAL LIFECYCLE CLOSURE (Defect 4): `"not_yet_durable"` is the ONLY normal-return
+    // outcome that must NOT be treated as this required effect having completed — throwing here
+    // (the SAME retryable-required-effect mechanism every other effect in this method already uses)
+    // keeps this event retryable until the correlated attempt either durably clears (a later retry
+    // then applies it) or is conclusively resolved otherwise. Every other outcome — including
+    // `"conflict"`, which means durable reconciliation evidence was already recorded — is a genuine,
+    // safe finalization; see `PartialPaymentAutoApplicationService`'s own doc comment for the full
+    // outcome contract (an `"unknown"`-lineage resolution is signaled by that service THROWING, which
+    // simply propagates from the `await` above rather than needing a check here).
+    if (result.outcome === PARTIAL_PAYMENT_RETRYABLE_OUTCOME) {
+      throw new ValidationError("payment_webhook_partial_payment_not_yet_durable");
     }
   }
 

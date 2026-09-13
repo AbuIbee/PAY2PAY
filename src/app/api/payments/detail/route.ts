@@ -28,6 +28,10 @@ export function createPaymentDetailHandler(authService: AuthService, paymentServ
         agreementId: record.agreementId,
         providerName: record.providerName,
         paymentMethod: record.paymentMethod,
+        // R11 (Final Open Issue A): previously never returned to the client at all — PaymentDetail.tsx's
+        // manual-retry flow silently dropped this, producing an unlinked payment against a scheduled
+        // agreement's own already-linked installment. See PaymentDetail.tsx's handleManualPay.
+        installmentScheduleItemId: record.installmentScheduleItemId,
         recordedByUserId: record.recordedByUserId,
         recipientConfirmedAt: record.recipientConfirmedAt,
         failureReason: record.failureReason,

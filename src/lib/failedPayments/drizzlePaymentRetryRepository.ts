@@ -38,6 +38,12 @@ export class DrizzlePaymentRetryRepository implements PaymentRetryRepository {
     return toRecord(row);
   }
 
+  async findById(id: string): Promise<PaymentRetryRecord | null> {
+    const db = getDb();
+    const rows = await db.select().from(paymentRetry).where(eq(paymentRetry.id, id)).limit(1);
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+
   async findByOriginalPaymentAttemptId(originalPaymentAttemptId: string): Promise<PaymentRetryRecord | null> {
     const db = getDb();
     const rows = await db

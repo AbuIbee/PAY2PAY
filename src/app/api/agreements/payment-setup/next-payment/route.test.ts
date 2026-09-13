@@ -5,7 +5,7 @@ import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestRelationshipServices } from "@/lib/relationships/testFakes";
 import { createTestLedgerService, createTestBalanceService } from "@/lib/ledger/testFakes";
-import type { AgreementInstallmentStatusReader, InstallmentWithStatus } from "@/lib/agreements/agreementProgressService";
+import type { AgreementInstallmentSettlementReader, AgreementInstallmentStatusReader, InstallmentWithStatus } from "@/lib/agreements/agreementProgressService";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
 import { createAgreementNextPaymentHandler } from "./route";
 
@@ -37,6 +37,13 @@ class FakeInstallmentReader implements AgreementInstallmentStatusReader {
     if (!agreement?.currentVersionId) return [];
     const items = await this.ctx.scheduleItems.listForVersion(agreement.currentVersionId);
     return items.map((item) => ({ id: `${agreementId}:${item.sequenceNumber}`, sequenceNumber: item.sequenceNumber, dueDate: item.dueDate, amountMinorUnits: item.amountMinorUnits, status: "scheduled" }));
+  }
+}
+
+/** R11: this test suite never exercises partial-contribution amount-awareness — the remaining amount always equals the full face amount, preserving this suite's pre-existing "first item is next payable, for its full amount" assertions unchanged. */
+class FakeInstallmentSettlementReader implements AgreementInstallmentSettlementReader {
+  async getRemainingMinorUnits(_installmentScheduleItemId: string, faceAmountMinorUnits: number): Promise<number> {
+    return faceAmountMinorUnits;
   }
 }
 
@@ -138,6 +145,7 @@ describe("GET /api/agreements/payment-setup/next-payment", () => {
         balanceCtx.balanceService,
         relCtx.relationshipFinancialAccountService,
         { getDisplayName: async () => "Test Creditor" },
+        new FakeInstallmentSettlementReader(),
       ),
     );
   }

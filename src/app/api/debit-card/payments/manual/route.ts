@@ -20,6 +20,10 @@ const manualSchema = z.object({
   recipient: profileRefSchema,
   amountMinorUnits: z.number().int().positive(),
   currency: z.string().trim().length(3).default("USD"),
+  /** R11 (Final Open Issue A): this route previously had no way to tag which installment a manual debit-card payment collects at all — see AchPaymentService's identical, previously-present field. */
+  installmentScheduleItemId: z.string().uuid().optional(),
+  /** R11 (Final Open Issue A — SETTLEMENT EXEMPTION): see `SettlementContextVerifier`'s own doc comment. */
+  settlementProposalId: z.string().uuid().optional(),
 });
 
 export function createDebitCardManualPaymentHandler(authService: AuthService, debitCardPaymentService: DebitCardPaymentService) {

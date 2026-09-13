@@ -8,6 +8,7 @@ import type { ProfileKind } from "@/lib/profiles/verificationService";
 import { SettlementService } from "./settlementService";
 import type {
   NormalizedSettlementTerms,
+  RecordWithinSettlementCeilingResult,
   SettlementFailureConsequence,
   SettlementPaymentRepository,
   SettlementProposalRecord,
@@ -114,15 +115,32 @@ export class InMemorySettlementProposalRepository implements SettlementProposalR
   }
 }
 
+/**
+ * R11 PASS B2 (Check 5): in-memory double for `recordWithinSettlementCeiling` — single-threaded (no
+ * real concurrency in a unit test), so this reproduces the real implementation's SEQUENCE of checks
+ * exactly (not-awaiting-payment -> already-linked -> sum -> ceiling -> insert) without needing an
+ * actual row lock; held to the SAME atomic-result contract as `DrizzleSettlementPaymentRepository`.
+ */
 export class InMemorySettlementPaymentRepository implements SettlementPaymentRepository {
   rows: { settlementProposalId: string; paymentAttemptId: string; amountMinorUnits: number }[] = [];
 
-  async insert(input: { settlementProposalId: string; paymentAttemptId: string; amountMinorUnits: number }): Promise<void> {
-    this.rows.push(input);
-  }
+  constructor(private readonly proposals: InMemorySettlementProposalRepository) {}
 
-  async isPaymentLinked(paymentAttemptId: string): Promise<boolean> {
-    return this.rows.some((r) => r.paymentAttemptId === paymentAttemptId);
+  async recordWithinSettlementCeiling(input: { settlementProposalId: string; paymentAttemptId: string; amountMinorUnits: number }): Promise<RecordWithinSettlementCeilingResult> {
+    const proposal = await this.proposals.findById(input.settlementProposalId);
+    if (!proposal || proposal.status !== "awaiting_payment") {
+      return { outcome: "not_awaiting_payment" };
+    }
+    if (this.rows.some((r) => r.paymentAttemptId === input.paymentAttemptId)) {
+      return { outcome: "already_linked" };
+    }
+    const existingTotal = await this.sumForSettlement(input.settlementProposalId);
+    const newTotal = existingTotal + input.amountMinorUnits;
+    if (newTotal > proposal.settlementAmountMinorUnits) {
+      return { outcome: "would_exceed_settlement_amount", totalCollectedMinorUnits: existingTotal };
+    }
+    this.rows.push(input);
+    return { outcome: "recorded", totalCollectedMinorUnits: newTotal };
   }
 
   async sumForSettlement(settlementProposalId: string): Promise<number> {
@@ -155,7 +173,7 @@ export function createTestSettlementService() {
   const paymentCtx = createTestPaymentService();
   const mfaCtx = createTestMfaService();
   const proposals = new InMemorySettlementProposalRepository();
-  const settlementPayments = new InMemorySettlementPaymentRepository();
+  const settlementPayments = new InMemorySettlementPaymentRepository(proposals);
   const auditRepo = new InMemoryAuditEventRepositoryForSettlements();
 
   const settlementService = new SettlementService({
