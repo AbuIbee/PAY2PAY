@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
+import type { PartialPaymentRequestRecord } from "./partialPaymentService";
 import { createTestPartialPaymentService } from "./testFakes";
 
 function baseTerms(overrides: Partial<DraftTermsInput> = {}): DraftTermsInput {
@@ -28,6 +29,11 @@ describe("PartialPaymentService", () => {
   let ctx: ReturnType<typeof createTestPartialPaymentService>;
   let creditorUserId: string;
   let debtorUserId: string;
+  // R08 B2 (EC1-001): promoted from beforeEach-local consts so recordPayment tests can construct
+  // payment-attempt fixtures using the agreement's ACTUAL canonical debtor/creditor, never an
+  // unrelated randomUUID() that would now be rejected by the new payer/recipient binding checks.
+  let creditorProfileId: string;
+  let debtorProfileId: string;
   let agreementId: string;
   let originalVersionId: string;
 
@@ -35,8 +41,8 @@ describe("PartialPaymentService", () => {
     ctx = createTestPartialPaymentService();
     creditorUserId = randomUUID();
     debtorUserId = randomUUID();
-    const creditorProfileId = randomUUID();
-    const debtorProfileId = randomUUID();
+    creditorProfileId = randomUUID();
+    debtorProfileId = randomUUID();
     ctx.agreementCtx.profileOwners.set("personal", creditorProfileId, creditorUserId);
     ctx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtorUserId);
 
@@ -188,9 +194,9 @@ describe("PartialPaymentService", () => {
     const attempt = await ctx.paymentCtx.payments.insertPending({
       idempotencyKey: `pp-${request.id}`,
       payerProfileKind: "personal",
-      payerProfileId: randomUUID(),
+      payerProfileId: debtorProfileId,
       recipientProfileKind: "personal",
-      recipientProfileId: randomUUID(),
+      recipientProfileId: creditorProfileId,
       amountMinorUnits: 5_000,
       currency: "USD",
       agreementId,
@@ -216,12 +222,14 @@ describe("PartialPaymentService", () => {
     });
     await ctx.partialPaymentService.decidePartialPayment({ partialPaymentRequestId: request.id, actingUserId: creditorUserId, decision: "accept" });
 
+    // R08 B2 (EC1-001): payer/recipient deliberately set to the agreement's own canonical debtor/
+    // creditor — this test isolates the pre-existing amount-mismatch check, not the new binding checks.
     const attempt = await ctx.paymentCtx.payments.insertPending({
       idempotencyKey: `pp-${request.id}`,
       payerProfileKind: "personal",
-      payerProfileId: randomUUID(),
+      payerProfileId: debtorProfileId,
       recipientProfileKind: "personal",
-      recipientProfileId: randomUUID(),
+      recipientProfileId: creditorProfileId,
       amountMinorUnits: 4_000,
       currency: "USD",
       agreementId,
@@ -273,9 +281,9 @@ describe("PartialPaymentService", () => {
     const attempt = await ctx.paymentCtx.payments.insertPending({
       idempotencyKey: `pp-${request.id}`,
       payerProfileKind: "personal",
-      payerProfileId: randomUUID(),
+      payerProfileId: debtorProfileId,
       recipientProfileKind: "personal",
-      recipientProfileId: randomUUID(),
+      recipientProfileId: creditorProfileId,
       amountMinorUnits: 5_000,
       currency: "USD",
       agreementId,
@@ -356,5 +364,205 @@ describe("PartialPaymentService", () => {
     const expiryEvent = ctx.auditRepo.events.find((e) => e.action === "partial_payment_expired");
     expect(expiryEvent?.actorUserId).toBeNull();
     expect(expiryEvent?.actorRole).toBe("scheduler");
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // R08 B2 (EC1-001 correction): a payment attempt must be bound back to the SAME agreement and the
+  // agreement's own canonical debtor/creditor before it may satisfy a partial-payment request — never
+  // merely "succeeded, right amount, right optional installment."
+  // ---------------------------------------------------------------------------------------------
+  describe("R08 B2 (EC1-001): partial-payment payment-attempt binding", () => {
+    async function proposeAndAccept(amountMinorUnits = 5_000): Promise<PartialPaymentRequestRecord> {
+      const request = await ctx.partialPaymentService.proposePartialPayment({
+        agreementId,
+        proposedAmountMinorUnits: amountMinorUnits,
+        proposedDate: "2026-03-01",
+        actingUserId: debtorUserId,
+      });
+      await ctx.partialPaymentService.decidePartialPayment({ partialPaymentRequestId: request.id, actingUserId: creditorUserId, decision: "accept" });
+      return request;
+    }
+
+    it("PP-R08-B2-1: succeeded payment, same agreement, payer = canonical debtor, recipient = canonical creditor, correct amount -> recordPayment succeeds and persists paymentAttemptId", async () => {
+      const request = await proposeAndAccept();
+      const attempt = await ctx.paymentCtx.payments.insertPending({
+        idempotencyKey: `pp-b2-1-${request.id}`,
+        payerProfileKind: "personal",
+        payerProfileId: debtorProfileId,
+        recipientProfileKind: "personal",
+        recipientProfileId: creditorProfileId,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        agreementId,
+        providerName: "sandbox",
+        initialStatus: "succeeded",
+      });
+
+      const applied = await ctx.partialPaymentService.recordPayment({
+        partialPaymentRequestId: request.id,
+        paymentAttemptId: attempt.id,
+        actingUserId: debtorUserId,
+      });
+      expect(applied.status).toBe("applied");
+      expect(applied.paymentAttemptId).toBe(attempt.id);
+    });
+
+    it("PP-R08-B2-2: cross-agreement payment — attempt says Agreement B, but payer/recipient otherwise match Agreement A's canonical parties (isolates the agreement-id check) -> ValidationError, request remains awaiting_payment, paymentAttemptId stays null, no success audit", async () => {
+      const request = await proposeAndAccept();
+      const unrelatedAgreementId = randomUUID(); // Agreement B — deliberately NOT a real agreement, only its id differs from Agreement A's
+      const attempt = await ctx.paymentCtx.payments.insertPending({
+        idempotencyKey: `pp-b2-2-${request.id}`,
+        payerProfileKind: "personal",
+        payerProfileId: debtorProfileId, // Agreement A's actual debtor — deliberately correct
+        recipientProfileKind: "personal",
+        recipientProfileId: creditorProfileId, // Agreement A's actual creditor — deliberately correct
+        amountMinorUnits: 5_000, // deliberately correct
+        currency: "USD",
+        agreementId: unrelatedAgreementId, // the ONLY mismatch
+        providerName: "sandbox",
+        initialStatus: "succeeded",
+      });
+
+      await expect(
+        ctx.partialPaymentService.recordPayment({ partialPaymentRequestId: request.id, paymentAttemptId: attempt.id, actingUserId: debtorUserId }),
+      ).rejects.toThrow(ValidationError);
+
+      const stillWaiting = await ctx.requests.findById(request.id);
+      expect(stillWaiting?.status).toBe("awaiting_payment");
+      expect(stillWaiting?.paymentAttemptId).toBeNull();
+      expect(ctx.auditRepo.events.some((e) => e.action === "partial_payment_applied")).toBe(false);
+    });
+
+    it("PP-R08-B2-3: same agreement but the payer is NOT the agreement's canonical debtor -> ValidationError, zero application mutation, no success audit", async () => {
+      const request = await proposeAndAccept();
+      const attempt = await ctx.paymentCtx.payments.insertPending({
+        idempotencyKey: `pp-b2-3-${request.id}`,
+        payerProfileKind: "personal",
+        payerProfileId: randomUUID(), // NOT this agreement's debtor
+        recipientProfileKind: "personal",
+        recipientProfileId: creditorProfileId,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        agreementId,
+        providerName: "sandbox",
+        initialStatus: "succeeded",
+      });
+
+      await expect(
+        ctx.partialPaymentService.recordPayment({ partialPaymentRequestId: request.id, paymentAttemptId: attempt.id, actingUserId: debtorUserId }),
+      ).rejects.toThrow(ValidationError);
+
+      const stillWaiting = await ctx.requests.findById(request.id);
+      expect(stillWaiting?.status).toBe("awaiting_payment");
+      expect(stillWaiting?.paymentAttemptId).toBeNull();
+      expect(ctx.auditRepo.events.some((e) => e.action === "partial_payment_applied")).toBe(false);
+    });
+
+    it("PP-R08-B2-4: same agreement but the recipient is NOT the agreement's canonical creditor -> ValidationError, zero application mutation, no success audit", async () => {
+      const request = await proposeAndAccept();
+      const attempt = await ctx.paymentCtx.payments.insertPending({
+        idempotencyKey: `pp-b2-4-${request.id}`,
+        payerProfileKind: "personal",
+        payerProfileId: debtorProfileId,
+        recipientProfileKind: "personal",
+        recipientProfileId: randomUUID(), // NOT this agreement's creditor
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        agreementId,
+        providerName: "sandbox",
+        initialStatus: "succeeded",
+      });
+
+      await expect(
+        ctx.partialPaymentService.recordPayment({ partialPaymentRequestId: request.id, paymentAttemptId: attempt.id, actingUserId: debtorUserId }),
+      ).rejects.toThrow(ValidationError);
+
+      const stillWaiting = await ctx.requests.findById(request.id);
+      expect(stillWaiting?.status).toBe("awaiting_payment");
+      expect(stillWaiting?.paymentAttemptId).toBeNull();
+      expect(ctx.auditRepo.events.some((e) => e.action === "partial_payment_applied")).toBe(false);
+    });
+
+    it("PP-R08-B2-5: succeeded payment with a null agreementId -> ValidationError, zero application mutation", async () => {
+      const request = await proposeAndAccept();
+      const attempt = await ctx.paymentCtx.payments.insertPending({
+        idempotencyKey: `pp-b2-5-${request.id}`,
+        payerProfileKind: "personal",
+        payerProfileId: debtorProfileId,
+        recipientProfileKind: "personal",
+        recipientProfileId: creditorProfileId,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        agreementId: null,
+        providerName: "sandbox",
+        initialStatus: "succeeded",
+      });
+
+      await expect(
+        ctx.partialPaymentService.recordPayment({ partialPaymentRequestId: request.id, paymentAttemptId: attempt.id, actingUserId: debtorUserId }),
+      ).rejects.toThrow(ValidationError);
+
+      const stillWaiting = await ctx.requests.findById(request.id);
+      expect(stillWaiting?.status).toBe("awaiting_payment");
+      expect(stillWaiting?.paymentAttemptId).toBeNull();
+    });
+
+    it("PP-R08-B2-6: pre-existing amount-mismatch check still fires once the payment is otherwise correctly bound to the same agreement and canonical parties", async () => {
+      const request = await proposeAndAccept(5_000);
+      const attempt = await ctx.paymentCtx.payments.insertPending({
+        idempotencyKey: `pp-b2-6-${request.id}`,
+        payerProfileKind: "personal",
+        payerProfileId: debtorProfileId,
+        recipientProfileKind: "personal",
+        recipientProfileId: creditorProfileId,
+        amountMinorUnits: 4_000, // mismatched
+        currency: "USD",
+        agreementId,
+        providerName: "sandbox",
+        initialStatus: "succeeded",
+      });
+
+      await expect(
+        ctx.partialPaymentService.recordPayment({ partialPaymentRequestId: request.id, paymentAttemptId: attempt.id, actingUserId: debtorUserId }),
+      ).rejects.toThrow(ValidationError);
+
+      const stillWaiting = await ctx.requests.findById(request.id);
+      expect(stillWaiting?.status).toBe("awaiting_payment");
+      expect(stillWaiting?.paymentAttemptId).toBeNull();
+    });
+
+    it("PP-R08-B2-7: pre-existing installment-binding check still fires once the payment is otherwise correctly bound to the same agreement and canonical parties", async () => {
+      const targetInstallmentId = randomUUID();
+      const request = await ctx.partialPaymentService.proposePartialPayment({
+        agreementId,
+        proposedAmountMinorUnits: 5_000,
+        proposedDate: "2026-03-01",
+        installmentScheduleItemId: targetInstallmentId,
+        actingUserId: debtorUserId,
+      });
+      await ctx.partialPaymentService.decidePartialPayment({ partialPaymentRequestId: request.id, actingUserId: creditorUserId, decision: "accept" });
+
+      const attempt = await ctx.paymentCtx.payments.insertPending({
+        idempotencyKey: `pp-b2-7-${request.id}`,
+        payerProfileKind: "personal",
+        payerProfileId: debtorProfileId,
+        recipientProfileKind: "personal",
+        recipientProfileId: creditorProfileId,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        agreementId,
+        providerName: "sandbox",
+        installmentScheduleItemId: randomUUID(), // a DIFFERENT installment than the request targets
+        initialStatus: "succeeded",
+      });
+
+      await expect(
+        ctx.partialPaymentService.recordPayment({ partialPaymentRequestId: request.id, paymentAttemptId: attempt.id, actingUserId: debtorUserId }),
+      ).rejects.toThrow(ValidationError);
+
+      const stillWaiting = await ctx.requests.findById(request.id);
+      expect(stillWaiting?.status).toBe("awaiting_payment");
+      expect(stillWaiting?.paymentAttemptId).toBeNull();
+    });
   });
 });

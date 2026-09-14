@@ -111,6 +111,15 @@ export class AchMandateService {
    * Bank-change hook: revokes the current active mandate (if any) and authorizes a new one for the
    * new bank account, linked back via `supersedesMandateId` — never mutates the old mandate's bank
    * reference in place, preserving the full authorization history.
+   *
+   * R08 B2 (EC1-002 correction): this method previously called only `requireOwner`, exactly the same
+   * gap the R08 B1 correction closed in `authorize()` above — owning the claimed payer profile proves
+   * nothing about that profile's relationship to `agreementId`. Left unchecked, an attacker owning any
+   * unrelated profile P could supply a victim agreement's id and have that agreement's active mandate
+   * revoked and replaced with one pointing at P and an attacker-chosen bank reference. Reuses the SAME
+   * `requirePayerIsAgreementDebtor` helper `authorize()` already uses — no duplicated logic — and runs
+   * it BEFORE `findActiveForAgreement`/`markRevoked`/the supersession audit/`insert`, so an
+   * unauthorized call produces zero persistent mutation.
    */
   async handleBankChange(input: {
     agreementId: string;
@@ -119,6 +128,7 @@ export class AchMandateService {
     actingUserId: string;
   }): Promise<AchMandateRecord> {
     await this.requireOwner(input.payer, input.actingUserId, "change this mandate's bank account");
+    await this.requirePayerIsAgreementDebtor(input.agreementId, input.payer);
     const existing = await this.deps.mandates.findActiveForAgreement(input.agreementId);
     if (existing) {
       await this.deps.mandates.markRevoked(existing.id, new Date(), "Bank account changed.");

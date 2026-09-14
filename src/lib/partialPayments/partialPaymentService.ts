@@ -109,11 +109,33 @@ export interface PartialPaymentRequestRepository {
 
 /**
  * Narrow, consumer-defined view onto a payment_attempt — this module only ever needs to confirm a
- * specific attempt succeeded and for how much, never anything else PaymentService exposes. Mirrors
- * this codebase's interface-segregation precedent (e.g. AgreementTermsReader).
+ * specific attempt succeeded, for how much, and (R08 B2 — EC1-001 correction) which agreement/parties
+ * it actually belongs to, never anything else PaymentService exposes. Mirrors this codebase's
+ * interface-segregation precedent (e.g. AgreementTermsReader).
+ *
+ * `agreementId`/`payerProfileKind`/`payerProfileId`/`recipientProfileKind`/`recipientProfileId` were
+ * added by R08 B2 so `recordPayment` can bind a payment attempt back to its canonical agreement and
+ * canonical debtor/creditor before ever trusting it to satisfy a partial-payment request — see that
+ * method's own doc comment. The concrete production implementation
+ * (`DrizzlePaymentAttemptRepository`, wired in `getPartialPaymentService.ts`) already returns the full
+ * `PaymentAttemptRecord`, which already carries every one of these fields — no repository change was
+ * required.
  */
 export interface PaymentAttemptReader {
-  findById(id: string): Promise<{ id: string; status: string; amountMinorUnits: number; installmentScheduleItemId: string | null } | null>;
+  findById(id: string): Promise<
+    | {
+        id: string;
+        status: string;
+        amountMinorUnits: number;
+        installmentScheduleItemId: string | null;
+        agreementId: string | null;
+        payerProfileKind: ProfileKind;
+        payerProfileId: string;
+        recipientProfileKind: ProfileKind;
+        recipientProfileId: string;
+      }
+    | null
+  >;
 }
 
 export interface PartialPaymentServiceDeps {
@@ -245,6 +267,19 @@ export class PartialPaymentService {
    * AchPaymentService/DebitCardPaymentService gate — never a separate money-movement path) as this
    * request's partial payment, matching §5's "Applied does not itself change agreement status beyond
    * recording the partial payment against the installment."
+   *
+   * R08 B2 (EC1-001 correction): a succeeded payment attempt proves money moved somewhere — it proves
+   * nothing about whether it moved for THIS agreement, between THIS agreement's own canonical debtor
+   * and creditor. Without the three checks below, a succeeded attempt from a completely unrelated
+   * agreement (or the right agreement but the wrong payer/recipient) could previously be linked here
+   * to falsely mark this request "applied," even though the money never reached this agreement's
+   * creditor. This mirrors `SettlementService.recordSettlementPayment`'s own, already-existing
+   * "Check 2/3/4" durable-binding precedent (same-agreement + canonical-debtor + canonical-creditor),
+   * applied here for the first time. The canonical agreement is loaded and re-authorized via
+   * `AgreementService.getAgreement` — never trusted from anything the client supplies (the request
+   * body doesn't even carry debtor/creditor fields) — before the payment attempt is ever read, so
+   * every comparison below has an authoritative baseline. No mutation (`recordApplied`, the
+   * `partial_payment_applied` audit) occurs until every check has passed.
    */
   async recordPayment(input: { partialPaymentRequestId: string; paymentAttemptId: string; actingUserId: string }): Promise<PartialPaymentRequestRecord> {
     const request = await this.requireRequest(input.partialPaymentRequestId);
@@ -252,10 +287,20 @@ export class PartialPaymentService {
       throw new ValidationError(`This action requires status "awaiting_payment", but the request is "${request.status}".`);
     }
     await this.deps.agreementService.resolvePartyRole(request.agreementId, input.actingUserId);
+    const { agreement } = await this.deps.agreementService.getAgreement(request.agreementId, input.actingUserId);
 
     const attempt = await this.deps.payments.findById(input.paymentAttemptId);
     if (!attempt || attempt.status !== "succeeded") {
       throw new ValidationError("A succeeded payment is required to apply a partial payment.");
+    }
+    if (attempt.agreementId !== request.agreementId) {
+      throw new ValidationError("This payment does not belong to this partial payment request's agreement.");
+    }
+    if (attempt.payerProfileKind !== agreement.debtorProfileKind || attempt.payerProfileId !== agreement.debtorProfileId) {
+      throw new ValidationError("This payment's payer does not match this agreement's debtor.");
+    }
+    if (attempt.recipientProfileKind !== agreement.creditorProfileKind || attempt.recipientProfileId !== agreement.creditorProfileId) {
+      throw new ValidationError("This payment's recipient does not match this agreement's creditor.");
     }
     if (attempt.amountMinorUnits !== request.proposedAmountMinorUnits) {
       throw new ValidationError("The linked payment does not match the agreed partial payment amount.");
