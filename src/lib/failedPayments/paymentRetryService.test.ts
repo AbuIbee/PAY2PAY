@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleQueryError } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createTestAchServices } from "@/lib/ach/testFakes";
-import { createTestDebitCardServices, TEST_FUTURE_CARD_EXPIRY } from "@/lib/debitCard/testFakes";
+import { createTestAchServices, seedAgreementForMandateTest } from "@/lib/ach/testFakes";
+import { createTestDebitCardServices, seedAgreementForCardTest, TEST_FUTURE_CARD_EXPIRY } from "@/lib/debitCard/testFakes";
 import { createTestFailedPaymentWorkflow, InMemoryPaymentRetryRepository } from "./testFakes";
 import { isFatalInfrastructureError, PaymentRetryService } from "./paymentRetryService";
 
@@ -37,6 +37,10 @@ describe("PaymentRetryService", () => {
         reason: null,
       });
     }
+    // R08 B1: AchMandateService.authorize now requires the payer to be this agreement's own
+    // persisted debtor (ACH-1 correction) — this suite doesn't exercise that rule itself, so it
+    // just seeds a matching agreement to keep its existing PAYER-is-debtor assumption valid.
+    seedAgreementForMandateTest(ctx.ach.agreements, agreementId, PAYER, RECIPIENT);
     await ctx.ach.achMandateService.authorize({ agreementId, payer: PAYER, bankAccountRef: "sandbox_bank_1", actingUserId: PAYER_USER_ID });
     ctx.installments.seed(installmentId, "2026-09-01");
   });
@@ -220,6 +224,10 @@ describe("PaymentRetryService", () => {
         reason: null,
       });
     }
+    // R08 B1: DebitCardMethodService.registerCard now requires the payer to be this agreement's own
+    // persisted debtor (CARD-1 correction) — this test doesn't exercise that rule itself, so it just
+    // seeds a matching agreement to keep its existing cardPayer-is-debtor assumption valid.
+    seedAgreementForCardTest(card.agreements, cardAgreementId, cardPayer, cardRecipient);
     await card.debitCardMethodService.registerCard({
       agreementId: cardAgreementId,
       payer: cardPayer,

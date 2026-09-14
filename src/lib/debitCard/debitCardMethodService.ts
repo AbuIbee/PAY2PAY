@@ -1,5 +1,6 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
+import type { AgreementRepository } from "@/lib/agreements/agreementService";
 import { ConflictError, ForbiddenError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { ProfileRef } from "@/lib/payments/paymentProvider";
@@ -63,6 +64,13 @@ export class DebitCardMethodService {
     private readonly deps: {
       cards: DebitCardMethodRepository;
       profileOwners: ProfileOwnerReader;
+      /**
+       * R08 B1 (CARD-1): narrow read-only dependency used solely to bind a registered/replaced card
+       * back to its agreement's own persisted debtor — never the entire AgreementService (this class
+       * remains structurally incapable of touching agreement status/terms; see this file's own doc
+       * comment).
+       */
+      agreements: Pick<AgreementRepository, "findById">;
       audit: AuditService;
     },
   ) {}
@@ -78,6 +86,7 @@ export class DebitCardMethodService {
     actingUserId: string;
   }): Promise<DebitCardMethodRecord> {
     await this.requireOwner(input.payer, input.actingUserId, "register a card");
+    await this.requirePayerIsAgreementDebtor(input.agreementId, input.payer);
     this.requireValidExpiry(input.expiresAtMonth, input.expiresAtYear);
     const existing = await this.deps.cards.findActiveForAgreement(input.agreementId);
     if (existing) {
@@ -116,6 +125,7 @@ export class DebitCardMethodService {
     actingUserId: string;
   }): Promise<DebitCardMethodRecord> {
     await this.requireOwner(input.payer, input.actingUserId, "replace this card");
+    await this.requirePayerIsAgreementDebtor(input.agreementId, input.payer);
     this.requireValidExpiry(input.expiresAtMonth, input.expiresAtYear);
     const existing = await this.deps.cards.findActiveForAgreement(input.agreementId);
     if (!existing) {
@@ -164,6 +174,27 @@ export class DebitCardMethodService {
     const ownerUserId = await this.deps.profileOwners.getOwnerUserId(profile.profileKind, profile.profileId);
     if (ownerUserId !== actingUserId) {
       throw new ForbiddenError(`You may only ${action} for your own profile.`);
+    }
+  }
+
+  /**
+   * R08 B1 (CARD-1 correction): owning the payer profile (`requireOwner`) proves the caller is who
+   * they claim to be — it proves nothing about whether that profile has any relationship to the
+   * client-supplied `agreementId`. Without this, an attacker who owns some unrelated profile P could
+   * supply a completely unrelated victim agreement A and have a card registered/replaced against A
+   * anyway. This closes that gap by requiring the payer be EXACTLY agreement A's own persisted
+   * debtor — never merely "a party to A" (the creditor is never an acceptable payer) and never
+   * inferred from `createdByUserId`/`relationshipId`, which are not authorization signals. Runs
+   * before any read/write of `cards` (including, for `replaceCard`, before `findActiveForAgreement`/
+   * `markReplaced`/`insert`), so an unauthorized call produces zero persistent mutation.
+   */
+  private async requirePayerIsAgreementDebtor(agreementId: string, payer: ProfileRef): Promise<void> {
+    const agreement = await this.deps.agreements.findById(agreementId);
+    if (!agreement) {
+      throw new ValidationError("Agreement not found.");
+    }
+    if (agreement.debtorProfileKind !== payer.profileKind || agreement.debtorProfileId !== payer.profileId) {
+      throw new ForbiddenError("The payer must be this agreement's own debtor.");
     }
   }
 

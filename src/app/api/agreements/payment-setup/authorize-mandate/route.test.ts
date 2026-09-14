@@ -60,6 +60,12 @@ describe("POST /api/agreements/payment-setup/authorize-mandate", () => {
     achMandateService = new AchMandateService({
       mandates: new InMemoryAchMandateRepository(),
       profileOwners: relCtx.profileOwners,
+      // R08 B1 (ACH-1): AchMandateService.authorize now requires the payer to be the supplied
+      // agreement's own persisted debtor. This route already resolves `payer` server-side from
+      // `agreement.debtorProfileKind`/`debtorProfileId` (see route.ts), so reusing the SAME
+      // agreement repository this test's `relCtx.agreementService` reads from lets that check pass
+      // for the legitimate debtor path without changing any test assertion.
+      agreements: relCtx.agreements,
       audit: new AuditService(new InMemoryAuditEventRepositoryForMandates()),
     });
   });

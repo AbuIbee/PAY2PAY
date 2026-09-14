@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
-import { createTestAchServices } from "@/lib/ach/testFakes";
+import { createTestAchServices, seedAgreementForMandateTest } from "@/lib/ach/testFakes";
 import { createAchMandateAuthorizeHandler } from "./route";
 import { createAchMandateRevokeHandler } from "./revoke/route";
 
@@ -51,6 +51,15 @@ describe("POST /api/ach/mandate", () => {
     strangerToken = stranger.token;
     ownerProfileId = randomUUID();
     ach.paymentCtx.verificationCtx.profileOwners.set("personal", ownerProfileId, owner.user.id);
+    // R08 B1: AchMandateService.authorize now requires the payer to be `authorizeBody.agreementId`'s
+    // own persisted debtor (ACH-1 correction) — this suite's own authorization boundary under test is
+    // profile ownership, not agreement-debtor binding, so it just seeds a matching agreement.
+    seedAgreementForMandateTest(
+      ach.agreements,
+      authorizeBody.agreementId,
+      { profileKind: "personal", profileId: ownerProfileId },
+      { profileKind: "business", profileId: randomUUID() },
+    );
   });
 
   function authorizeHandler() {
@@ -95,8 +104,17 @@ describe("POST /api/ach/mandate", () => {
     }
 
     it("rejects a stranger revoking someone else's mandate", async () => {
+      const revokeTestAgreementId = randomUUID();
+      // R08 B1: this direct authorize() call is only setup for the revoke test below, so it needs
+      // its own seeded agreement matching ownerProfileId as debtor (see ACH-1 correction note above).
+      seedAgreementForMandateTest(
+        ach.agreements,
+        revokeTestAgreementId,
+        { profileKind: "personal", profileId: ownerProfileId },
+        { profileKind: "business", profileId: randomUUID() },
+      );
       const mandate = await ach.achMandateService.authorize({
-        agreementId: randomUUID(),
+        agreementId: revokeTestAgreementId,
         payer: { profileKind: "personal", profileId: ownerProfileId },
         bankAccountRef: "sandbox_bank_1",
         actingUserId: ownerUserId,
