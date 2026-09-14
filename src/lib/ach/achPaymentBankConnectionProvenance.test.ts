@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createTestAchServices } from "./testFakes";
+import { createTestAchServices, seedAgreementForMandateTest } from "./testFakes";
 
 const PAYER = { profileKind: "personal" as const, profileId: "bcid-payer-1" };
 const RECIPIENT = { profileKind: "business" as const, profileId: "bcid-recipient-1" };
@@ -24,6 +24,10 @@ describe("Phase 6A: payment_attempt.bank_connection_id provenance", () => {
 
   beforeEach(async () => {
     ach = createTestAchServices();
+    // R08 B1: AchMandateService.authorize now requires the payer to be this agreement's own
+    // persisted debtor (ACH-1 correction) — this suite doesn't exercise that rule itself, so it
+    // just seeds a matching agreement to keep its existing PAYER-is-debtor assumption valid.
+    seedAgreementForMandateTest(ach.agreements, agreementId, PAYER, RECIPIENT);
     ach.paymentCtx.verificationCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
     ach.paymentCtx.verificationCtx.profileOwners.set(RECIPIENT.profileKind, RECIPIENT.profileId, RECIPIENT_USER_ID);
     for (const ref of [PAYER, RECIPIENT]) {

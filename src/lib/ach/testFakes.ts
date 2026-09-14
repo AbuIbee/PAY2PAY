@@ -1,10 +1,45 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
+import { InMemoryAgreementRepository } from "@/lib/agreements/testFakes";
+import type { AgreementRecord } from "@/lib/agreements/agreementService";
 import { createTestPaymentService } from "@/lib/payments/testFakes";
+import type { ProfileRef } from "@/lib/payments/paymentProvider";
 import { InMemoryProfileOwnerReader } from "@/lib/profiles/testFakes";
 import { AchMandateService } from "./achMandateService";
 import type { AchMandateRecord, AchMandateRepository } from "./achMandateService";
 import { AchPaymentService } from "./achPaymentService";
+
+/**
+ * R08 B1 (ACH-1): seeds a minimal, valid `AgreementRecord` directly by id in an
+ * `InMemoryAgreementRepository`, for tests that need `AchMandateService.authorize`'s new
+ * agreement-debtor-binding check to pass (or to deliberately fail with a mismatched debtor). Mirrors
+ * the existing direct `relCtx.agreements.byId.get(...)`/`.set(...)` manipulation already used in
+ * src/app/api/agreements/payment-setup/authorize-mandate/route.test.ts — not a new pattern.
+ */
+export function seedAgreementForMandateTest(
+  agreements: InMemoryAgreementRepository,
+  agreementId: string,
+  debtor: ProfileRef,
+  creditor: ProfileRef,
+): AgreementRecord {
+  const record: AgreementRecord = {
+    id: agreementId,
+    creditorProfileKind: creditor.profileKind,
+    creditorProfileId: creditor.profileId,
+    debtorProfileKind: debtor.profileKind,
+    debtorProfileId: debtor.profileId,
+    status: "active",
+    currency: "USD",
+    country: "US",
+    currentVersionId: null,
+    relationshipId: null,
+    createdByUserId: creditor.profileId,
+    createdAt: new Date(),
+    closedAt: null,
+  };
+  agreements.byId.set(agreementId, record);
+  return record;
+}
 
 /** Test-only in-memory doubles for AchMandateService, mirroring src/lib/payments/testFakes.ts's pattern. */
 
@@ -69,9 +104,10 @@ class InMemoryAuditEventRepositoryForAch implements AuditEventRepository {
 export function createTestAchMandateService() {
   const mandates = new InMemoryAchMandateRepository();
   const profileOwners = new InMemoryProfileOwnerReader();
+  const agreements = new InMemoryAgreementRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForAch();
-  const achMandateService = new AchMandateService({ mandates, profileOwners, audit: new AuditService(auditRepo) });
-  return { mandates, profileOwners, auditRepo, achMandateService };
+  const achMandateService = new AchMandateService({ mandates, profileOwners, agreements, audit: new AuditService(auditRepo) });
+  return { mandates, profileOwners, agreements, auditRepo, achMandateService };
 }
 
 /**
@@ -82,10 +118,12 @@ export function createTestAchMandateService() {
 export function createTestAchServices() {
   const paymentCtx = createTestPaymentService();
   const mandates = new InMemoryAchMandateRepository();
+  const agreements = new InMemoryAgreementRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForAch();
   const achMandateService = new AchMandateService({
     mandates,
     profileOwners: paymentCtx.verificationCtx.profileOwners,
+    agreements,
     audit: new AuditService(auditRepo),
   });
   const achPaymentService = new AchPaymentService({
@@ -93,5 +131,5 @@ export function createTestAchServices() {
     payments: paymentCtx.paymentService,
     paymentAttempts: paymentCtx.payments,
   });
-  return { paymentCtx, mandates, auditRepo, achMandateService, achPaymentService };
+  return { paymentCtx, mandates, agreements, auditRepo, achMandateService, achPaymentService };
 }

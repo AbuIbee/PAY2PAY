@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
-import { createTestAchServices } from "@/lib/ach/testFakes";
+import { createTestAchServices, seedAgreementForMandateTest } from "@/lib/ach/testFakes";
 import { createAchManualPaymentHandler } from "./route";
 
 /**
@@ -53,6 +53,15 @@ describe("POST /api/ach/payments/manual", () => {
         reason: null,
       });
     }
+    // R08 B1: AchMandateService.authorize now requires the payer to be this agreement's own
+    // persisted debtor (ACH-1 correction) — this suite doesn't exercise that rule itself, so it
+    // just seeds a matching agreement to keep its existing payerProfileId-is-debtor assumption valid.
+    seedAgreementForMandateTest(
+      ach.agreements,
+      agreementId,
+      { profileKind: "personal", profileId: payerProfileId },
+      { profileKind: "personal", profileId: recipientProfileId },
+    );
     await ach.achMandateService.authorize({
       agreementId,
       payer: { profileKind: "personal", profileId: payerProfileId },

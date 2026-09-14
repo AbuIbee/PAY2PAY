@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
-import { createTestDebitCardServices, TEST_FUTURE_CARD_EXPIRY } from "@/lib/debitCard/testFakes";
+import { createTestDebitCardServices, seedAgreementForCardTest, TEST_FUTURE_CARD_EXPIRY } from "@/lib/debitCard/testFakes";
 import { createDebitCardSubmitHandler } from "./route";
 
 /**
@@ -67,6 +67,10 @@ describe("POST /api/debit-card/payments/submit", () => {
         reason: null,
       });
     }
+    // R08 B1: DebitCardMethodService.registerCard now requires the payer to be this agreement's own
+    // persisted debtor (CARD-1 correction) — this suite doesn't exercise that rule itself, so it
+    // just seeds a matching agreement to keep its existing PAYER_PROFILE-is-debtor assumption valid.
+    seedAgreementForCardTest(card.agreements, agreementId, PAYER_PROFILE, RECIPIENT_PROFILE);
     await card.debitCardMethodService.registerCard({
       agreementId,
       payer: PAYER_PROFILE,

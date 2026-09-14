@@ -1,11 +1,45 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
+import { InMemoryAgreementRepository } from "@/lib/agreements/testFakes";
+import type { AgreementRecord } from "@/lib/agreements/agreementService";
 import { createTestPaymentService } from "@/lib/payments/testFakes";
+import type { ProfileRef } from "@/lib/payments/paymentProvider";
 import { InMemoryProfileOwnerReader } from "@/lib/profiles/testFakes";
 import type { AgreementFeeAllocationReader, FeeAllocation } from "./agreementFeeAllocationReader";
 import { DebitCardMethodService } from "./debitCardMethodService";
 import type { DebitCardMethodRecord, DebitCardMethodRepository } from "./debitCardMethodService";
 import { DebitCardPaymentService } from "./debitCardPaymentService";
+
+/**
+ * R08 B1 (CARD-1): seeds a minimal, valid `AgreementRecord` directly by id in an
+ * `InMemoryAgreementRepository`, for tests that need `DebitCardMethodService.registerCard`/
+ * `replaceCard`'s new agreement-debtor-binding check to pass (or to deliberately fail with a
+ * mismatched debtor). Mirrors `src/lib/ach/testFakes.ts`'s identical `seedAgreementForMandateTest`.
+ */
+export function seedAgreementForCardTest(
+  agreements: InMemoryAgreementRepository,
+  agreementId: string,
+  debtor: ProfileRef,
+  creditor: ProfileRef,
+): AgreementRecord {
+  const record: AgreementRecord = {
+    id: agreementId,
+    creditorProfileKind: creditor.profileKind,
+    creditorProfileId: creditor.profileId,
+    debtorProfileKind: debtor.profileKind,
+    debtorProfileId: debtor.profileId,
+    status: "active",
+    currency: "USD",
+    country: "US",
+    currentVersionId: null,
+    relationshipId: null,
+    createdByUserId: creditor.profileId,
+    createdAt: new Date(),
+    closedAt: null,
+  };
+  agreements.byId.set(agreementId, record);
+  return record;
+}
 
 /** Test-only in-memory doubles for DebitCardMethodService/DebitCardPaymentService, mirroring src/lib/ach/testFakes.ts's pattern. */
 
@@ -87,9 +121,10 @@ class InMemoryAuditEventRepositoryForDebitCard implements AuditEventRepository {
 export function createTestDebitCardMethodService() {
   const cards = new InMemoryDebitCardMethodRepository();
   const profileOwners = new InMemoryProfileOwnerReader();
+  const agreements = new InMemoryAgreementRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForDebitCard();
-  const debitCardMethodService = new DebitCardMethodService({ cards, profileOwners, audit: new AuditService(auditRepo) });
-  return { cards, profileOwners, auditRepo, debitCardMethodService };
+  const debitCardMethodService = new DebitCardMethodService({ cards, profileOwners, agreements, audit: new AuditService(auditRepo) });
+  return { cards, profileOwners, agreements, auditRepo, debitCardMethodService };
 }
 
 /**
@@ -100,11 +135,13 @@ export function createTestDebitCardMethodService() {
 export function createTestDebitCardServices() {
   const paymentCtx = createTestPaymentService();
   const cards = new InMemoryDebitCardMethodRepository();
+  const agreements = new InMemoryAgreementRepository();
   const feeAllocation = new InMemoryAgreementFeeAllocationReader();
   const auditRepo = new InMemoryAuditEventRepositoryForDebitCard();
   const debitCardMethodService = new DebitCardMethodService({
     cards,
     profileOwners: paymentCtx.verificationCtx.profileOwners,
+    agreements,
     audit: new AuditService(auditRepo),
   });
   const debitCardPaymentService = new DebitCardPaymentService({
@@ -113,7 +150,7 @@ export function createTestDebitCardServices() {
     paymentAttempts: paymentCtx.payments,
     feeAllocation,
   });
-  return { paymentCtx, cards, feeAllocation, auditRepo, debitCardMethodService, debitCardPaymentService };
+  return { paymentCtx, cards, agreements, feeAllocation, auditRepo, debitCardMethodService, debitCardPaymentService };
 }
 
 /** Convenience: a valid, far-future (never expires in a test's lifetime) expiry pair. */

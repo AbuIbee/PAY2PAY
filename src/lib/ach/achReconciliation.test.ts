@@ -4,7 +4,7 @@ import { InMemoryReconciliationExceptionRepository } from "@/lib/ledger/testFake
 import { createTestBalanceService, createTestLedgerService } from "@/lib/ledger/testFakes";
 import { ReconciliationService } from "@/lib/ledger/reconciliationService";
 import { createTestPaymentWebhookService } from "@/lib/payments/testFakes";
-import { createTestAchServices } from "./testFakes";
+import { createTestAchServices, seedAgreementForMandateTest } from "./testFakes";
 
 const PAYER = { profileKind: "personal" as const, profileId: "recon-ach-payer-1" };
 const RECIPIENT = { profileKind: "business" as const, profileId: "recon-ach-recipient-1" };
@@ -55,6 +55,10 @@ describe("PRSprint 23: ACH-specific reconciliation", () => {
         reason: null,
       });
     }
+    // R08 B1: AchMandateService.authorize now requires the payer to be this agreement's own
+    // persisted debtor (ACH-1 correction) — this suite doesn't exercise that rule itself, so it
+    // just seeds a matching agreement to keep its existing PAYER-is-debtor assumption valid.
+    seedAgreementForMandateTest(ach.agreements, agreementId, PAYER, RECIPIENT);
     await ach.achMandateService.authorize({ agreementId, payer: PAYER, bankAccountRef: "sandbox_bank_1", actingUserId: PAYER_USER_ID });
   });
 

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ConflictError, ValidationError } from "@/lib/errors";
 import { createTestBalanceService, createTestLedgerService } from "@/lib/ledger/testFakes";
 import { createTestPaymentWebhookService } from "@/lib/payments/testFakes";
-import { createTestAchServices } from "./testFakes";
+import { createTestAchServices, seedAgreementForMandateTest } from "./testFakes";
 
 const PAYER = { profileKind: "personal" as const, profileId: "payer-1" };
 const RECIPIENT = { profileKind: "business" as const, profileId: "recipient-1" };
@@ -39,6 +39,10 @@ describe("AchPaymentService", () => {
         reason: null,
       });
     }
+    // R08 B1: AchMandateService.authorize now requires the payer to be this agreement's own
+    // persisted debtor (ACH-1 correction) — this suite doesn't exercise that rule itself, so it
+    // just seeds a matching agreement to keep its existing PAYER-is-debtor assumption valid.
+    seedAgreementForMandateTest(ach.agreements, agreementId, PAYER, RECIPIENT);
     await ach.achMandateService.authorize({
       agreementId,
       payer: PAYER,

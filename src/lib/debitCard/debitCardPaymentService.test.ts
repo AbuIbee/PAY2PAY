@@ -4,7 +4,7 @@ import { ConflictError, ValidationError } from "@/lib/errors";
 import { createTestBalanceService, createTestLedgerService } from "@/lib/ledger/testFakes";
 import { createTestPaymentWebhookService } from "@/lib/payments/testFakes";
 import { computeCardProcessorFeeMinorUnits } from "./cardFeeAllocation";
-import { createTestDebitCardServices, TEST_FUTURE_CARD_EXPIRY, TEST_PAST_CARD_EXPIRY } from "./testFakes";
+import { createTestDebitCardServices, seedAgreementForCardTest, TEST_FUTURE_CARD_EXPIRY, TEST_PAST_CARD_EXPIRY } from "./testFakes";
 
 const PAYER = { profileKind: "personal" as const, profileId: "payer-1" };
 const RECIPIENT = { profileKind: "business" as const, profileId: "recipient-1" };
@@ -41,6 +41,11 @@ describe("DebitCardPaymentService", () => {
         reason: null,
       });
     }
+    // R08 B1: DebitCardMethodService.registerCard/replaceCard now require the payer to be this
+    // agreement's own persisted debtor (CARD-1 correction) — this suite doesn't exercise that rule
+    // itself, so it just seeds a matching agreement to keep its existing PAYER-is-debtor assumption
+    // valid.
+    seedAgreementForCardTest(card.agreements, agreementId, PAYER, RECIPIENT);
     await card.debitCardMethodService.registerCard({
       agreementId,
       payer: PAYER,

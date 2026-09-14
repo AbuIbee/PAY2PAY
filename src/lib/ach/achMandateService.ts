@@ -1,5 +1,6 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
+import type { AgreementRepository } from "@/lib/agreements/agreementService";
 import { ConflictError, ForbiddenError, ValidationError } from "@/lib/errors";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { ProfileRef } from "@/lib/payments/paymentProvider";
@@ -57,6 +58,12 @@ export class AchMandateService {
     private readonly deps: {
       mandates: AchMandateRepository;
       profileOwners: ProfileOwnerReader;
+      /**
+       * R08 B1 (ACH-1): narrow read-only dependency used solely to bind an authorized mandate back to
+       * its agreement's own persisted debtor — never the entire AgreementService (this class remains
+       * structurally incapable of touching agreement status/terms; see this file's own doc comment).
+       */
+      agreements: Pick<AgreementRepository, "findById">;
       audit: AuditService;
     },
   ) {}
@@ -68,6 +75,7 @@ export class AchMandateService {
     actingUserId: string;
   }): Promise<AchMandateRecord> {
     await this.requireOwner(input.payer, input.actingUserId, "authorize a mandate");
+    await this.requirePayerIsAgreementDebtor(input.agreementId, input.payer);
     const existing = await this.deps.mandates.findActiveForAgreement(input.agreementId);
     if (existing) {
       throw new ConflictError("An active mandate already exists for this agreement.");
@@ -139,6 +147,27 @@ export class AchMandateService {
     const ownerUserId = await this.deps.profileOwners.getOwnerUserId(profile.profileKind, profile.profileId);
     if (ownerUserId !== actingUserId) {
       throw new ForbiddenError(`You may only ${action} for your own profile.`);
+    }
+  }
+
+  /**
+   * R08 B1 (ACH-1 correction): owning the payer profile (`requireOwner`) proves the caller is who
+   * they claim to be — it proves nothing about whether that profile has any relationship to the
+   * client-supplied `agreementId`. Without this, an attacker who owns some unrelated profile P could
+   * supply a completely unrelated victim agreement A and have a mandate created against A anyway
+   * (`requireOwner` succeeds for P, and nothing previously checked P against A at all). This closes
+   * that gap by requiring the payer be EXACTLY agreement A's own persisted debtor — never merely "a
+   * party to A" (the creditor is never an acceptable payer) and never inferred from
+   * `createdByUserId`/`relationshipId`, which are not authorization signals. Performs no mutation;
+   * runs before any mandate lookup/insert, so an unauthorized call leaves zero trace.
+   */
+  private async requirePayerIsAgreementDebtor(agreementId: string, payer: ProfileRef): Promise<void> {
+    const agreement = await this.deps.agreements.findById(agreementId);
+    if (!agreement) {
+      throw new ValidationError("Agreement not found.");
+    }
+    if (agreement.debtorProfileKind !== payer.profileKind || agreement.debtorProfileId !== payer.profileId) {
+      throw new ForbiddenError("The payer must be this agreement's own debtor.");
     }
   }
 
