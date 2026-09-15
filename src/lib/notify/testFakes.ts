@@ -11,6 +11,8 @@ import type {
   NotificationEventRepository,
   NotificationPreferenceRepository,
   NotificationServiceOptions,
+  SmsConsentRecord,
+  SmsConsentRepository,
   SmsOptOutRepository,
   UserContactReader,
 } from "./notificationService";
@@ -261,6 +263,91 @@ export class InMemorySmsOptOutRepository implements SmsOptOutRepository {
   }
 }
 
+/**
+ * B0-B: in-memory double for the SMS consent gate. `find` returns `null` (no consent) for any userId
+ * never explicitly touched — the real, mandatory default-off behavior — UNLESS `defaultActive` is set
+ * at construction time (see `createTestNotificationService`'s own doc comment for why the shared,
+ * generic test factory opts into that convenience rather than requiring every one of the dozens of
+ * pre-existing, unrelated tests it already serves to separately grant SMS consent). `setActive` is a
+ * raw test-only override, independent of `activate`/`withdraw`'s own audit-adjacent semantics, for
+ * tests that need to force a specific state directly.
+ */
+/**
+ * B0-B-001 correction: `defaultActive`'s synthesized record now resolves its `consentedPhoneE164` from
+ * the same `contactsForDefault` reader the shared factory already constructs `contacts` from (passed
+ * in by `createTestNotificationService`), so the permissive-default fixture stays internally
+ * consistent with the new destination-equality rule — a test that calls `contacts.setPhone(userId, x)`
+ * and relies on the default-active convenience gets a synthesized consent that genuinely covers `x`,
+ * not a stale/unrelated placeholder phone that the new equality check would immediately reject. Tests
+ * that specifically exercise phone-binding call `activate`/`setActive` explicitly instead, which are
+ * unaffected by this default-synthesis path.
+ */
+export class InMemorySmsConsentRepository implements SmsConsentRepository {
+  private byUserId = new Map<string, SmsConsentRecord>();
+
+  constructor(
+    private readonly defaultActive: boolean = false,
+    private readonly contactsForDefault?: InMemoryUserContactReader,
+  ) {}
+
+  /** Test-only introspection — the number of userIds this fake has ever explicitly recorded a row for (never counts `defaultActive`'s synthesized responses, which are never persisted). Used to prove no consent row is ever fabricated for an unregistered invitation recipient. */
+  get recordedCount(): number {
+    return this.byUserId.size;
+  }
+
+  async find(userId: string): Promise<SmsConsentRecord | null> {
+    const existing = this.byUserId.get(userId);
+    if (existing) return existing;
+    if (!this.defaultActive) return null;
+    const phone = (await this.contactsForDefault?.getPhone(userId)) ?? null;
+    return { userId, active: true, consentedPhoneE164: phone, consentedAt: new Date(0), withdrawnAt: null, source: "web_form", disclosureVersion: "test-default" };
+  }
+
+  async activate(userId: string, input: { source: string; disclosureVersion: string; consentedPhoneE164: string; at: Date }): Promise<SmsConsentRecord> {
+    const record: SmsConsentRecord = {
+      userId,
+      active: true,
+      consentedPhoneE164: input.consentedPhoneE164,
+      consentedAt: input.at,
+      withdrawnAt: null,
+      source: input.source,
+      disclosureVersion: input.disclosureVersion,
+    };
+    this.byUserId.set(userId, record);
+    return record;
+  }
+
+  async withdraw(userId: string, at: Date): Promise<SmsConsentRecord> {
+    const previous = this.byUserId.get(userId);
+    const record: SmsConsentRecord = {
+      userId,
+      active: false,
+      // Preserved (never cleared) — mirrors DrizzleSmsConsentRepository's identical real behavior.
+      consentedPhoneE164: previous?.consentedPhoneE164 ?? null,
+      consentedAt: previous?.consentedAt ?? null,
+      withdrawnAt: at,
+      source: previous?.source ?? null,
+      disclosureVersion: previous?.disclosureVersion ?? null,
+    };
+    this.byUserId.set(userId, record);
+    return record;
+  }
+
+  /** Test-only raw override — bypasses activate/withdraw's own field semantics entirely. Lets a test force an exact (active, consentedPhoneE164) pair directly, e.g. to simulate "consent still says active for the OLD phone" after a simulated phone change. */
+  setActive(userId: string, active: boolean, consentedPhoneE164?: string | null): void {
+    const previous = this.byUserId.get(userId);
+    this.byUserId.set(userId, {
+      userId,
+      active,
+      consentedPhoneE164: consentedPhoneE164 !== undefined ? consentedPhoneE164 : (previous?.consentedPhoneE164 ?? null),
+      consentedAt: previous?.consentedAt ?? null,
+      withdrawnAt: previous?.withdrawnAt ?? null,
+      source: previous?.source ?? null,
+      disclosureVersion: previous?.disclosureVersion ?? null,
+    });
+  }
+}
+
 class InMemoryAuditEventRepositoryForNotify implements AuditEventRepository {
   events: AuditEventRecord[] = [];
   private nextId = 1;
@@ -276,16 +363,32 @@ class InMemoryAuditEventRepositoryForNotify implements AuditEventRepository {
   }
 }
 
-/** PRSprint 16, requirement #17: `audit`/`auditRepo` let tests assert on the preference-change audit trail; both are optional to consume — most existing tests never touch them, so this is purely additive. */
-export function createTestNotificationService(options?: NotificationServiceOptions, appUrl: string = "https://app.test") {
+/**
+ * PRSprint 16, requirement #17: `audit`/`auditRepo` let tests assert on the preference-change audit
+ * trail; both are optional to consume — most existing tests never touch them, so this is purely
+ * additive.
+ *
+ * B0-B: `smsConsentDefaultActive` (default `true`) makes the returned `smsConsents` fake treat every
+ * userId as already consented, purely so the dozens of pre-existing tests that already call this
+ * shared, generic factory to exercise OTHER behavior (critical-type overrides, retry/backoff,
+ * provider-status webhooks, etc.) via a phone+SMS setup keep testing exactly what they already test,
+ * without each one separately granting SMS consent for a precondition unrelated to what it's actually
+ * verifying. This is a test-fixture-only convenience — it has no bearing on production behavior, where
+ * `DrizzleSmsConsentRepository.find` genuinely returns no row (and therefore `active: false`) for any
+ * real user who has never touched the control, exactly as the mandatory default-off rule requires.
+ * Tests that specifically exercise the consent gate itself pass `smsConsentDefaultActive: false`
+ * explicitly (see notificationService.smsConsent.test.ts) to get the real, strict default.
+ */
+export function createTestNotificationService(options?: NotificationServiceOptions, appUrl: string = "https://app.test", smsConsentDefaultActive: boolean = true) {
   const events = new InMemoryNotificationEventRepository();
   const preferences = new InMemoryNotificationPreferenceRepository();
   const contacts = new InMemoryUserContactReader();
   const emailSender = new InMemoryEmailSender();
   const smsSender = new InMemorySmsSender();
   const smsOptOuts = new InMemorySmsOptOutRepository();
+  const smsConsents = new InMemorySmsConsentRepository(smsConsentDefaultActive, contacts);
   const auditRepo = new InMemoryAuditEventRepositoryForNotify();
   const audit = new AuditService(auditRepo);
-  const notificationService = new NotificationService({ events, preferences, emailSender, smsSender, contacts, smsOptOuts, appUrl, audit }, options);
-  return { events, preferences, contacts, emailSender, smsSender, smsOptOuts, appUrl, auditRepo, audit, notificationService };
+  const notificationService = new NotificationService({ events, preferences, emailSender, smsSender, contacts, smsOptOuts, smsConsents, appUrl, audit }, options);
+  return { events, preferences, contacts, emailSender, smsSender, smsOptOuts, smsConsents, appUrl, auditRepo, audit, notificationService };
 }

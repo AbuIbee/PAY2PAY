@@ -52,4 +52,11 @@ describe("HomePage", () => {
     expect(screen.getAllByText("C2B").length).toBeGreaterThan(0);
     expect(screen.getAllByText("B2B").length).toBeGreaterThan(0);
   });
+
+  it("B0-A: uses the current Paid2You brand, not the stale PAY2PAY name", () => {
+    render(<HomePage />);
+    const bodyText = document.body.textContent ?? "";
+    expect(bodyText).not.toContain("PAY2PAY");
+    expect(bodyText).toContain("Paid2You");
+  });
 });

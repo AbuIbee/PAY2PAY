@@ -351,6 +351,13 @@
       "when": 1789275796380,
       "tag": "0049_r11_pass_b2_settlement_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1789442772044,
+      "tag": "0050_small_human_torch",
+      "breakpoints": true
     }
   ]
 }

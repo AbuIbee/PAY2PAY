@@ -5,7 +5,7 @@ import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventReposi
 import { getAgreementService } from "@/lib/agreements/getAgreementService";
 import { getEmailSender } from "@/lib/notify/getEmailSender";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
-import { getSmsSender } from "@/lib/notify/getSmsSender";
+import { DrizzleRegisteredPhoneReader } from "@/lib/notify/drizzleRegisteredPhoneReader";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { DrizzleUserLookupReader } from "@/lib/relationships/drizzleUserLookupReader";
 import { getStaffService } from "@/lib/staff/getStaffService";
@@ -27,10 +27,10 @@ export function getAgreementInvitationService(): AgreementInvitationService {
       profileDisplay: new DrizzleProfileDisplayReader(),
       staffService: getStaffService(),
       users: new DrizzleUserLookupReader(),
+      registeredPhones: new DrizzleRegisteredPhoneReader(),
       userEmails: new DrizzleUserEmailReader(),
       notifications: getNotificationService(),
       emailSender: getEmailSender(),
-      smsSender: getSmsSender(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
       appUrl: APP_URL,
     });

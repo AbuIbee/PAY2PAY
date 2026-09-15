@@ -29,6 +29,13 @@ type LoadState = "loading" | "ready" | "error";
  * this deliberately does not fabricate a case list/detail UI against an API
  * that doesn't exist. What IS real and user-facing: appealing a decision
  * (GET /api/appeals, POST /api/appeals/submit), which this renders in full.
+ *
+ * B0-A: this component is now mounted only for an already-confirmed
+ * authenticated visitor (see PublicSupport.tsx, which gates rendering this
+ * behind a session check) — it no longer renders its own "Need help?"
+ * contact card, since PublicSupport.tsx's public-facing categories replace
+ * that entirely (and no longer reference the stale support@pay2pay.com
+ * address — see PublicSupport.tsx's own doc comment for that decision).
  */
 export function SupportAppeals() {
   const [state, setState] = useState<LoadState>("loading");
@@ -85,19 +92,6 @@ export function SupportAppeals() {
 
   return (
     <div>
-      <div className="card">
-        <div className="card__header">
-          <h2>Need help?</h2>
-        </div>
-        <p style={{ margin: 0, color: "var(--ink-soft)" }}>
-          For account, agreement, or payment questions, email{" "}
-          <a href="mailto:support@pay2pay.com">support@pay2pay.com</a> and our team will follow up.
-          If you&apos;re appealing a specific decision made against your account (a restriction,
-          suspension, or dispute outcome), use the form below instead — appeals are reviewed by
-          someone independent of the original decision.
-        </p>
-      </div>
-
       <div className="card">
         <div className="card__header">
           <h2>Your appeals</h2>

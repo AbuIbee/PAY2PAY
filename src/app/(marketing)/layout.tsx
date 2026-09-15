@@ -7,9 +7,9 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
     <div className="app-shell">
       <header className="app-header">
         <div className="header-inner">
-          <Link className="brand" href="/" aria-label="PAY2PAY home">
+          <Link className="brand" href="/" aria-label="Paid2You home">
             <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-            <span>PAY2PAY</span>
+            <span>Paid2You</span>
           </Link>
           <div style={{ marginInlineStart: "auto", display: "flex", alignItems: "center" }}>
             <AuthNavCta />
@@ -24,7 +24,7 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
         <div className="footer-inner">
           <Link className="brand brand--footer" href="/">
             <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-            <span>PAY2PAY</span>
+            <span>Paid2You</span>
           </Link>
           <p>Clear terms. Mutual approval. Documented repayment.</p>
           <nav aria-label="Footer navigation">
@@ -33,7 +33,7 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
             <Link href="/support">Support</Link>
             <Link href="/accessibility">Accessibility</Link>
           </nav>
-          <small>© 2026 PAY2PAY.</small>
+          <small>© 2026 Paid2You.</small>
         </div>
       </footer>
     </div>

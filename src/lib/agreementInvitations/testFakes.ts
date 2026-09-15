@@ -11,6 +11,8 @@ import type {
   AgreementInvitationRepository,
   AgreementInvitationStatus,
   ProfileDisplayReader,
+  RegisteredPhoneLookupResult,
+  RegisteredPhoneReader,
   UserEmailReader,
   UserLookupReader,
 } from "./agreementInvitationService";
@@ -157,6 +159,30 @@ export class InMemoryUserLookupReader implements UserLookupReader {
   }
 }
 
+/** B0-B blocker correction: mirrors InMemoryUserLookupReader's identical pattern for the phone-based signal. */
+/**
+ * B0-B-003 correction: a `Map<phone, Set<userId>>` (not a single value) so tests can register more
+ * than one DISTINCT user against the same phone to simulate the ambiguous-match condition directly,
+ * without needing a real duplicate-credential database fixture.
+ */
+export class InMemoryRegisteredPhoneReader implements RegisteredPhoneReader {
+  private userIdsByPhone = new Map<string, Set<string>>();
+
+  /** Registers `userId` as holding an active verified credential for `phone`. Call more than once with the same phone and different userIds to simulate ambiguity; call twice with the SAME phone and SAME userId (e.g. two credential rows for one person) to prove that is NOT treated as ambiguous. */
+  register(phone: string, userId: string): void {
+    const set = this.userIdsByPhone.get(phone) ?? new Set<string>();
+    set.add(userId);
+    this.userIdsByPhone.set(phone, set);
+  }
+
+  async findUserIdByVerifiedPhone(phone: string): Promise<RegisteredPhoneLookupResult> {
+    const userIds = this.userIdsByPhone.get(phone);
+    if (!userIds || userIds.size === 0) return { kind: "no_match" };
+    if (userIds.size === 1) return { kind: "unique_match", userId: [...userIds][0]! };
+    return { kind: "ambiguous_match" };
+  }
+}
+
 export class InMemoryUserEmailReader implements UserEmailReader {
   emailByUserId = new Map<string, string>();
 
@@ -202,7 +228,14 @@ class InMemoryAuditEventRepositoryForAgreementInvitations implements AuditEventR
  * succeed, exactly as production wires them (both ultimately read the same `business_staff_member`/
  * profile-ownership tables).
  */
-export function createTestAgreementInvitationService(appUrl = "https://paid2you.example") {
+/**
+ * B0-B blocker correction: `smsConsentDefaultActive` (default `true`) is threaded straight through
+ * to `createTestNotificationService`'s own identical parameter — see that file's doc comment for why
+ * the shared, permissive default exists (so the dozens of pre-existing tests here that have nothing
+ * to do with SMS consent don't need to separately grant it). Tests that specifically exercise the
+ * invitation-SMS consent gate pass `false` to get the real, strict default.
+ */
+export function createTestAgreementInvitationService(appUrl = "https://paid2you.example", smsConsentDefaultActive = true) {
   // Decision 3 (centralized auto-connection): mirrors production's own lazy-wrapper fix for the
   // AgreementService <-> RelationshipService circular dependency (see getAgreementService.ts's own
   // doc comment) — `agreementCtx` needs a connectionEstablisher at construction time, but
@@ -223,9 +256,10 @@ export function createTestAgreementInvitationService(appUrl = "https://paid2you.
     },
   };
   const agreementCtx = createTestAgreementService(undefined, undefined, connectionEstablisher);
-  const notificationCtx = createTestNotificationService();
+  const notificationCtx = createTestNotificationService(undefined, undefined, smsConsentDefaultActive);
   const invitations = new InMemoryAgreementInvitationRepository();
   const users = new InMemoryUserLookupReader();
+  const registeredPhones = new InMemoryRegisteredPhoneReader();
   const userEmails = new InMemoryUserEmailReader();
   const profileDisplay = new InMemoryProfileDisplayReader();
   const auditRepo = new InMemoryAuditEventRepositoryForAgreementInvitations();
@@ -240,13 +274,13 @@ export function createTestAgreementInvitationService(appUrl = "https://paid2you.
     profileDisplay,
     staffService: agreementCtx.staffCtx.staffService,
     users,
+    registeredPhones,
     userEmails,
     notifications: notificationCtx.notificationService,
     emailSender: notificationCtx.emailSender,
-    smsSender: notificationCtx.smsSender,
     audit,
     appUrl,
   });
 
-  return { invitationService, invitations, agreementCtx, notificationCtx, users, userEmails, profileDisplay, auditRepo, relationshipCtx };
+  return { invitationService, invitations, agreementCtx, notificationCtx, users, registeredPhones, userEmails, profileDisplay, auditRepo, relationshipCtx };
 }

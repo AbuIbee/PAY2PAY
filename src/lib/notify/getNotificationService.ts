@@ -4,6 +4,7 @@ import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { DrizzleNotificationEventRepository } from "./drizzleNotificationEventRepository";
 import { DrizzleNotificationPreferenceRepository } from "./drizzleNotificationPreferenceRepository";
+import { DrizzleSmsConsentRepository } from "./drizzleSmsConsentRepository";
 import { DrizzleSmsOptOutRepository } from "./drizzleSmsOptOutRepository";
 import { DrizzleUserContactReader } from "./drizzleUserContactReader";
 import { getEmailSender } from "./getEmailSender";
@@ -22,6 +23,7 @@ export function getNotificationService(): NotificationService {
       smsSender: getSmsSender(),
       contacts: new DrizzleUserContactReader(),
       smsOptOuts: new DrizzleSmsOptOutRepository(),
+      smsConsents: new DrizzleSmsConsentRepository(),
       appUrl: APP_URL,
       audit: new AuditService(new DrizzleAuditEventRepository()),
     });

@@ -112,6 +112,61 @@ export interface SmsOptOutRepository {
 }
 
 /**
+ * B0-B: the durable, per-user SMS consent record — see src/db/schema/smsConsent.ts's own doc comment
+ * for why this is a separate concept from both `notification_preference` and `sms_opt_out`.
+ *
+ * Codex B0-B blocker correction (B0-B-001): `consentedPhoneE164` is the exact, normalized, verified
+ * phone the most recent affirmative activation covered — never the raw phone a client supplied. A
+ * consent row is only ever effectively active when this exactly equals the user's CURRENT verified
+ * phone (see `getSmsConsentStatus`/`deliver`'s own doc comments) — so a phone replacement always
+ * requires a fresh affirmative activation, with no separate "did the phone change" detection needed
+ * anywhere else in the codebase.
+ */
+export interface SmsConsentRecord {
+  userId: string;
+  active: boolean;
+  consentedPhoneE164: string | null;
+  consentedAt: Date | null;
+  withdrawnAt: Date | null;
+  source: string | null;
+  disclosureVersion: string | null;
+}
+
+/** Real implementation: DrizzleSmsConsentRepository. `find` returns null for a user who has never touched the control at all — the mandatory default-off state (see this pass's own "DEFAULT-OFF RULE"). */
+export interface SmsConsentRepository {
+  find(userId: string): Promise<SmsConsentRecord | null>;
+  /** `consentedPhoneE164` is always the caller's own already-resolved, already-verified current phone — never a value accepted from a client request. */
+  activate(userId: string, input: { source: string; disclosureVersion: string; consentedPhoneE164: string; at: Date }): Promise<SmsConsentRecord>;
+  withdraw(userId: string, at: Date): Promise<SmsConsentRecord>;
+}
+
+/** B0-B: what the UI/API need to render and act on the user's own SMS consent state honestly. */
+export interface SmsConsentStatus {
+  /** The raw stored consent flag. */
+  active: boolean;
+  /**
+   * `active` combined with the carrier-level STOP suppression AND (B0-B-001 correction) destination
+   * equality — never true if the phone has opted out via STOP, and never true if the user's CURRENT
+   * verified phone no longer matches the phone their consent actually covered, even if `active` still
+   * reads true (see NotificationService.deliver's identical reconciliation). This is the value any UI
+   * must treat as "is SMS actually on."
+   */
+  effectiveActive: boolean;
+  /**
+   * B0-B-001 correction: true when `active` is still true, a verified phone exists, but it no longer
+   * matches `consentedPhoneE164` — the specific "you must re-consent for your new number" state, kept
+   * distinct from "never consented at all" so the UI can explain *why* SMS is off rather than just
+   * that it is.
+   */
+  phoneChangedSinceConsent: boolean;
+  consentedAt: Date | null;
+  withdrawnAt: Date | null;
+  source: string | null;
+  disclosureVersion: string | null;
+  eligibility: SmsEligibility;
+}
+
+/**
  * PRSprint 16 (docs/prsprints/PRSPRINT_16_NOTIFICATION_PREFERENCES_DELIVERY_HISTORY.md), requirement
  * #5/#6: what the app actually knows about a user's ability to receive SMS, distinct from whether
  * they've *chosen* to (that's the ordinary preference row). `phoneVerified` mirrors exactly what
@@ -210,6 +265,8 @@ export class NotificationService {
       contacts: UserContactReader;
       /** PRSprint 15: STOP-driven suppression — checked before every SMS send attempt. */
       smsOptOuts: SmsOptOutRepository;
+      /** B0-B: the affirmative web-form consent gate — checked before every SMS send attempt, for both critical and non-critical notification types (see this class's own `deliver` doc comment). */
+      smsConsents: SmsConsentRepository;
       /** PRSprint 14: base URL used to build the CTA link on an email notification, when the event has a `relatedAgreementId` to link to (see `buildCtaUrl`). Mirrors AgreementInvitationService/AuthService's own identical `appUrl` dependency. */
       appUrl: string;
       /** PRSprint 16, requirement #17: records a preference change to the audit trail. Optional — mirrors PaymentWebhookService's own "notifications remain optional" precedent; a missing/failing audit write must never block the preference update it's recording. */
@@ -595,6 +652,113 @@ export class NotificationService {
     await this.deps.smsOptOuts.recordOptOut(phone, "stop_keyword");
   }
 
+  /**
+   * B0-B: the authoritative, honest answer to "is this user's transactional SMS actually on right
+   * now" — always the caller's own userId (every route calling this derives it from the session, never
+   * a client-supplied id). `effectiveActive` reconciles the stored consent flag against BOTH the
+   * phone-keyed `sms_opt_out` suppression AND (B0-B-001 correction) live destination equality, so a
+   * carrier-level STOP or a since-changed phone number are never contradicted by a stale `active: true`
+   * row the user never came back to toggle off — see `deliver`'s identical reconciliation for why this
+   * must never diverge between "what the UI shows" and "what actually sends."
+   */
+  async getSmsConsentStatus(userId: string): Promise<SmsConsentStatus> {
+    const [consent, eligibility] = await Promise.all([this.deps.smsConsents.find(userId), this.getSmsEligibility(userId)]);
+    const active = consent?.active ?? false;
+    const currentPhone = eligibility.phoneVerified ? await this.deps.contacts.getPhone(userId) : null;
+    const phoneMatches = active && currentPhone !== null && consent?.consentedPhoneE164 === currentPhone;
+    return {
+      active,
+      effectiveActive: phoneMatches && !eligibility.optedOut,
+      phoneChangedSinceConsent: active && currentPhone !== null && !phoneMatches,
+      consentedAt: consent?.consentedAt ?? null,
+      withdrawnAt: consent?.withdrawnAt ?? null,
+      source: consent?.source ?? null,
+      disclosureVersion: consent?.disclosureVersion ?? null,
+      eligibility,
+    };
+  }
+
+  /**
+   * B0-B: the only way SMS consent is ever turned on — always the caller's own userId. Requires a
+   * verified phone already on file ("Do not allow SMS consent to become meaningfully active without a
+   * usable mobile/contact phone number," this pass's own instruction, verbatim) — never persisted
+   * without one, so a consent record can never claim "active" while there is no real destination to
+   * send to.
+   *
+   * B0-B-001 correction: this is now also the ONLY place `consentedPhoneE164` is ever written, and it
+   * is always this exact call's own freshly-resolved `contacts.getPhone(userId)` result — never a
+   * client-supplied value, and never carried forward from a prior activation. Re-activating after a
+   * phone change therefore always (and only) binds the NEW current phone, exactly matching this
+   * correction's "treat it as a new affirmative consent event" requirement. Records who/when/how/
+   * what-disclosure/what-destination durably (the repository row) and to the audit trail (best-effort,
+   * mirrors `setPreference`'s identical failure-isolation precedent — an audit-write failure must never
+   * block or roll back the consent change it's recording); the audit record carries only the masked
+   * phone, never the raw number.
+   */
+  async activateSmsConsent(userId: string, input: { source: string; disclosureVersion: string }): Promise<SmsConsentRecord> {
+    const phone = await this.deps.contacts.getPhone(userId);
+    if (!phone) {
+      throw new ValidationError("A verified phone number is required before enabling text message notifications.");
+    }
+    const now = new Date();
+    const record = await this.deps.smsConsents.activate(userId, {
+      source: input.source,
+      disclosureVersion: input.disclosureVersion,
+      consentedPhoneE164: phone,
+      at: now,
+    });
+    await this.recordSmsConsentAudit(userId, "sms_consent_activated", {
+      source: input.source,
+      disclosureVersion: input.disclosureVersion,
+      maskedPhone: maskPhone(phone),
+    });
+    return record;
+  }
+
+  /**
+   * B0-B: the only way SMS consent is ever turned off from within the application — always the
+   * caller's own userId. Distinct from (and never contradicted by) the carrier-level STOP suppression
+   * in `sms_opt_out`, which remains authoritative for actual delivery regardless of what this flag
+   * says (see `deliver`'s reconciliation) — this method is specifically the in-app "I changed my mind"
+   * path, not a replacement for STOP handling. Deliberately does not clear `consentedPhoneE164` — it
+   * remains the historical record of which destination the withdrawn consent last covered (see
+   * `smsConsent.consentedPhoneE164`'s own schema doc comment); it simply has no further effect once
+   * `active` is false.
+   */
+  async withdrawSmsConsent(userId: string, reason: string | null = null): Promise<SmsConsentRecord> {
+    const now = new Date();
+    const record = await this.deps.smsConsents.withdraw(userId, now);
+    await this.recordSmsConsentAudit(userId, "sms_consent_withdrawn", record.consentedPhoneE164 ? { maskedPhone: maskPhone(record.consentedPhoneE164) } : null, reason);
+    return record;
+  }
+
+  private async recordSmsConsentAudit(userId: string, action: "sms_consent_activated" | "sms_consent_withdrawn", newValue: Record<string, unknown> | null, reason: string | null = null): Promise<void> {
+    if (!this.deps.audit) return;
+    try {
+      await this.deps.audit.record({
+        actorUserId: userId,
+        actorRole: "personal_user",
+        profileKind: null,
+        profileId: null,
+        agreementId: null,
+        action,
+        occurredAt: new Date().toISOString(),
+        ipAddress: null,
+        deviceInfo: null,
+        previousValue: null,
+        newValue,
+        reason,
+        authStrength: null,
+        relatedDocumentId: null,
+        relatedCaseId: null,
+      });
+    } catch (error) {
+      // Failure isolation, matching setPreference's identical precedent — an audit-write failure must
+      // never block or roll back the consent change it's recording.
+      logger.error("sms_consent_audit_failed", { userId, action, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   private buildCtaUrl(record: NotificationEventRecord): { ctaUrl: string; ctaText: string } | null {
     if (record.relatedInvitationId) {
       return { ctaUrl: `${this.deps.appUrl}/connections/accept?invitationId=${record.relatedInvitationId}`, ctaText: "Review invitation" };
@@ -650,6 +814,32 @@ export class NotificationService {
         // violation of provider/carrier rules." Terminal, not retryable: opting back in (a fresh
         // START reply) doesn't retroactively resurrect this specific already-suppressed attempt.
         return this.deps.events.markFailed(record.id, { failureReason: "recipient_opted_out", attemptCount: record.attemptCount, nextRetryAt: null });
+      }
+      // B0-B (SMS consent / A2P compliance): the mandatory default-off gate. Applied uniformly to
+      // EVERY notification-type row that reaches this branch, critical or not — `resolveChannels`
+      // still includes "sms" in a critical type's channel set unconditionally (that behavior is
+      // unchanged; "critical notifications cannot be disabled" governs the ordinary per-type
+      // preference, not this consent gate), so this is the one place that actually enforces
+      // "a user who has never affirmatively opted in receives no ordinary transactional SMS,"
+      // regardless of which notification type triggered the send. This does NOT gate MFA/OTP SMS
+      // (MfaService sends those directly via its own SmsSender dependency, never through
+      // NotificationService/this method — see this pass's own B0-B report, Section I, for why that is
+      // a deliberately separate consent basis). Terminal, not retryable, mirroring the opt-out check
+      // immediately above — a later opt-in doesn't retroactively resurrect this specific attempt.
+      const consent = await this.deps.smsConsents.find(record.recipientUserId);
+      if (!consent?.active) {
+        return this.deps.events.markFailed(record.id, { failureReason: "sms_consent_inactive", attemptCount: record.attemptCount, nextRetryAt: null });
+      }
+      // B0-B-001 correction: active consent alone is not enough — it must still cover the EXACT phone
+      // this send is about to reach. `phone` above is already the user's CURRENT verified phone; if it
+      // no longer equals what the consent record actually covers (the user replaced their phone after
+      // consenting, through any code path — this check doesn't need to know which one), the affirmative
+      // act on file does not extend to this destination, full stop. A fresh activation against the new
+      // phone is required (activateSmsConsent always binds the caller's own current phone at the
+      // moment of activation — see its own doc comment) before any SMS reaches it again. Terminal, not
+      // retryable, mirroring the two checks immediately above.
+      if (consent.consentedPhoneE164 !== phone) {
+        return this.deps.events.markFailed(record.id, { failureReason: "sms_consent_phone_mismatch", attemptCount: record.attemptCount, nextRetryAt: null });
       }
       const cta = ctaOverride ?? this.buildCtaUrl(record);
       const smsBody = cta ? `${rendered.smsBody} ${cta.ctaUrl}` : rendered.smsBody;

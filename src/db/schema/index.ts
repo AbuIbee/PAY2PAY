@@ -31,6 +31,7 @@ export * from "./adminOps";
 export * from "./rateLimit";
 export * from "./agreementInvitation";
 export * from "./smsOptOut";
+export * from "./smsConsent";
 export * from "./cardIssuing";
 export * from "./compliance";
 export * from "./riskSignal";

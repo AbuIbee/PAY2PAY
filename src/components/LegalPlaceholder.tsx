@@ -25,9 +25,16 @@ export function LegalPlaceholder({
         style={{ maxWidth: "42rem", marginBottom: "2rem" }}
         role="note"
       >
+        {/*
+          B0-A (public-surface remediation): removed the internal `docs/COMPLIANCE_REVIEW_CHECKLIST.md`
+          path that used to be rendered here — see this file's own doc comment above, which still
+          names it for developers. The rest of this placeholder banner's substantive wording is
+          deliberately left unchanged: this pass's own scope rule permits only removing an internal
+          information leak from Privacy/Terms, not otherwise rewriting them (B0-C will replace this
+          banner and both pages' content entirely).
+        */}
         This page is a placeholder. The content below is not final legal language and has not been
-        reviewed by counsel — see <code>docs/COMPLIANCE_REVIEW_CHECKLIST.md</code>. Do not rely on
-        it for any legal determination.
+        reviewed by counsel. Do not rely on it for any legal determination.
       </div>
       <div style={{ maxWidth: "42rem", color: "var(--ink-soft)", lineHeight: 1.7 }}>{children}</div>
     </article>

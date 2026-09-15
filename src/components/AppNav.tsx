@@ -182,7 +182,7 @@ export function AppNav() {
       <div className="app-topbar">
         <Link className="app-topbar__brand" href="/dashboard">
           <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-          <span>PAY2PAY</span>
+          <span>Paid2You</span>
         </Link>
         {activeProfile?.kind === "business" && (
           <span className="app-topbar__acting-as" title={`Acting as ${activeProfile.displayName}`}>
@@ -209,7 +209,7 @@ export function AppNav() {
         <div className="app-nav__header">
           <Link className="app-nav__brand" href="/dashboard">
             <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-            <span>PAY2PAY</span>
+            <span>Paid2You</span>
           </Link>
           <button type="button" className="app-nav__close" aria-label="Close menu" onClick={() => setMobileNavOpen(false)}>
             Close

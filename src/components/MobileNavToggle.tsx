@@ -5,7 +5,7 @@ import { useState } from "react";
 const NAV_ITEMS = [
   { href: "#how-it-works", label: "How it works" },
   { href: "#use-cases", label: "Use cases" },
-  { href: "#main-content", label: "Why PAY2PAY" },
+  { href: "#main-content", label: "Why Paid2You" },
   { href: "/demo", label: "Try the demo" },
 ];
 

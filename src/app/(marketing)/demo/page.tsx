@@ -4,7 +4,7 @@ import { DemoWalkthrough } from "@/components/DemoWalkthrough";
 
 export const metadata: Metadata = {
   title: "Try the demo",
-  description: "See how PAY2PAY works with guided example scenarios — no account required.",
+  description: "See how Paid2You works with guided example scenarios — no account required.",
 };
 
 /**
@@ -16,7 +16,7 @@ const DEDICATED_DEMOS = [
   { href: "/demo/p2p", tag: "P2P", label: "P2P Demo", description: "Person A owes Person B $1,000" },
   { href: "/demo/c2b", tag: "C2B", label: "C2B Demo", description: "A customer owes a local business $600" },
   { href: "/demo/b2b", tag: "B2B", label: "B2B Demo", description: "Business A owes Business B $5,000" },
-  { href: "/demo/tour", tag: "TOUR", label: "Product Tour", description: "A guided tour of PAY2PAY's primary areas" },
+  { href: "/demo/tour", tag: "TOUR", label: "Product Tour", description: "A guided tour of Paid2You's primary areas" },
 ];
 
 export default function DemoPage() {
@@ -24,7 +24,7 @@ export default function DemoPage() {
     <section className="section" aria-labelledby="demo-heading">
       <div className="section-heading">
         <span className="eyebrow"><span /> No signup required</span>
-        <h2 id="demo-heading">See PAY2PAY in action.</h2>
+        <h2 id="demo-heading">See Paid2You in action.</h2>
         <p>
           Walk through a few example repayment scenarios with sample people and businesses. Nothing
           here is real — no account is created, no agreement is saved, and no money moves.
