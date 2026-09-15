@@ -8,7 +8,6 @@ import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { normalizeE164 } from "@/lib/phone";
 import type { EmailSender } from "@/lib/notify/emailSender";
 import type { NotificationService } from "@/lib/notify/notificationService";
-import type { SmsSender } from "@/lib/notify/smsSender";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { Capability } from "@/lib/staff/capabilities";
 import type { StaffService } from "@/lib/staff/staffService";
@@ -119,6 +118,30 @@ export interface UserLookupReader {
   findUserIdByEmail(email: string): Promise<string | null>;
 }
 
+/**
+ * Codex B0-B blocker correction (B0-B-003): a phone lookup must be able to say "more than one distinct
+ * registered user has an active, verified credential for this exact phone" — never silently pick one.
+ * `no_match` / `unique_match` / `ambiguous_match` are the only three honest answers; there is no
+ * fourth "pick the most recent" outcome. Two credentials belonging to the SAME user are not ambiguity
+ * (see `DrizzleRegisteredPhoneReader`'s own doc comment) — the security condition is strictly "more
+ * than one DISTINCT user id."
+ */
+export type RegisteredPhoneLookupResult =
+  | { kind: "no_match" }
+  | { kind: "unique_match"; userId: string }
+  | { kind: "ambiguous_match" };
+
+/**
+ * B0-B blocker correction: the canonical phone<->user relationship, distinct from `UserLookupReader`
+ * above (which resolves by email against `user_account` directly) — `user_account.phone` is a dead,
+ * always-null column (see DrizzleUserContactReader's own doc comment), so the only proof this
+ * codebase has that a phone number belongs to a specific registered user is a verified SMS MFA
+ * credential. Real implementation: DrizzleRegisteredPhoneReader (src/lib/notify/).
+ */
+export interface RegisteredPhoneReader {
+  findUserIdByVerifiedPhone(phone: string): Promise<RegisteredPhoneLookupResult>;
+}
+
 /** Real implementation: DrizzleProfileDisplayReader. Never exposes anything beyond a display-safe name — no email, no internal id, no verification/KYC state. */
 export interface ProfileDisplayReader {
   getDisplayName(profileKind: ProfileKind, profileId: string): Promise<{ displayName: string; businessName: string | null }>;
@@ -147,10 +170,23 @@ export interface AgreementInvitationServiceDeps {
   profileDisplay: ProfileDisplayReader;
   staffService: StaffService;
   users: UserLookupReader;
+  /**
+   * B0-B blocker correction: resolves a `recipientPhone` to a registered user's own id via their
+   * verified MFA phone — the second (alongside email) canonical signal `createInvitation` uses to
+   * decide whether an invitation recipient is an existing Paid2You user. See this class's own
+   * `createInvitation` doc comment for exactly how this feeds the automated-SMS gate.
+   */
+  registeredPhones: RegisteredPhoneReader;
   userEmails: UserEmailReader;
+  /**
+   * B0-B blocker correction: the ONLY way this class ever triggers an automated SMS — see
+   * `createInvitation`'s own doc comment. There is deliberately no direct `SmsSender`/`SmsOptOutRepository`
+   * dependency on this class anymore: routing every automated SMS through `notify()` is what makes
+   * `sms_consent`/`sms_opt_out` enforcement structural rather than a second, parallel check this class
+   * would otherwise have to keep in sync by hand.
+   */
   notifications: NotificationService;
   emailSender: EmailSender;
-  smsSender: SmsSender;
   audit: AuditService;
   appUrl: string;
 }
@@ -240,7 +276,63 @@ export class AgreementInvitationService {
 
     const { frequency, feeAllocation, ...proposedTerms } = input.terms;
 
-    const existingUserId = recipientEmail ? await this.deps.users.findUserIdByEmail(recipientEmail) : null;
+    // Codex B0-B blocker correction (B0-B-002 / B0-B-003, including the FINAL correction below):
+    // email and phone are resolved INDEPENDENTLY, then reconciled — never "email first, phone as a
+    // tie-broken fallback" the way the original pass did it, which silently trusted email's answer
+    // even when phone pointed at someone else entirely (or was itself unsafe to trust). Outcomes:
+    //   - email -> A, phone -> nobody:                        use A.
+    //   - email -> nobody, phone -> uniquely B:               use B.
+    //   - email -> nobody, phone -> nobody:                   unregistered — no automated SMS.
+    //   - email -> A, phone -> uniquely A:                    consistent — use A.
+    //   - email -> A, phone -> uniquely B, A !== B:            IDENTITY CONFLICT — use NEITHER. No
+    //     automated SMS to either, and no automated account-targeted notification (email/in_app via
+    //     notify()) to either — the contradictory signals mean this invitation cannot be safely
+    //     attributed to any one account. Recorded to the audit trail as `recipient_identity_conflict`.
+    //   - phone -> ambiguous (active verified for more than one DISTINCT user), REGARDLESS of what
+    //     email independently resolves (including when email resolves someone uniquely): use NEITHER.
+    //     Codex final-review correction (B0-B-003): an ambiguous phone is itself a contradictory,
+    //     unsafe signal about the exact destination this invitation supplied — it must never be waved
+    //     through merely because a *different* input (email) happened to resolve someone. Recorded to
+    //     the audit trail as `recipient_phone_ambiguous`. This is distinct from — and checked before —
+    //     the unique-match reconciliation above, so an ambiguous phone can never be miscategorized as
+    //     "no phone signal at all" and silently defer to email.
+    //   In both suppression cases, the secure invitation link/token is still generated and returned
+    //   exactly as normal (Section "SHARING MUST REMAIN AVAILABLE") and, if `recipientEmail` was
+    //   supplied, a plain direct email is still sent to it (identical treatment to the "unregistered"
+    //   branch below) — only the *automated, account-targeted* notification path is suppressed. Both
+    //   audit events omit user id/email/phone (matching this class's own existing PII-minimization
+    //   convention for `agreement_invitation_created`'s audit metadata) and are never surfaced to the
+    //   inviter — the public invitation-creation response is unaffected either way.
+    // In every case, `existingUserId` (and therefore the invitation's own persisted `recipientUserId`
+    // binding — see `requireRecipientIdentityAndBind`'s "once bound, only that account may act, ever
+    // again" rule) is null unless a single, uncontradicted identity was actually established — neither
+    // a conflict nor an ambiguous phone can ever bind the invitation to an arbitrarily-chosen side.
+    const emailUserId = recipientEmail ? await this.deps.users.findUserIdByEmail(recipientEmail) : null;
+    const phoneLookup = recipientPhone ? await this.deps.registeredPhones.findUserIdByVerifiedPhone(recipientPhone) : ({ kind: "no_match" } as const);
+
+    let existingUserId: string | null = null;
+    let recipientIdentityConflict = false;
+    let recipientPhoneAmbiguous = false;
+    if (phoneLookup.kind === "ambiguous_match") {
+      // Checked FIRST, before any email reconciliation: an ambiguous phone must suppress automated
+      // account-targeted dispatch unconditionally — even when email independently and uniquely
+      // resolves someone (the exact gap the Codex final review found: the prior pass's `else` branch
+      // folded "ambiguous_match" together with "no_match" and let email decide alone, which is safe
+      // for "no phone signal" but not for "phone signal that is itself contradictory").
+      recipientPhoneAmbiguous = true;
+    } else if (phoneLookup.kind === "unique_match") {
+      if (emailUserId === null) {
+        existingUserId = phoneLookup.userId;
+      } else if (emailUserId === phoneLookup.userId) {
+        existingUserId = emailUserId;
+      } else {
+        recipientIdentityConflict = true;
+      }
+    } else {
+      // "no_match" — no phone signal at all, so it cannot override or contradict an independently
+      // resolved email identity; email decides alone (null if email also didn't resolve anyone).
+      existingUserId = emailUserId;
+    }
 
     const rawToken = generateOpaqueToken();
     const tokenHash = hashOpaqueToken(rawToken);
@@ -268,21 +360,49 @@ export class AgreementInvitationService {
       recipientEmail: recipientEmail ? "provided" : null,
       recipientPhone: recipientPhone ? "provided" : null,
     });
+    if (recipientIdentityConflict) {
+      // B0-B-002: a safe, internal-only record of exactly why no account-targeted notification was
+      // attempted — deliberately no user id embedded (matches this class's own existing
+      // PII-minimization convention immediately above, which records "provided"/null for the raw
+      // contact values rather than the values themselves). Never surfaced to the inviter — the
+      // public invitation-creation response is unaffected either way (see Section "ENUMERATION
+      // SAFETY").
+      await this.recordAudit(invitation.id, input.actingUserId, "agreement_invitation_recipient_identity_conflict", {
+        reason: "recipient_identity_conflict",
+      });
+    }
+    if (recipientPhoneAmbiguous) {
+      // B0-B-003 (final correction): a safe, internal-only record of why no account-targeted
+      // notification was attempted when the supplied phone was active/verified for more than one
+      // distinct user — deliberately no user id, email, or phone embedded, and never surfaced to the
+      // inviter (Section "ENUMERATION SAFETY").
+      await this.recordAudit(invitation.id, input.actingUserId, "agreement_invitation_recipient_phone_ambiguous", {
+        reason: "recipient_phone_ambiguous",
+      });
+    }
 
     if (existingUserId) {
-      // Existing platform user — matches RelationshipInvitationService's own precedent exactly:
-      // notify() handles email/in_app dispatch itself, deliberately token-free (the token is never
+      // Existing platform user (recognized by email OR by their own verified MFA phone — see the
+      // resolution above) — matches RelationshipInvitationService's own precedent exactly: notify()
+      // handles email/sms/in_app dispatch itself, deliberately token-free (the token is never
       // persisted to notification_event.payload — see ctaOverride's own doc comment on
       // NotificationService.notify for why this is a transient, non-persisted parameter rather than a
       // stored relatedX id: neither of buildCtaUrl's two existing routes applies to this pre-agreement,
       // secure-token invitation).
       //
+      // B0-B blocker correction: this is now the ONLY path by which this class ever triggers an
+      // automated SMS. notify() resolves the actual destination phone from `existingUserId`'s own
+      // canonical contact info (never from the inviter-supplied `recipientPhone`) and applies its own
+      // `sms_consent`/`sms_opt_out` gate uniformly — an automated SMS reaches this recipient if and
+      // only if they have active, durable, web-form consent and have not opted out via STOP. Nothing
+      // here needs to duplicate that decision.
+      //
       // Production follow-up (missing CTA defect): this call previously omitted any CTA at all, so
       // NotificationService.buildCtaUrl had nothing to build a link from (relatedAgreementId is
       // genuinely null pre-acceptance; relatedInvitationId's own route is the unrelated relationship-
       // invitation flow) — the email rendered with no return link. ctaOverride passes the same secure
-      // `/i/<token>` link the "not yet registered" branch below already sends directly, so both
-      // recipient types get an identical, working CTA from the one existing invitation-link/route.
+      // `/i/<token>` link the "not yet registered" branch below sends directly, so both recipient
+      // types get an identical, working CTA from the one existing invitation-link/route.
       await this.deps.notifications.notify({
         recipientUserId: existingUserId,
         notificationType: "agreement_invitation",
@@ -292,22 +412,34 @@ export class AgreementInvitationService {
         ctaOverride: { ctaUrl: link, ctaText: "Review agreement" },
       });
     } else {
-      // Not a recognized account — the one case notify()'s recipientUserId-required contract
-      // cannot represent (same rationale as RelationshipInvitationService's own doc comment).
-      const senderName = await this.senderDisplayName(input.inviterProfile);
+      // Reached for FOUR distinct reasons, all handled identically and safely: (1) genuinely
+      // unregistered — neither email nor phone resolved anyone; (2) B0-B-003 — the supplied phone was
+      // ambiguous across distinct users, REGARDLESS of whether email independently resolved someone;
+      // (3) B0-B-002 identity conflict — email and phone each uniquely resolved a DIFFERENT registered
+      // account. In every case there is no single, safely-attributable account to target with
+      // notify()'s recipientUserId-required contract (same rationale as RelationshipInvitationService's
+      // own doc comment for the genuinely-unregistered case), so this branch NEVER triggers an
+      // automated Twilio SMS and NEVER calls notify() (no automated account-targeted email/in_app
+      // notification either, for the ambiguous-phone and conflict cases specifically — see the
+      // resolution logic's own doc comment above).
+      //
+      // A not-yet-registered recipient has never seen Paid2You's own web-form SMS-consent disclosure —
+      // there is no account, no session, no prior interaction with Paid2You's UI for them at all — so
+      // no consent can be honestly attributed to them, and the inviter's own act of typing in a phone
+      // number is not consent from the person that number belongs to (this pass's own frozen product
+      // decision, verbatim). Email is unaffected — it is not subject to this pass's SMS/A2P consent
+      // rules — and the secure invitation link itself is always generated and returned to the inviter
+      // regardless of recipient/consent/conflict state, so sharing is never blocked: the inviter can
+      // still use Copy Link, their device's own native share sheet, or WhatsApp (none of which are
+      // Paid2You-automated Twilio sends — see InviteToAgreement.tsx).
       if (recipientEmail) {
+        const senderName = await this.senderDisplayName(input.inviterProfile);
         await this.deps.emailSender.send({
           to: recipientEmail,
           subject: "You've received a payment plan proposal on PAY2PAY",
           body: `${senderName} has proposed a payment plan for you to review on PAY2PAY. Review it securely, no account required: ${link}\n\nThis link expires in 7 days.`,
           ctaUrl: link,
           ctaText: "Review agreement",
-        });
-      }
-      if (recipientPhone) {
-        await this.deps.smsSender.send({
-          to: recipientPhone,
-          body: `${senderName} sent you a payment plan proposal on PAY2PAY. Review it: ${link}`,
         });
       }
     }

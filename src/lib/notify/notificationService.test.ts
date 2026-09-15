@@ -554,7 +554,7 @@ describe("NotificationService", () => {
       });
 
       it("a missing audit dependency never blocks the preference update itself", async () => {
-        const { preferences, contacts, emailSender, smsSender, smsOptOuts, appUrl } = createTestNotificationService();
+        const { preferences, contacts, emailSender, smsSender, smsOptOuts, smsConsents, appUrl } = createTestNotificationService();
         const noAuditService = new NotificationService({
           events: new InMemoryNotificationEventRepository(),
           preferences,
@@ -562,6 +562,7 @@ describe("NotificationService", () => {
           smsSender,
           contacts,
           smsOptOuts,
+          smsConsents,
           appUrl,
           // audit deliberately omitted
         });

@@ -121,11 +121,22 @@ export function InviteToAgreement() {
     return (
       <div className="early-access-form" style={{ display: "grid", gap: "1rem" }}>
         <h2 style={{ margin: 0 }}>Invitation sent</h2>
-        <p style={{ margin: 0 }}>
-          {recipientEmail || recipientPhone
-            ? "We've sent a secure link. You can also share it directly:"
-            : "Share this secure link with the recipient:"}
-        </p>
+        {/*
+          B0-B blocker correction: never claims "we sent a text" — Paid2You only sends an automated
+          text-message invitation to a recipient who is already a Paid2You user with active SMS
+          consent (and has not opted out via STOP); a not-yet-registered phone number never receives
+          one. This line is a general, always-true policy statement, not a per-invitation delivery
+          claim, so it never needs (and never discloses) whether this specific recipient qualifies.
+        */}
+        {recipientEmail && <p style={{ margin: 0 }}>We&apos;ve emailed a secure link to {recipientEmail}.</p>}
+        {recipientPhone && (
+          <p style={{ margin: 0 }}>
+            Paid2You can only send text-message invitations to users who have opted in to Paid2You SMS
+            notifications. You can still share this secure invitation link using another available
+            sharing option below.
+          </p>
+        )}
+        {!recipientEmail && !recipientPhone && <p style={{ margin: 0 }}>Share this secure link with the recipient:</p>}
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
           <code style={{ wordBreak: "break-all", fontSize: "0.85rem" }}>{link}</code>
           <button type="button" className="button button--ghost" onClick={() => void handleCopy()}>
