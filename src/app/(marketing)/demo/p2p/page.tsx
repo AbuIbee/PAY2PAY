@@ -3,7 +3,7 @@ import { P2PDemo } from "@/components/demo/P2PDemo";
 
 export const metadata: Metadata = {
   title: "P2P Demo",
-  description: "See a full person-to-person repayment journey on PAY2PAY — no account required.",
+  description: "See a full person-to-person repayment journey on Paid2You — no account required.",
 };
 
 export default function P2PDemoPage() {

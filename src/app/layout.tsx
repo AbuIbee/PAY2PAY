@@ -3,8 +3,8 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "PAY2PAY | Clear, Interest-Free Repayment Agreements",
-    template: "%s | PAY2PAY",
+    default: "Paid2You | Clear, Interest-Free Repayment Agreements",
+    template: "%s | Paid2You",
   },
   description: "Create clear, interest-free repayment agreements for personal debts, customer payment plans, and business receivables.",
 };

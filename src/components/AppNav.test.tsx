@@ -190,6 +190,23 @@ describe("AppNav", () => {
     }
   });
 
+  /**
+   * B0-A blocker correction (Codex review): AppNav is rendered by (app)/layout.tsx for every route
+   * under the (app) group, including /support — which is now reachable while signed out (see
+   * PublicSupport.tsx). The topbar brand and the nav-drawer brand previously both rendered the stale
+   * "PAY2PAY" label, making it visible to an anonymous /support visitor. Narrow correction: both
+   * labels now render "Paid2You"; no other AppNav behavior changed.
+   */
+  it("B0-A: renders the current Paid2You brand in both the topbar and the nav drawer, not the stale PAY2PAY label", async () => {
+    vi.stubGlobal("fetch", stubNavFetches());
+    render(<AppNav />);
+    await screen.findByRole("button", { name: /^menu$/i });
+
+    const brandLinks = screen.getAllByRole("link", { name: /paid2you/i });
+    expect(brandLinks.length).toBeGreaterThanOrEqual(2);
+    expect(document.body.textContent ?? "").not.toContain("PAY2PAY");
+  });
+
   it("does not remove or replace any existing primary/account/organization navigation links when adding Demo", async () => {
     vi.stubGlobal("fetch", stubNavFetches());
     render(<AppNav />);

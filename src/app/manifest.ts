@@ -7,8 +7,8 @@ import type { MetadataRoute } from "next";
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "PAY2PAY",
-    short_name: "PAY2PAY",
+    name: "Paid2You",
+    short_name: "Paid2You",
     description: "Ethical, interest-free repayment agreements.",
     start_url: "/",
     display: "standalone",

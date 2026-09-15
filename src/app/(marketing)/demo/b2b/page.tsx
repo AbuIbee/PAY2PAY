@@ -3,7 +3,7 @@ import { B2BDemo } from "@/components/demo/B2BDemo";
 
 export const metadata: Metadata = {
   title: "B2B Demo",
-  description: "See a business-to-business repayment journey on PAY2PAY — no account required.",
+  description: "See a business-to-business repayment journey on Paid2You — no account required.",
 };
 
 export default function B2BDemoPage() {

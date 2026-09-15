@@ -3,7 +3,7 @@ import { ProductTour } from "@/components/demo/ProductTour";
 
 export const metadata: Metadata = {
   title: "Product Tour",
-  description: "A guided tour of PAY2PAY's primary areas — no account required.",
+  description: "A guided tour of Paid2You's primary areas — no account required.",
 };
 
 export default function ProductTourPage() {
@@ -12,7 +12,7 @@ export default function ProductTourPage() {
       <div className="section-heading">
         <span className="eyebrow"><span /> No signup required</span>
         <h2 id="product-tour-heading">Product Tour</h2>
-        <p>A guided look at what each part of PAY2PAY is for, what you can do there, and what comes next.</p>
+        <p>A guided look at what each part of Paid2You is for, what you can do there, and what comes next.</p>
       </div>
       <ProductTour />
     </section>

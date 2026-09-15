@@ -23,11 +23,17 @@ describe("SupportAppeals", () => {
     expect(screen.queryByText(/support channels are not live yet/i)).not.toBeInTheDocument();
   });
 
-  it("offers a real way to reach support and submit an appeal", async () => {
+  it("offers a real way to submit an appeal", async () => {
     render(<SupportAppeals />);
     await waitFor(() => expect(screen.getByText(/no appeals yet/i)).toBeInTheDocument());
-    expect(screen.getByText(/support@pay2pay\.com/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /submit an appeal/i })).toBeInTheDocument();
+  });
+
+  it("B0-A: no longer renders its own contact card or the stale support@pay2pay.com address", async () => {
+    render(<SupportAppeals />);
+    await waitFor(() => expect(screen.getByText(/no appeals yet/i)).toBeInTheDocument());
+    expect(screen.queryByText(/support@pay2pay\.com/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /need help\?/i })).not.toBeInTheDocument();
   });
 
   it("lists existing appeals with a status chip", async () => {

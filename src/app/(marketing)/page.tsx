@@ -16,7 +16,7 @@ const VALUE_PROPS = [
   {
     eyebrow: "Direct repayment",
     title: "Funds move after they clear.",
-    body: "PAY2PAY is designed to route cleared installments through a qualified processor to the verified recipient—without acting as a lender.",
+    body: "Paid2You is designed to route cleared installments through a qualified processor to the verified recipient—without acting as a lender.",
     icon: "transfer",
   },
   {
@@ -117,7 +117,7 @@ function FeatureIcon({ name }: { name: string }) {
 
 function ProductPreview() {
   return (
-    <div className="product-preview" aria-label="Preview of a PAY2PAY agreement dashboard">
+    <div className="product-preview" aria-label="Preview of a Paid2You agreement dashboard">
       <div className="preview-window">
         <div className="preview-window__bar">
           <span />
@@ -224,7 +224,7 @@ export default function HomePage() {
             Turn an obligation into a plan <em>both sides can trust.</em>
           </h1>
           <p className="hero__lede">
-            PAY2PAY helps people and businesses create clear, interest-free repayment agreements,
+            Paid2You helps people and businesses create clear, interest-free repayment agreements,
             approve changes together, and keep every important step in one documented timeline.
           </p>
           <div className="hero__actions">
@@ -239,7 +239,7 @@ export default function HomePage() {
               See who it&apos;s for
             </a>
           </div>
-          <div className="hero__trust" aria-label="PAY2PAY product principles">
+          <div className="hero__trust" aria-label="Paid2You product principles">
             {TRUST_POINTS.map((point) => (
               <span key={point}><b aria-hidden="true">✓</b>{point}</span>
             ))}
@@ -278,7 +278,7 @@ export default function HomePage() {
             <h2 id="value-props-heading">Structure without turning repayment into another loan.</h2>
           </div>
           <p>
-            PAY2PAY is designed to make obligations clearer—not larger. The experience centers on
+            Paid2You is designed to make obligations clearer—not larger. The experience centers on
             mutual consent, transparent records, and a repayment schedule both parties understand.
           </p>
         </div>
@@ -345,12 +345,12 @@ export default function HomePage() {
             <span className="eyebrow eyebrow--light"><span /> Honest by design</span>
             <h2 id="trust-heading">A repayment platform—not a lender, collector, or guarantor.</h2>
             <p>
-              PAY2PAY documents and facilitates repayment through qualified providers. It does not
+              Paid2You documents and facilitates repayment through qualified providers. It does not
               advance funds, guarantee repayment, or claim formal Sharia certification.
             </p>
           </div>
           <div className="trust-panel__facts">
-            <div><strong>0%</strong><span>interest added by PAY2PAY</span></div>
+            <div><strong>0%</strong><span>interest added by Paid2You</span></div>
             <div><strong>2</strong><span>parties required for term changes</span></div>
             <div><strong>1</strong><span>shared agreement timeline</span></div>
           </div>
