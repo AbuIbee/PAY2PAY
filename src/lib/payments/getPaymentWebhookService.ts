@@ -7,6 +7,7 @@ import { DrizzleReconciliationExceptionRepository } from "@/lib/ledger/drizzleRe
 import { getLedgerService } from "@/lib/ledger/getLedgerService";
 import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { getPartialPaymentAutoApplicationService } from "@/lib/partialPayments/getPartialPaymentAutoApplicationService";
+import { getPayoutService } from "@/lib/payouts/getPayoutService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { getRiskEventService } from "@/lib/risk/getRiskEventService";
 import { DrizzlePaymentAttemptRepository } from "./drizzlePaymentAttemptRepository";
@@ -41,6 +42,9 @@ export function getPaymentWebhookService(): PaymentWebhookService {
       // R11 PASS B1 — FINAL TARGETED CORRECTION (Defect 1): the missing production integration point
       // — see PartialPaymentAutoApplicationService's own doc comment.
       partialPaymentApplication: getPartialPaymentAutoApplicationService(),
+      // PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts): see `recordPayoutOwedRequired`'s own
+      // doc comment — this is the ONLY thing `PaymentWebhookService` ever calls on `PayoutService`.
+      payouts: getPayoutService(),
     });
   }
   return cached;

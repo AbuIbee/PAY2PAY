@@ -76,6 +76,10 @@ export class InMemoryAchMandateRepository implements AchMandateRepository {
     return this.byId.get(id) ?? null;
   }
 
+  async findActiveByBankAccountRef(bankAccountRef: string): Promise<AchMandateRecord[]> {
+    return [...this.byId.values()].filter((m) => m.bankAccountRef === bankAccountRef && m.status === "active");
+  }
+
   async markRevoked(id: string, revokedAt: Date, revokedReason: string): Promise<AchMandateRecord> {
     const record = this.byId.get(id);
     if (!record) throw new Error("ach_mandate not found");
@@ -130,6 +134,8 @@ export function createTestAchServices() {
     mandates: achMandateService,
     payments: paymentCtx.paymentService,
     paymentAttempts: paymentCtx.payments,
+    // PAID2YOU — B0-D C2: defaults to true so every pre-existing test exercising real submission is unaffected — mirrors PaymentService's own testFakes.ts precedent.
+    newPaymentInitiationVerified: true,
   });
   return { paymentCtx, mandates, agreements, auditRepo, achMandateService, achPaymentService };
 }

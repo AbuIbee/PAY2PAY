@@ -146,20 +146,62 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
     expect(reversalEntry).not.toBeNull();
   });
 
-  it("posts a payout entry and marks payoutCompletedAt on payout.paid", async () => {
-    const agreementId = "agreement-6";
-    const payment = await createPayment("k6", agreementId, 4_000);
-    await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
-      signedWebhook({ providerEventId: "evt-6a", eventType: "payment.succeeded", providerPaymentId: payment.providerPaymentId }),
-    );
-    await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
-      signedWebhook({ providerEventId: "evt-6b", eventType: "payout.paid", providerPaymentId: payment.providerPaymentId }),
-    );
+  // PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts): REPLACES this suite's own former
+  // "posts a payout entry and marks payoutCompletedAt on payout.paid" test — that mechanism (a bare
+  // "payout.paid" webhook event, by itself, synchronously completing a payout with no live provider
+  // ever consulted) has been removed entirely. See `PayoutService`'s own doc comment for the corrected,
+  // provider-independent lifecycle these tests now prove instead.
+  describe("PAID2YOU — B0-D PHASE 3A: payout lifecycle is never fictional", () => {
+    it("payment.succeeded records a pending payout obligation — never marks payoutCompletedAt, never posts a payout ledger entry", async () => {
+      const agreementId = "agreement-6";
+      const payment = await createPayment("k6", agreementId, 4_000);
+      await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
+        signedWebhook({ providerEventId: "evt-6a", eventType: "payment.succeeded", providerPaymentId: payment.providerPaymentId }),
+      );
 
-    const updated = await ctx.paymentCtx.payments.findById(payment.id);
-    expect(updated?.payoutCompletedAt).not.toBeNull();
-    const payoutEntry = await ctx.ledgerCtx.ledgerService.findEntry(payment.id, "payout");
-    expect(payoutEntry).not.toBeNull();
+      const updated = await ctx.paymentCtx.payments.findById(payment.id);
+      expect(updated?.payoutCompletedAt).toBeNull();
+      const payoutAttempt = await ctx.payoutCtx.payoutService.getPayoutStatus(payment.id);
+      expect(payoutAttempt?.status).toBe("pending");
+      const payoutEntry = await ctx.ledgerCtx.ledgerService.findEntry(payment.id, "payout");
+      expect(payoutEntry).toBeNull();
+    });
+
+    it("a \"payout.paid\" webhook event (the removed mechanism) is now treated as genuinely unrecognized — a safe no-op, never a completion", async () => {
+      const agreementId = "agreement-6b";
+      const payment = await createPayment("k6b", agreementId, 4_000);
+      await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
+        signedWebhook({ providerEventId: "evt-6b-a", eventType: "payment.succeeded", providerPaymentId: payment.providerPaymentId }),
+      );
+      const result = await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
+        signedWebhook({ providerEventId: "evt-6b-b", eventType: "payout.paid", providerPaymentId: payment.providerPaymentId }),
+      );
+      expect(result.status).toBe("processed"); // acknowledged, but nothing financial happened.
+
+      const updated = await ctx.paymentCtx.payments.findById(payment.id);
+      expect(updated?.payoutCompletedAt).toBeNull();
+      const payoutEntry = await ctx.ledgerCtx.ledgerService.findEntry(payment.id, "payout");
+      expect(payoutEntry).toBeNull();
+    });
+
+    it("only PayoutService.confirmPayout — never any webhook event — can mark the payout complete, and only with real provider evidence", async () => {
+      const agreementId = "agreement-6c";
+      const payment = await createPayment("k6c", agreementId, 4_000);
+      await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
+        signedWebhook({ providerEventId: "evt-6c", eventType: "payment.succeeded", providerPaymentId: payment.providerPaymentId }),
+      );
+
+      const confirmed = await ctx.payoutCtx.payoutService.confirmPayout({
+        paymentAttemptId: payment.id,
+        providerName: "adyen",
+        providerPayoutReference: "psp_transfer_evt-6c",
+      });
+      expect(confirmed.status).toBe("confirmed");
+      const updated = await ctx.paymentCtx.payments.findById(payment.id);
+      expect(updated?.payoutCompletedAt).not.toBeNull();
+      const payoutEntry = await ctx.ledgerCtx.ledgerService.findEntry(payment.id, "payout");
+      expect(payoutEntry).not.toBeNull();
+    });
   });
 
   // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): a provider-routed payment can no longer be

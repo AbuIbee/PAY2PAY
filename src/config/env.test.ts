@@ -33,6 +33,19 @@ describe("parseServerEnv", () => {
     expect(env.APP_ENV).toBe("development");
   });
 
+  // PAID2YOU — B0-D C2 FINAL SECURITY GATE, T14: the payment-activation gate must fail closed by
+  // default — an operator who never sets this var at all must never accidentally allow live payment
+  // initiation.
+  it("T14: ADYEN_PAYMENTS_VERIFIED defaults to false when omitted", () => {
+    const env = parseServerEnv(validEnv);
+    expect(env.ADYEN_PAYMENTS_VERIFIED).toBe(false);
+  });
+
+  it("T14: ADYEN_PAYMENTS_VERIFIED=true parses to true only on that exact explicit value", () => {
+    const env = parseServerEnv({ ...validEnv, ADYEN_PAYMENTS_VERIFIED: "true" });
+    expect(env.ADYEN_PAYMENTS_VERIFIED).toBe(true);
+  });
+
   it("rejects a missing DATABASE_URL", () => {
     expect(() => parseServerEnv(omit(validEnv, "DATABASE_URL"))).toThrow(
       EnvironmentValidationError,
@@ -176,6 +189,39 @@ describe("parseServerEnv", () => {
   it("production-only customer email URLs fix: a Vercel/localhost APP_URL is fine when RESEND_API_KEY is unset — this environment cannot send real external email in the first place", () => {
     const env = parseServerEnv({ ...validEnv, APP_URL: "https://pay-2-pay-git-some-branch-pay2-pay.vercel.app" });
     expect(env.APP_URL).toBe("https://pay-2-pay-git-some-branch-pay2-pay.vercel.app");
+  });
+
+  it("PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION: rejects PAYMENT_PROVIDER/KYC_PROVIDER/CARD_ISSUING_PROVIDER set to a sandbox/mock/fake/demo/dummy/stub/simulated/test-shaped value, at environment-parse time", () => {
+    const forbidden = ["sandbox", "Sandbox", "mock", "fake", "demo", "dummy", "stub", "simulate", "simulated", "test_provider", "sandbox_v2"];
+    for (const value of forbidden) {
+      expect(() => parseServerEnv({ ...validEnv, PAYMENT_PROVIDER: value })).toThrow(EnvironmentValidationError);
+      expect(() => parseServerEnv({ ...validEnv, KYC_PROVIDER: value })).toThrow(EnvironmentValidationError);
+      expect(() => parseServerEnv({ ...validEnv, CARD_ISSUING_PROVIDER: value })).toThrow(EnvironmentValidationError);
+    }
+  });
+
+  it("PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION: leaving PAYMENT_PROVIDER/KYC_PROVIDER/CARD_ISSUING_PROVIDER unset is valid at the schema level (the provider factory itself fails closed with ProviderNotAvailableError, not the environment parser)", () => {
+    const env = parseServerEnv(validEnv);
+    expect(env.PAYMENT_PROVIDER).toBeUndefined();
+    expect(env.KYC_PROVIDER).toBeUndefined();
+    expect(env.CARD_ISSUING_PROVIDER).toBeUndefined();
+  });
+
+  it("PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION: a real-looking, non-forbidden provider name is accepted at the schema level (whether it resolves to anything is the capability registry's job, not the parser's)", () => {
+    const env = parseServerEnv({ ...validEnv, PAYMENT_PROVIDER: "acme_payments_live" });
+    expect(env.PAYMENT_PROVIDER).toBe("acme_payments_live");
+  });
+
+  it("PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION: no longer accepts PAYMENT_SANDBOX_WEBHOOK_SECRET/KYC_SANDBOX_WEBHOOK_SECRET/CARD_SANDBOX_WEBHOOK_SECRET as recognized fields — retired alongside the sandbox providers themselves", () => {
+    const env = parseServerEnv({
+      ...validEnv,
+      PAYMENT_SANDBOX_WEBHOOK_SECRET: "leftover-value",
+      KYC_SANDBOX_WEBHOOK_SECRET: "leftover-value",
+      CARD_SANDBOX_WEBHOOK_SECRET: "leftover-value",
+    });
+    expect((env as Record<string, unknown>).PAYMENT_SANDBOX_WEBHOOK_SECRET).toBeUndefined();
+    expect((env as Record<string, unknown>).KYC_SANDBOX_WEBHOOK_SECRET).toBeUndefined();
+    expect((env as Record<string, unknown>).CARD_SANDBOX_WEBHOOK_SECRET).toBeUndefined();
   });
 
   it("includes the offending field path in the error message", () => {

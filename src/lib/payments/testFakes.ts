@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { createTestLedgerService } from "@/lib/ledger/testFakes";
 import type { NotificationService } from "@/lib/notify/notificationService";
+import type { PayoutService } from "@/lib/payouts/payoutService";
 import { createTestVerificationService } from "@/lib/profiles/testFakes";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import { createTestRiskEventService } from "@/lib/risk/testFakes";
@@ -22,7 +23,7 @@ import type { ProfileRef } from "./paymentProvider";
 import type { PaymentTransitionCoordinator, TransitionApplyResult } from "./paymentTransitionCoordinator";
 import { PaymentWebhookService } from "./paymentWebhookService";
 import type { ClaimOutcome, FailedPaymentWorkflow, PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
-import { SandboxPaymentProvider } from "./sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 
 /** Test-only in-memory doubles for PaymentService, mirroring src/lib/csvImport/testFakes.ts's pattern. */
 
@@ -130,6 +131,14 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     const record = this.byId.get(id);
     if (!record) throw new Error("payment_attempt not found");
     record.payoutCompletedAt = payoutCompletedAt;
+    record.updatedAt = new Date();
+    return record;
+  }
+
+  async clearPayoutCompleted(id: string): Promise<PaymentAttemptRecord> {
+    const record = this.byId.get(id);
+    if (!record) throw new Error("payment_attempt not found");
+    record.payoutCompletedAt = null;
     record.updatedAt = new Date();
     return record;
   }
@@ -284,6 +293,8 @@ export function createTestPaymentService(options?: {
   atomicManualPayments?: AtomicManualPaymentPoster;
   /** Restore agreement payment functionality: optional, so every pre-existing call site is unaffected — see PaymentService's own doc comment on this dependency. */
   notifications?: NotificationService;
+  /** PAID2YOU — B0-D C2 (payment activation gate): defaults to `true` so every pre-existing test that exercises real `createPayment` completion is unaffected — mirrors this codebase's established "optional override, defaults to the pre-existing behavior" convention. This phase's own tests override it to `false` to prove the gate. */
+  newPaymentInitiationVerified?: boolean;
 }) {
   const verificationCtx = createTestVerificationService();
   const provider = new SandboxPaymentProvider(TEST_WEBHOOK_SECRET);
@@ -304,6 +315,7 @@ export function createTestPaymentService(options?: {
     installmentHook: options?.installmentHook,
     atomicManualPayments: options?.atomicManualPayments,
     notifications: options?.notifications,
+    newPaymentInitiationVerified: options?.newPaymentInitiationVerified ?? true,
   });
 
   return { verificationCtx, provider, payments, auditRepo, agreements, paymentService };
@@ -543,6 +555,8 @@ export function createTestPaymentWebhookService(
   profileOwners?: ProfileOwnerReader,
   /** PRSprint 18: optional, so every pre-PRSprint-18 call site is unaffected. */
   completion?: AgreementCompletionChecker,
+  /** PAID2YOU — B0-D PHASE 3A: optional, so every pre-existing call site is unaffected — see `PaymentWebhookService.recordPayoutOwedRequired`'s own doc comment. */
+  payouts?: Pick<PayoutService, "recordPayoutOwed">,
 ) {
   const events = new InMemoryPaymentWebhookEventRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForPayments();
@@ -563,6 +577,7 @@ export function createTestPaymentWebhookService(
     profileOwners,
     completion,
     riskEvents: riskCtx.riskEventService,
+    payouts,
   });
   return { events, auditRepo, ledgerCtx, riskCtx, paymentWebhookService };
 }

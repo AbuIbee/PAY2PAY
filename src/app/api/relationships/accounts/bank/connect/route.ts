@@ -1,68 +1,54 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { withErrorHandling } from "@/lib/api-handler";
-import { getBankConnectionService } from "@/lib/relationships/getBankConnectionService";
-import type { BankConnectionService } from "@/lib/relationships/bankConnectionService";
 import type { AuthService } from "@/lib/auth/authService";
 import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
-import { RateLimitedError, ValidationError } from "@/lib/errors";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { ValidationError } from "@/lib/errors";
+import { getBankConnectionService } from "@/lib/relationships/getBankConnectionService";
+import type { BankConnectionService } from "@/lib/relationships/bankConnectionService";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Bounds unbounded bank-connection attempts, mirroring PRSprint 24's identical card-request
-// precedent — a raw routing/account number transits this route (the documented fallback
-// architecture), so it is also, deliberately, the more tightly rate-limited of the two.
-const BANK_CONNECT_LIMIT_PER_USER = 5;
-const BANK_CONNECT_WINDOW_MS = 60 * 60 * 1000;
-
-const connectSchema = z.object({
-  actingParty: z.object({ kind: z.enum(["personal", "business"]), id: z.string().uuid() }),
-  institutionDisplayName: z.string().trim().max(200).nullable().optional(),
-  accountHolderName: z.string().trim().min(1).max(200),
-  routingNumber: z.string().trim(),
-  accountNumber: z.string().trim(),
-  accountNumberConfirm: z.string().trim(),
-  accountSubtype: z.enum(["checking", "savings"]),
+/**
+ * PAID2YOU — B0-D ADYEN PHASE 2A (final bank-security correction): this route's PURPOSE changes from
+ * "finalize a bank connection" (a client-triggered mutation trusting a before/after token-list diff —
+ * removed entirely, see `BankConnectionService`'s own doc comment) to a purely READ-ONLY status poll.
+ * The client never POSTs a completion claim this server would need to trust; completion happens
+ * exclusively via two Adyen webhooks (`/api/payments/webhook`'s AUTHORISATION handling and
+ * `/api/payments/webhook/tokens`'s token-lifecycle handling). This route only ever reports the
+ * CURRENT, webhook-driven status of an attempt the caller is confirmed to own.
+ */
+const statusQuerySchema = z.object({
+  actingPartyKind: z.enum(["personal", "business"]),
+  actingPartyId: z.string().uuid(),
+  providerSessionId: z.string().trim().min(1).max(200),
 });
 
-/**
- * POST /api/relationships/accounts/bank/connect — Phase 6A's production bank-account connection
- * flow. Unlike /api/relationships/accounts/add (which requires an already-tokenized
- * `providerAccountRef`), this route is the one place that accepts a raw routing/account number — see
- * BankConnectionService's own doc comment for the full non-persistence contract. The response never
- * echoes back the raw values it received.
- */
-export function createBankConnectHandler(authService: AuthService, bankConnectionService: BankConnectionService) {
-  return async function handleConnect(request: NextRequest): Promise<Response> {
-    const { userId, sessionId } = await requireSession(request, authService);
-    const rawBody: unknown = await request.json().catch(() => null);
-    const parsed = connectSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      throw new ValidationError(parsed.error.issues[0]?.message ?? "A valid bank connection request is required.");
-    }
-    if (!(await checkRateLimit(`bank-connect:user:${userId}`, BANK_CONNECT_LIMIT_PER_USER, BANK_CONNECT_WINDOW_MS))) {
-      throw new RateLimitedError("Too many bank connection attempts. Please try again later.");
-    }
-    const account = await bankConnectionService.connectBankAccount({
-      actingUserId: userId,
-      actingSessionId: sessionId,
-      actingParty: parsed.data.actingParty,
-      institutionDisplayName: parsed.data.institutionDisplayName ?? null,
-      accountHolderName: parsed.data.accountHolderName,
-      routingNumber: parsed.data.routingNumber,
-      accountNumber: parsed.data.accountNumber,
-      accountNumberConfirm: parsed.data.accountNumberConfirm,
-      accountSubtype: parsed.data.accountSubtype,
+export function createBankConnectionStatusHandler(authService: AuthService, bankConnectionService: BankConnectionService) {
+  return async function handleGet(request: NextRequest): Promise<Response> {
+    const { userId } = await requireSession(request, authService);
+    const url = new URL(request.url);
+    const parsed = statusQuerySchema.safeParse({
+      actingPartyKind: url.searchParams.get("actingPartyKind"),
+      actingPartyId: url.searchParams.get("actingPartyId"),
+      providerSessionId: url.searchParams.get("providerSessionId"),
     });
-    return NextResponse.json({ account }, { status: 201 });
+    if (!parsed.success) {
+      throw new ValidationError(parsed.error.issues[0]?.message ?? "A valid status request is required.");
+    }
+    const result = await bankConnectionService.getBankLinkAttemptStatus({
+      actingUserId: userId,
+      actingParty: { kind: parsed.data.actingPartyKind, id: parsed.data.actingPartyId },
+      providerSessionId: parsed.data.providerSessionId,
+    });
+    return NextResponse.json(result, { status: 200 });
   };
 }
 
-async function handleConnect(request: NextRequest): Promise<Response> {
-  return createBankConnectHandler(getAuthService(), getBankConnectionService())(request);
+async function handleGet(request: NextRequest): Promise<Response> {
+  return createBankConnectionStatusHandler(getAuthService(), getBankConnectionService())(request);
 }
 
-export const POST = withErrorHandling("relationship_account_bank_connect", handleConnect);
+export const GET = withErrorHandling("relationship_account_bank_connect_status", handleGet);

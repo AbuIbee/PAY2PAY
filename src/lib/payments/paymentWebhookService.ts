@@ -5,6 +5,7 @@ import { FinancialIntegrityError, type LedgerService } from "@/lib/ledger/ledger
 import { logger } from "@/lib/logger";
 import type { NotificationEventType } from "@/lib/notify/eventTypes";
 import type { NotificationService } from "@/lib/notify/notificationService";
+import type { PayoutService } from "@/lib/payouts/payoutService";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { RiskEventService } from "@/lib/risk/riskEventService";
 import type { PaymentProvider } from "./paymentProvider";
@@ -280,6 +281,52 @@ const EVENT_TYPE_TO_STATUS: Record<string, PaymentAttemptStatus> = {
   "payment.disputed": "disputed",
   "payment.returned": "returned",
   "payment.reversed": "reversed",
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 1A (blocker 3 — cancel/refund finality): newly webhook-reachable.
+   * "canceled" (`PaymentAttemptStatus`) and its `ALLOWED_SOURCE_STATUSES_FOR_DESTINATION` entry
+   * (`["pending", "scheduled"]`) already existed — only this event-type mapping was missing, because
+   * cancellation was previously a synchronous-only local write (`PaymentService.cancelPayment`).
+   * Verified safe: every downstream consumer below (`postLedgerEntryRequired` via
+   * `EVENT_TYPE_TO_REVERSAL_ENTRY`, `checkCompletionRequired`, `notifyPaymentStatus`,
+   * `runFailedPaymentWorkflowRequired`, `runSupersessionCompensationRequired`,
+   * `checkSupersessionCompletionRequired`) is explicitly gated on "succeeded"/"failed" or the
+   * refund/dispute/return/reversal statuses and correctly no-ops for "canceled" — a payment that
+   * never reached "succeeded" has no ledger entry to reverse, no installment/agreement-completion
+   * consequence, and no supersession to compensate.
+   */
+  "payment.canceled": "canceled",
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 1B (mapping)/1C (ledger correction): a previously-finalized refund
+   * that Adyen later reverses (`REFUNDED_REVERSED`). Deliberately maps to the DISTINCT
+   * "refund_reversed" status, never "succeeded" — reusing "succeeded" would re-enter every
+   * "payment.succeeded"-specific branch below (`evaluateSuccessEffectDisposition`,
+   * `applyPartialPaymentRequired`, `runFailedPaymentWorkflowRequired`'s succeeded case) a SECOND time
+   * for the same payment, risking duplicate installment-paid/notification/lifecycle effects — exactly
+   * what a distinct value avoids. Verified safe like "payment.canceled" above:
+   * `checkCompletionRequired`/`notifyPaymentStatus`/`runFailedPaymentWorkflowRequired`/
+   * `runSupersessionCompensationRequired`/`checkSupersessionCompletionRequired` are all gated on other
+   * specific statuses and correctly no-op for "refund_reversed" — no installment/agreement-lifecycle
+   * consequence, no supersession compensation, ever runs for this eventType. `postLedgerEntryRequired`
+   * DOES now post a correction (Phase 1C — `EVENT_TYPE_TO_REVERSAL_ENTRY` still has no entry for this
+   * eventType; the correction is dispatched separately, via `LedgerService.correctRefund`, exactly
+   * once per payment) — closing what Phase 1B left as a disclosed follow-up: the ORIGINAL refund's own
+   * ledger entry is now reversed/corrected, never merely the status.
+   */
+  "payment.refund_reversed": "refund_reversed",
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 1C: a previously-finalized refund that Adyen's card-scheme/bank later
+   * rejects (`REFUND_FAILED`) — Adyen documents this as occurring ONLY after an earlier `REFUND`
+   * webhook with `success:true`; an immediate/synchronous refund rejection is instead a `REFUND`
+   * webhook with `success:false` (already mapped to no transition — nothing to revert, since the
+   * payment never reached "refunded"). Maps to the DISTINCT "refund_failed" status — same rationale
+   * as "refund_reversed" immediately above (never "succeeded", to avoid a second
+   * "payment.succeeded"-shaped effect pass), kept separate from "refund_reversed" itself despite both
+   * driving the identical `LedgerService.correctRefund` ledger correction, since they are
+   * attributable to different real-world causes worth keeping distinctly auditable. Same verified-safe
+   * shape as "refund_reversed": every installment/agreement-lifecycle/supersession/notification gate
+   * below is keyed on other specific statuses and correctly no-ops for "refund_failed".
+   */
+  "payment.refund_failed": "refund_failed",
 };
 
 /**
@@ -490,6 +537,14 @@ export class PaymentWebhookService {
        * comment for exactly when/why this is called.
        */
       partialPaymentApplication?: PartialPaymentApplication;
+      /**
+       * PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts). Optional so every pre-existing test
+       * context that never wires this is unaffected (mirrors `partialPaymentApplication`'s identical
+       * optionality) — every real production wiring (`getPaymentWebhookService.ts`) supplies it. See
+       * `recordPayoutOwedRequired`'s own doc comment for exactly when/why this is called — NEVER used
+       * to complete or confirm a payout, only to durably record that one is now owed.
+       */
+      payouts?: Pick<PayoutService, "recordPayoutOwed">;
     },
   ) {
     this.platformFeePolicy = deps.platformFeePolicy ?? new DefaultPlatformFeePolicy();
@@ -634,7 +689,15 @@ export class PaymentWebhookService {
     const data = claimed.payload as Record<string, unknown>;
     const providerEventId = claimed.providerEventId;
 
-    const isRecognizedEventType = eventType === "payout.paid" || eventType in EVENT_TYPE_TO_STATUS;
+    // PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts): "payout.paid" was previously
+    // special-cased here and dispatched to a since-REMOVED `applyPayoutRequired` method that marked a
+    // payout complete from the bare arrival of this one event type — with no live payout provider
+    // ever having been called, no transfer reference, no verifiable evidence of any kind (see
+    // `PayoutService`'s own doc comment). No production `PaymentProvider.parseWebhookEvent`
+    // implementation has ever mapped any real event to `"payout.paid"` — see `mapAdyenEventCode`'s own
+    // exhaustive switch. It is now handled exactly like any other genuinely unrecognized event type:
+    // a safe no-op, never a completion.
+    const isRecognizedEventType = eventType in EVENT_TYPE_TO_STATUS;
     if (!isRecognizedEventType) return; // genuinely unsupported/unrecognized event type — safe no-op.
 
     const providerPaymentId = typeof data.providerPaymentId === "string" ? data.providerPaymentId : null;
@@ -666,14 +729,8 @@ export class PaymentWebhookService {
       return;
     }
 
-    if (eventType === "payout.paid") {
-      await this.applyPayoutRequired(payment, providerEventId);
-      return;
-    }
-
-    // `isRecognizedEventType` above already proved `eventType` is a key of `EVENT_TYPE_TO_STATUS`
-    // (the `eventType === "payout.paid"` branch already returned) — asserted non-null here once
-    // rather than re-narrowing at every use below.
+    // `isRecognizedEventType` above already proved `eventType` is a key of `EVENT_TYPE_TO_STATUS` —
+    // asserted non-null here once rather than re-narrowing at every use below.
     const newStatus = EVENT_TYPE_TO_STATUS[eventType]!;
     const failureCategory =
       newStatus === "failed" && typeof data.failureCategory === "string" ? data.failureCategory : undefined;
@@ -768,6 +825,7 @@ export class PaymentWebhookService {
     // comment.
     if (eventType === "payment.succeeded") {
       await this.applyPartialPaymentRequired(current);
+      await this.recordPayoutOwedRequired(current);
     }
 
     // PAID2YOU — PACKAGE B (Stage 6 final historical-effect closure). `runFailedPaymentWorkflowRequired`
@@ -1354,7 +1412,18 @@ export class PaymentWebhookService {
         if (typeof data.currency !== "string" || data.currency !== payment.currency) {
           throw new ProviderLookupEvidenceError("payment_provider_lookup_incomplete_or_mismatched_currency");
         }
-        if (!isNonNegativeInteger(data.processorFeeMinorUnits)) {
+        // PAID2YOU — B0-D ADYEN PHASE 1B (item 2): `null` is valid provider_lookup evidence meaning
+        // "this provider path does not expose a per-transaction processor fee" (e.g. Adyen's
+        // `/payments`-retry fallback in `FailedPaymentRetryCoordinator` — see that file). This is
+        // NEVER a fabricated $0 claim about what the provider actually charged — it is an explicit,
+        // disclosed "unknown," distinct from `undefined`/a malformed value, which still means the
+        // caller supplied no evidence at all and remains rejected below. The three comparison checks
+        // that follow are skipped when the fee is a known-unknown, since there is nothing numeric to
+        // compare; Paid2You's own ledger posting still needs a concrete number to balance its books
+        // (see the `typeof === "number" ? ... : 0` default two lines below) — that internal accounting
+        // default is Paid2You's own decision about its books, never a claim about Adyen's real fee.
+        const processorFeeIsKnownUnknown = data.processorFeeMinorUnits === null;
+        if (!processorFeeIsKnownUnknown && !isNonNegativeInteger(data.processorFeeMinorUnits)) {
           throw new ProviderLookupEvidenceError("payment_provider_lookup_incomplete_processor_fee_evidence");
         }
         // PAID2YOU — PACKAGE B (Item 2 — CENTRALIZE PLATFORM-FEE AUTHORITY): the event's own carried
@@ -1365,16 +1434,23 @@ export class PaymentWebhookService {
         if (!isNonNegativeInteger(data.platformFeeMinorUnits) || data.platformFeeMinorUnits !== authoritativePlatformFee) {
           throw new ProviderLookupEvidenceError("payment_provider_lookup_incomplete_or_mismatched_platform_fee");
         }
-        if (data.processorFeeMinorUnits > data.amountMinorUnits) {
+        if (!processorFeeIsKnownUnknown && (data.processorFeeMinorUnits as number) > data.amountMinorUnits) {
           throw new ProviderLookupEvidenceError("payment_provider_lookup_excessive_processor_fee");
         }
         if (data.platformFeeMinorUnits > data.amountMinorUnits) {
           throw new ProviderLookupEvidenceError("payment_provider_lookup_excessive_platform_fee");
         }
-        if (data.processorFeeMinorUnits + data.platformFeeMinorUnits > data.amountMinorUnits) {
+        if (!processorFeeIsKnownUnknown && (data.processorFeeMinorUnits as number) + data.platformFeeMinorUnits > data.amountMinorUnits) {
           throw new ProviderLookupEvidenceError("payment_provider_lookup_invalid_combined_fees");
         }
       }
+      // PAID2YOU — B0-D ADYEN PHASE 1B (item 2): this `0` is Paid2You's OWN internal ledger-posting
+      // default for "we don't have a concrete provider-reported fee to post" — double-entry ledger
+      // entries require a concrete number to balance, so some number must be posted. It is not, and
+      // must never be read as, a claim that the provider's real fee was zero — the evidence-validation
+      // gate above no longer forces a caller to fabricate a fake non-null number just to pass
+      // validation; a caller supplies `null` for "genuinely unknown" instead (see
+      // `FailedPaymentRetryCoordinator`).
       const processorFeeMinorUnits = typeof data.processorFeeMinorUnits === "number" ? data.processorFeeMinorUnits : 0;
       await this.deps.ledger.postPaymentCleared({
         paymentAttemptId: payment.id,
@@ -1386,6 +1462,18 @@ export class PaymentWebhookService {
         // — never read from either event's own payload for the actual posting.
         platformFeeMinorUnits: authoritativePlatformFee,
       });
+      return;
+    }
+    // PAID2YOU — B0-D ADYEN PHASE 1C: both event types mean an earlier `refund` entry's own effect
+    // never actually completed / no longer holds — a card-scheme-level rejection reported AFTER an
+    // earlier confirmed refund (`payment.refund_failed`), or a previously-confirmed refund later
+    // reversed (`payment.refund_reversed`). Neither is a fresh `payment.succeeded`-shaped event (this
+    // branch is only reached once eventType !== "payment.succeeded", above), so this never re-enters
+    // the success-posting branch above or any success-gated effect elsewhere in this class — see
+    // `LedgerService.correctRefund`'s own doc comment for the exact, idempotent correction posted.
+    if (eventType === "payment.refund_failed" || eventType === "payment.refund_reversed") {
+      const reason = typeof data.reason === "string" ? data.reason : null;
+      await this.deps.ledger.correctRefund({ paymentAttemptId: payment.id, reason });
       return;
     }
     const reversalEntryType = EVENT_TYPE_TO_REVERSAL_ENTRY[eventType];
@@ -1426,43 +1514,23 @@ export class PaymentWebhookService {
   }
 
   /**
-   * R09: REQUIRED — see this class's own doc comment. `markPayoutCompleted`'s own idempotency check
-   * avoids re-stamping the completion timestamp on a retry.
-   *
-   * PACKAGE B — remaining Codex blockers (Section 5 — payout audit): the previous version returned
-   * early whenever `payoutCompletedAt` was already set, which — exactly like the transition-audit gap
-   * this mirrors — meant "financial effect timestamp committed, but its audit failed" left the
-   * required audit permanently missing on every later retry. `payoutCompletedAt` alone only proves
-   * the FINANCIAL effect applied; it says nothing about whether the audit effect did. The audit
-   * record is now (re)ensured unconditionally — idempotent per `(providerEventId, action)`, so a
-   * replay never duplicates it.
+   * PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts). Called immediately after
+   * `applyPartialPaymentRequired` for a `"payment.succeeded"` event — i.e., only once this event's own
+   * `payment_cleared` entry (and thus the creditor's `creditor_proceeds_payable` liability) is durably
+   * known to exist. Records ONLY that a payout is now OWED (`PayoutService.recordPayoutOwed`, which
+   * always creates the row in `"pending"` status) — NEVER completes, confirms, or marks anything paid.
+   * This is the sole replacement for the removed `applyPayoutRequired`/`"payout.paid"` mechanism: that
+   * method used to synchronously call `LedgerService.postPayout` + `markPayoutCompleted` from the bare
+   * arrival of one webhook event, with no live provider ever consulted — see `PayoutService`'s own doc
+   * comment for the full corrected lifecycle and exactly why completion now requires an explicit,
+   * separately-gated `confirmPayout` call this class never makes. A no-op when `payouts` isn't wired
+   * (pre-existing test contexts, and any environment where payouts aren't yet tracked) — REQUIRED
+   * (not caught) once wired, matching `applyPartialPaymentRequired`'s identical required-effect shape,
+   * so a transient failure here keeps this event retryable rather than silently dropping the record.
    */
-  private async applyPayoutRequired(payment: PaymentAttemptRecord, providerEventId: string): Promise<void> {
-    if (!payment.agreementId) {
-      // Same rationale as postLedgerEntryRequired above — see its own doc comment.
-      throw new ConfigurationError("payment_webhook_ledger_blocked_no_agreement");
-    }
-    await this.deps.ledger.postPayout({ paymentAttemptId: payment.id });
-    const updated = payment.payoutCompletedAt ? payment : await this.deps.payments.markPayoutCompleted(payment.id, new Date());
-    await this.deps.audit.record({
-      actorUserId: null,
-      actorRole: "payment_provider",
-      profileKind: updated.payerProfileKind,
-      profileId: updated.payerProfileId,
-      agreementId: updated.agreementId,
-      action: "payment_webhook_payout.paid",
-      occurredAt: new Date().toISOString(),
-      ipAddress: null,
-      deviceInfo: null,
-      previousValue: null,
-      newValue: updated.payoutCompletedAt,
-      reason: null,
-      authStrength: null,
-      relatedDocumentId: null,
-      relatedCaseId: null,
-      targetResourceType: "payment_attempt",
-      targetResourceId: updated.id,
-      providerEventId,
-    });
+  private async recordPayoutOwedRequired(payment: PaymentAttemptRecord): Promise<void> {
+    if (!this.deps.payouts) return;
+    if (!payment.agreementId) return; // postLedgerEntryRequired already required this to be non-null to reach this point at all — defensive, never reachable in practice.
+    await this.deps.payouts.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: payment.agreementId });
   }
 }

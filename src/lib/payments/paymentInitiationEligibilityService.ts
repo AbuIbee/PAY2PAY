@@ -1,5 +1,5 @@
 import "server-only";
-import { DependencyError, ValidationError } from "@/lib/errors";
+import { DependencyError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { getDailyAmountLimitMinorUnits, getDailyAttemptCountLimit, getMaxPaymentMinorUnits, getRollingWindowMs, summarizeRecentActivity } from "./transactionLimits";
 import type { VerificationService } from "@/lib/profiles/verificationService";
@@ -54,12 +54,13 @@ export interface PaymentInitiationEligibilityService {
   /**
    * Mirrors `PaymentService.reserveAttempt`'s own exact checks, in the same order, for the same
    * reasons (see that method's own doc comments): the platform payment-initiation kill switch, the
-   * configured per-payment maximum, the rolling-window daily amount/attempt-count limits, and current
-   * full-verification status for both parties. Deliberately omits `reserveAttempt`'s payer-ownership
-   * and agreement-parties cross-checks — both are tautological for a system-initiated retry (its
+   * B0-D C2 payment-activation gate (`newPaymentInitiationVerified`), the configured per-payment
+   * maximum, the rolling-window daily amount/attempt-count limits, and current full-verification
+   * status for both parties. Deliberately omits `reserveAttempt`'s payer-ownership and
+   * agreement-parties cross-checks — both are tautological for a system-initiated retry (its
    * `actingUserId` is always derived FROM the original payment's own payer, and the agreement/parties
    * were already validated when the ORIGINAL payment was created). Throws exactly as `reserveAttempt`
-   * would (`DependencyError`/`ValidationError`).
+   * would (`DependencyError`/`ValidationError`/`ProviderNotAvailableError`).
    */
   assertPreLockEligible(input: { payer: ProfileRef; recipient: ProfileRef; amountMinorUnits: number }): Promise<void>;
   /** See this interface's own doc comment, section B. Delegates to `assertNotOverpaying` above. */
@@ -72,12 +73,34 @@ export class DrizzlePaymentInitiationEligibilityService implements PaymentInitia
       verification: VerificationService;
       payments: PaymentAttemptRepository;
       balances?: AgreementBalanceReader;
+      /**
+       * PAID2YOU — B0-D C2 (payment activation gate). This is the ONLY pre-lock control
+       * `PaymentRetryService.fireDueRetries`'s atomic-coordinator branch runs before
+       * `FailedPaymentRetryCoordinator.claimAndExecuteRetry` dispatches a genuinely NEW retry attempt
+       * to the provider (see that method's own doc comment: "Every OTHER eligibility control ... is
+       * the caller's responsibility to check BEFORE ever calling this method") — closing this gate here
+       * is what actually blocks a brand-new automatic retry when Adyen is not operator-verified.
+       * Optional, defaulting to `true` (mirroring this codebase's "pre-existing test/call site
+       * unaffected" convention — see `PaymentService`'s own `testFakes.ts` precedent) since this
+       * class's constructor has ~10 pre-existing test call sites across postgres integration suites
+       * that predate this flag; the ONE real production call site
+       * (`getPaymentRetryService.ts`) explicitly wires `getServerEnv().ADYEN_PAYMENTS_VERIFIED` rather
+       * than relying on this default. Never checked on `assertOverpaymentSafe`'s resolution/resumption
+       * path (`resolveAmbiguousRetry` never calls this interface at all) — resuming an
+       * already-possibly-dispatched, ambiguous attempt is recovery, never a new debit.
+       */
+      newPaymentInitiationVerified?: boolean;
     },
   ) {}
 
   async assertPreLockEligible(input: { payer: ProfileRef; recipient: ProfileRef; amountMinorUnits: number }): Promise<void> {
     if (!isFeatureEnabled("paymentInitiationEnabled")) {
       throw new DependencyError("New payment initiation is temporarily disabled. Please try again shortly.");
+    }
+    if (this.deps.newPaymentInitiationVerified === false) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires ADYEN_PAYMENTS_VERIFIED=true — Adyen registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See ADYEN_PAYMENTS_VERIFIED's own doc comment in src/config/env.ts.",
+      );
     }
     if (!Number.isSafeInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
       throw new ValidationError("amountMinorUnits must be a positive integer.");

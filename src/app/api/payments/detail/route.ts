@@ -6,17 +6,26 @@ import { requireSession } from "@/lib/auth/requireSession";
 import { ValidationError } from "@/lib/errors";
 import { getPaymentService } from "@/lib/payments/getPaymentService";
 import type { PaymentService } from "@/lib/payments/paymentService";
+import type { PayoutService } from "@/lib/payouts/payoutService";
+import { getPayoutService } from "@/lib/payouts/getPayoutService";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export function createPaymentDetailHandler(authService: AuthService, paymentService: PaymentService) {
+/**
+ * PAID2YOU — B0-D PHASE 3D (payout status accuracy): `payoutStatus` is the `payout_attempt.status`
+ * enum only (`pending`/`confirmed`/`failed`/`returned`/`null`) — the authoritative "has the creditor
+ * actually been paid out" fact. Never `providerName`/`providerPayoutReference` from the payout side;
+ * this route already never returned `providerPaymentId` from the payment side either.
+ */
+export function createPaymentDetailHandler(authService: AuthService, paymentService: PaymentService, payoutService: Pick<PayoutService, "getPayoutStatus">) {
   return async function handleDetail(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
     const id = new URL(request.url).searchParams.get("id");
     if (!id) throw new ValidationError("id is required.");
 
     const record = await paymentService.retrievePayment(id, userId);
+    const payoutStatus = (await payoutService.getPayoutStatus(record.id))?.status ?? null;
     return NextResponse.json(
       {
         id: record.id,
@@ -35,6 +44,7 @@ export function createPaymentDetailHandler(authService: AuthService, paymentServ
         recordedByUserId: record.recordedByUserId,
         recipientConfirmedAt: record.recipientConfirmedAt,
         failureReason: record.failureReason,
+        payoutStatus,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       },
@@ -44,7 +54,7 @@ export function createPaymentDetailHandler(authService: AuthService, paymentServ
 }
 
 async function handleDetail(request: NextRequest): Promise<Response> {
-  return createPaymentDetailHandler(getAuthService(), getPaymentService())(request);
+  return createPaymentDetailHandler(getAuthService(), getPaymentService(), getPayoutService())(request);
 }
 
 export const GET = withErrorHandling("payment_detail", handleDetail);

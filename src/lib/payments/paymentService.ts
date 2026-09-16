@@ -1,6 +1,6 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
-import { ConfigurationError, DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { ConfigurationError, DependencyError, ForbiddenError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { getDailyAmountLimitMinorUnits, getDailyAttemptCountLimit, getMaxPaymentMinorUnits, getReviewThresholdMinorUnits, getRollingWindowMs, summarizeRecentActivity } from "./transactionLimits";
 import { logger } from "@/lib/logger";
@@ -24,7 +24,22 @@ export type PaymentAttemptStatus =
   | "submitted"
   | "processing"
   /** Sprint 11: a late ACH return — the correctly-named counterpart to "reversed" above. */
-  | "returned";
+  | "returned"
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 1B: a previously-finalized "refunded" payment whose refund Adyen
+   * later reverses (`REFUNDED_REVERSED`). Deliberately its own distinct value, never a reuse of
+   * "succeeded" — see `enums.ts`'s identical doc comment for exactly why (avoiding a second
+   * success-effect pass for the same payment).
+   */
+  | "refund_reversed"
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 1C: a previously-finalized "refunded" payment whose refund Adyen's
+   * card-scheme/bank later rejects (`REFUND_FAILED` — only ever after an earlier confirmed `REFUND`).
+   * Its own distinct value for the same reason as "refund_reversed" above, and kept separate FROM
+   * "refund_reversed" too (different real-world cause, same underlying ledger correction) — see
+   * `enums.ts`'s identical doc comment.
+   */
+  | "refund_failed";
 
 /**
  * R09 corrective pass (Codex blocker 4A — payment transition legality): the authoritative,
@@ -44,6 +59,19 @@ export const ALLOWED_SOURCE_STATUSES_FOR_DESTINATION: Readonly<Partial<Record<Pa
   disputed: ["succeeded"],
   reversed: ["succeeded"],
   canceled: ["pending", "scheduled"],
+  // PAID2YOU — B0-D ADYEN PHASE 1B: reachable ONLY from "refunded" — a refund must have actually
+  // finalized before it can be reversed. No status is ever a legal source FROM "refund_reversed"
+  // (matches "reversed"/"disputed"/"returned"'s own identical terminal shape) — a second
+  // REFUNDED_REVERSED event (redelivery, or a genuinely distinct duplicate) finds the current status
+  // already "refund_reversed", which is not in this array, so the transition is correctly rejected
+  // as a permanent dead-end (see `isTransitionPermanentlyIllegal`) rather than reapplied.
+  refund_reversed: ["refunded"],
+  // PAID2YOU — B0-D ADYEN PHASE 1C: reachable ONLY from "refunded" — a refund must have actually
+  // finalized before Adyen's card-scheme/bank can reject it. No status is ever a legal source FROM
+  // "refund_failed" (matches "refund_reversed"'s own identical terminal shape) — a duplicate/replayed
+  // REFUND_FAILED, or one arriving after a REFUNDED_REVERSED (or vice versa) already applied, finds
+  // the current status no longer "refunded" and is correctly rejected rather than reapplied.
+  refund_failed: ["refunded"],
 };
 
 /**
@@ -252,6 +280,8 @@ export interface PaymentAttemptRepository {
   findByProviderPaymentId(providerPaymentId: string): Promise<PaymentAttemptRecord | null>;
   /** Sprint 10: recorded once, when LedgerService.postPayout succeeds — never any other way. */
   markPayoutCompleted(id: string, payoutCompletedAt: Date): Promise<PaymentAttemptRecord>;
+  /** PAID2YOU — B0-D PHASE 3B (G3 correction): the inverse of markPayoutCompleted — called only by PayoutService.returnPayout, once a previously-confirmed payout is reversed, so this field never falsely indicates an active, completed payout after the fact. */
+  clearPayoutCompleted(id: string): Promise<PaymentAttemptRecord>;
   /** Sprint 11: recorded once payout is initiated, before it settles. */
   markPayoutInitiated(id: string, payoutInitiatedAt: Date): Promise<PaymentAttemptRecord>;
   /**
@@ -450,6 +480,24 @@ function profileRefEquals(a: ProfileRef, b: ProfileRef): boolean {
 }
 
 /**
+ * PAID2YOU — B0-D ADYEN PHASE 1A (blocker 1 — exact payment method): the narrow capability
+ * `submitToProvider` needs to resolve the EXACT provider payment-method reference
+ * (`CreatePaymentInput.providerPaymentMethodRef` — see that field's own doc comment) for an ACH
+ * payment, from Paid2You's own persisted state — never a guess, never a lookup on the provider's own
+ * shopper directory. Declared narrowly here (mirrors `AgreementPartiesReader`'s identical
+ * consumer-defined-interface precedent in this same file) rather than depending on the full
+ * `AchMandateService` — this class remains structurally incapable of touching mandate
+ * authorization/revocation, only ever reading the currently-active one's own provider reference.
+ * Optional: every pre-existing test/production context that never wires this continues to work
+ * exactly as before (a `providerPaymentMethodRef` of `undefined` reaches the provider adapter, which
+ * — for a real, production-tagged adapter like `AdyenPaymentProvider` — then fails closed on its own;
+ * the retired sandbox never needed one at all).
+ */
+export interface AchMandateProviderRefReader {
+  getActiveProviderRef(agreementId: string): Promise<string | null>;
+}
+
+/**
  * Sprint 9 (docs/sprints/SPRINT_09_PaymentProviderAbstraction _Sandbox.md): the shared abstraction
  * application code depends on instead of any specific processor. This is the ONE place that calls
  * Sprint 3's `isFullyVerified` for both payer and recipient before creating a payment, per this
@@ -490,6 +538,24 @@ export class PaymentService {
        * notifications don't need to wire a fake.
        */
       notifications?: NotificationService;
+      /** PAID2YOU — B0-D ADYEN PHASE 1A: see `AchMandateProviderRefReader`'s own doc comment. */
+      achMandateProviderRefs?: AchMandateProviderRefReader;
+      /**
+       * PAID2YOU — B0-D C2 (payment activation gate). Required (not optional) — a mandatory security
+       * control with no legitimate "unwired" state, mirroring `PayoutService`'s identical
+       * `payoutProviderIntegrationVerified` precedent. Production (`getPaymentService.ts`) wires
+       * `getServerEnv().ADYEN_PAYMENTS_VERIFIED`; `testFakes.ts` defaults it to `true` so every
+       * pre-existing test that exercises real payment creation is unaffected. Checked in
+       * `createPayment` (see that method's own doc comment for exactly why) AND, as the AUTHORITATIVE
+       * enforcement point regardless of caller, in `submitPending` (see that method's own doc
+       * comment) — CORRECTION (B0-D C2 FINAL SECURITY GATE pass): an earlier version of this comment
+       * claimed `submitPending`/`submitToProvider` were "deliberately" exempt because retries/manual-
+       * payment recovery "depend on" them for an already-existing obligation — that reasoning was
+       * wrong. `submitPending` only ever runs against a row whose status is STILL `"scheduled"`,
+       * which structurally proves the provider has never seen it; there is no legitimate replay case
+       * at that layer. Leaving it unguarded was a genuine new-debit bypass.
+       */
+      newPaymentInitiationVerified: boolean;
     },
   ) {}
 
@@ -509,6 +575,20 @@ export class PaymentService {
     /** R11: the ONLY sanctioned exemption from the linkage requirement above — see `SettlementContextVerifier`'s own doc comment. */
     settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord> {
+    // PAID2YOU — B0-D C2 (payment activation gate). Checked FIRST, before `reserveAttempt` ever
+    // writes a payout_attempt/payment_attempt row — a blocked call produces ZERO mutation, never a
+    // reserved-then-abandoned row. This is the genuinely-NEW-payment entry point (POST
+    // /api/payments/create is its only caller): a brand-new payment_attempt that has never existed
+    // before, submitted to the provider immediately. `submitPending` (the shared path
+    // `AchPaymentService`/`DebitCardPaymentService`'s `submitScheduledPayment`/`createManualPayment`
+    // and `FailedPaymentRetryCoordinator`'s retry dispatch all route through) carries its OWN,
+    // independent copy of this exact check — see that method's own doc comment for why it is the
+    // authoritative enforcement point regardless of caller.
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires ADYEN_PAYMENTS_VERIFIED=true — Adyen registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See ADYEN_PAYMENTS_VERIFIED's own doc comment in src/config/env.ts.",
+      );
+    }
     const reserved = await this.reserveAttempt(input);
     if (reserved.alreadyResolved) return reserved.record;
     return this.submitToProvider(reserved.record, input);
@@ -577,6 +657,19 @@ export class PaymentService {
     const record = await this.getAuthorizedRecord(id, actingUserId, "payer_only");
     if (record.status !== "scheduled") {
       throw new ValidationError("Only a scheduled payment can be submitted.");
+    }
+    // PAID2YOU — B0-D C2 FINAL SECURITY GATE: the AUTHORITATIVE enforcement point for this flag —
+    // checked here, not merely in each orchestration-layer caller (AchPaymentService/
+    // DebitCardPaymentService's own identical checks are defense-in-depth, not the only line of
+    // defense). `submitPending` is a PUBLIC method: `record.status === "scheduled"` at this point
+    // structurally proves the provider has NEVER seen this payment_attempt (a payment can never
+    // return to "scheduled" once it leaves it), so this is unconditionally a genuinely NEW debit,
+    // never a replay — checked before `updateStatus` ever transitions the row, so a blocked call
+    // produces ZERO mutation, not even the "submitted" status write.
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires ADYEN_PAYMENTS_VERIFIED=true — Adyen registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See ADYEN_PAYMENTS_VERIFIED's own doc comment in src/config/env.ts.",
+      );
     }
     const submitted = await this.deps.payments.updateStatus(record.id, "submitted", {});
     return this.submitToProvider(submitted, {
@@ -821,6 +914,16 @@ export class PaymentService {
       throw new ValidationError("A provider-routed payment must be linked to an agreement.");
     }
     try {
+      // PAID2YOU — B0-D ADYEN PHASE 1A (blocker 1 — exact payment method): resolved from Paid2You's
+      // own persisted state (the agreement's currently-active ACH mandate's provider bank-account
+      // reference) — never a lookup on the provider's own shopper directory, never a guess. Only
+      // meaningful for an ACH-routed payment with a real agreement and the reader actually wired;
+      // `undefined` otherwise, which a real production adapter (AdyenPaymentProvider) fails closed on
+      // — this class itself makes no assumption about which providers require one.
+      const providerPaymentMethodRef =
+        record.paymentMethod === "ach" && record.agreementId && this.deps.achMandateProviderRefs
+          ? ((await this.deps.achMandateProviderRefs.getActiveProviderRef(record.agreementId)) ?? undefined)
+          : undefined;
       // See `submitPending`'s own doc comment: the LAST check before the actual network call, with
       // nothing else awaited in between — never moved earlier, where unrelated DB work would widen
       // the gap a concurrent revocation could land in.
@@ -831,6 +934,7 @@ export class PaymentService {
         currency: record.currency,
         payer: input.payer,
         recipient: input.recipient,
+        providerPaymentMethodRef,
       });
       const resolvedStatus: PaymentAttemptStatus = result.status === "pending" && record.status === "submitted" ? "processing" : result.status;
       const updated = await this.deps.payments.updateStatus(record.id, resolvedStatus, {
@@ -914,16 +1018,28 @@ export class PaymentService {
     }
     // Sprint 11: a "scheduled" payment was never submitted to the provider (docs/PAYMENT_STATE_MACHINE.md
     // §1: "Scheduled → Canceled: superseded by manual payment before retry fires") — there is
-    // nothing for the provider to cancel, so this is a local-only transition.
-    if (record.status !== "scheduled") {
-      const result = await this.deps.provider.cancelPayment(record.providerPaymentId ?? "");
-      if (!result.canceled) {
-        throw new ValidationError("The payment provider did not permit cancellation.");
-      }
+    // nothing for the provider to cancel, so this remains a local-only, immediately-final transition.
+    if (record.status === "scheduled") {
+      const updated = await this.deps.payments.updateStatus(record.id, "canceled", {});
+      await this.recordAudit(updated, "payment_canceled", actingUserId, null, null);
+      return updated;
     }
-    const updated = await this.deps.payments.updateStatus(record.id, "canceled", {});
-    await this.recordAudit(updated, "payment_canceled", actingUserId, null, null);
-    return updated;
+    // PAID2YOU — B0-D ADYEN PHASE 1A (blocker 3 — cancel/refund finality): a "pending" payment WAS
+    // submitted to the provider — `provider.cancelPayment()` returning `canceled: true` means only
+    // that the CANCELLATION REQUEST was accepted (Adyen: `"status": "received"`), never that it is
+    // confirmed. Finalizing to "canceled" on that acceptance alone (the pre-Phase-1A behavior) was
+    // exactly the premature-advancement defect this phase corrects: the payment stays "pending" until
+    // the asynchronous CANCELLATION webhook (`PaymentWebhookService`, `"payment.canceled" ->
+    // "canceled"`) actually confirms it — a `CANCELLATION` webhook with `success:false` correctly
+    // leaves it "pending" too (nothing was ever prematurely advanced to revert). `result.canceled ===
+    // false` here (the provider definitively refused the request itself) still throws immediately,
+    // unchanged — that IS a genuine, definite, synchronous outcome, not an async confirmation.
+    const result = await this.deps.provider.cancelPayment(record.providerPaymentId ?? "");
+    if (!result.canceled) {
+      throw new ValidationError("The payment provider did not permit cancellation.");
+    }
+    await this.recordAudit(record, "payment_cancellation_requested", actingUserId, null, null);
+    return record;
   }
 
   async refundPayment(id: string, actingUserId: string): Promise<PaymentAttemptRecord> {
@@ -934,10 +1050,15 @@ export class PaymentService {
     if (!record.providerPaymentId) {
       throw new ConfigurationError("A succeeded payment is missing its provider payment id.");
     }
+    // PAID2YOU — B0-D ADYEN PHASE 1A (blocker 3 — cancel/refund finality): `provider.refundPayment()`
+    // resolving means only that Adyen ACCEPTED the refund request ("status": "received") — never that
+    // it is confirmed. The payment stays "succeeded" until the asynchronous REFUND webhook
+    // (`PaymentWebhookService`, `"payment.refunded" -> "refunded"`) actually confirms it; a later
+    // REFUND_FAILED webhook then correctly finds nothing to revert (never prematurely advanced in the
+    // first place), instead of needing to undo a wrongly-finalized "refunded" status.
     await this.deps.provider.refundPayment(record.providerPaymentId);
-    const updated = await this.deps.payments.updateStatus(record.id, "refunded", {});
-    await this.recordAudit(updated, "payment_refunded", actingUserId, null, null);
-    return updated;
+    await this.recordAudit(record, "payment_refund_requested", actingUserId, null, null);
+    return record;
   }
 
   /**

@@ -1,5 +1,5 @@
 import "server-only";
-import { ConflictError, ValidationError } from "@/lib/errors";
+import { ConflictError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import type { ProfileRef } from "@/lib/payments/paymentProvider";
 import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentService } from "@/lib/payments/paymentService";
 import type { AgreementFeeAllocationReader } from "./agreementFeeAllocationReader";
@@ -29,6 +29,13 @@ export class DebitCardPaymentService {
       payments: PaymentService;
       paymentAttempts: PaymentAttemptRepository;
       feeAllocation: AgreementFeeAllocationReader;
+      /**
+       * PAID2YOU — B0-D C2 (payment activation gate). Required — mirrors `AchPaymentService`'s
+       * identical field exactly; see that class's own doc comment for the full rationale, including
+       * this pass's correction that `createManualPayment`'s genuinely-new-attempt branch must also be
+       * gated (its idempotent-replay branch remains correctly exempt).
+       */
+      newPaymentInitiationVerified: boolean;
     },
   ) {}
 
@@ -94,8 +101,18 @@ export class DebitCardPaymentService {
     return { ...record, charge };
   }
 
-  /** Submission time reached — calls the provider. Mirrors AchPaymentService.submitScheduledPayment. */
+  /**
+   * Submission time reached — calls the provider. Mirrors AchPaymentService.submitScheduledPayment,
+   * including its identical PAID2YOU — B0-D C2 (payment activation gate) placement: checked FIRST,
+   * before `submitPending` ever transitions the row out of "scheduled" — a blocked call produces ZERO
+   * mutation. This is the FIRST-EVER submission of this specific payment_attempt, never a retry.
+   */
   async submitScheduledPayment(paymentAttemptId: string, actingUserId: string): Promise<PaymentAttemptRecord> {
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires ADYEN_PAYMENTS_VERIFIED=true — Adyen registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See ADYEN_PAYMENTS_VERIFIED's own doc comment in src/config/env.ts.",
+      );
+    }
     return this.deps.payments.submitPending(paymentAttemptId, actingUserId);
   }
 
@@ -143,8 +160,18 @@ export class DebitCardPaymentService {
       "scheduled",
     );
     if (scheduled.status !== "scheduled") {
-      // Idempotent replay of an already-submitted manual payment — nothing further to do.
+      // Idempotent replay of an already-submitted manual payment — nothing further to do. Never
+      // gated: this row already left "scheduled" on a PRIOR call (real provider evidence exists, or
+      // is already in flight), so this is recovery of an existing obligation, not a new debit.
       return { ...scheduled, charge };
+    }
+    // PAID2YOU — B0-D C2 (payment activation gate): see AchPaymentService.createManualPayment's
+    // identical gate and doc comment for exactly why this is placed here (after the replay branch,
+    // before submitPending).
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires ADYEN_PAYMENTS_VERIFIED=true — Adyen registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See ADYEN_PAYMENTS_VERIFIED's own doc comment in src/config/env.ts.",
+      );
     }
     const submitted = await this.deps.payments.submitPending(scheduled.id, input.actingUserId, null, null, input.finalGuard);
     return { ...submitted, charge };

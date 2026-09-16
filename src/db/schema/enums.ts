@@ -255,6 +255,36 @@ export const paymentAttemptStatusEnum = pgEnum("payment_attempt_status", [
   // return"). The `payment.returned` webhook event (Sprint 10) now sets this instead of the
   // mislabeled "reversed".
   "returned",
+  // PAID2YOU — B0-D ADYEN PHASE 1B: a previously-finalized refund ("refunded") that Adyen later
+  // reverses (eventCode `REFUNDED_REVERSED` — e.g. the refunded ACH credit itself bounced/returned).
+  // Deliberately its OWN distinct terminal value, never a reuse of "succeeded" — reusing "succeeded"
+  // would re-enter `PaymentWebhookService`'s success-effect/supersession machinery
+  // (`runFailedPaymentWorkflowRequired`, `checkCompletionRequired`, `applyPartialPaymentRequired`) a
+  // SECOND time for the same payment, risking duplicate installment-paid/notification/lifecycle
+  // effects — exactly what this value exists to avoid. Reachable ONLY from "refunded"
+  // (`ALLOWED_SOURCE_STATUSES_FOR_DESTINATION`, paymentService.ts) and wired to NO status-transition
+  // side effect in `PaymentWebhookService` beyond the transition itself (verified: every effect gate
+  // keyed on `PaymentAttemptStatus` — notifications, installment workflow, agreement completion,
+  // supersession compensation — is keyed on a specific OTHER status and correctly no-ops for this
+  // one) — a pure "this is no longer accurately displayed/accounted as a successful refund"
+  // correction, never a second `payment.succeeded`-shaped financial event. PHASE 1C: the ORIGINAL
+  // refund's own ledger entry IS now reversed/corrected exactly once — see
+  // `LedgerService.correctRefund` and `PaymentWebhookService.postLedgerEntryRequired`'s own doc
+  // comments — closing what Phase 1B left as a disclosed follow-up.
+  "refund_reversed",
+  // PAID2YOU — B0-D ADYEN PHASE 1C: a previously-finalized refund ("refunded") that Adyen later
+  // reports as having failed at the card-scheme/bank level (eventCode `REFUND_FAILED`, which Adyen
+  // documents as occurring ONLY after an earlier `REFUND` webhook with `success:true` — never as the
+  // very first/only refund outcome; an immediate/synchronous refund rejection is instead a `REFUND`
+  // webhook with `success:false`, which never reaches "refunded" in the first place and maps to no
+  // status change). Deliberately its own distinct terminal value — NOT a reuse of "succeeded" (same
+  // rationale as "refund_reversed" above: avoiding a second `payment.succeeded`-shaped effect pass)
+  // and not merged with "refund_reversed" either, despite both undoing the same underlying `refund`
+  // ledger entry via the same `LedgerService.correctRefund` — they are attributable to different
+  // real-world causes (scheme-level rejection vs. funds returned after settlement) worth keeping
+  // separately visible/auditable. Reachable ONLY from "refunded"; has no legal outgoing transition
+  // (matches "refund_reversed"'s own identical terminal shape).
+  "refund_failed",
 ]);
 
 /**
@@ -332,6 +362,20 @@ export const ledgerEntryTypeEnum = pgEnum("ledger_entry_type", [
   "payout",
   "dispute_adjustment",
   "admin_adjustment",
+  // PAID2YOU — B0-D ADYEN PHASE 1C: reinstates a payment's cleared state after its own "refund" entry
+  // is invalidated — either the refund failed at the card-scheme/bank level after initially
+  // succeeding (`REFUND_FAILED`), or a previously-confirmed refund was later reversed
+  // (`REFUNDED_REVERSED`). Posted by flipping the existing "refund" entry's own postings (see
+  // `LedgerService.correctRefund`) — never a second `payment_cleared`/`refund`, and idempotent
+  // per-payment like every other automatic entry type.
+  "refund_correction",
+  // PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts): reverses an existing "payout" entry once
+  // a CONFIRMED payout is later returned by the receiving bank — mirrors "refund_correction"'s own
+  // exact shape/rationale (flip the existing entry's own postings, insert as a new row, never edit or
+  // delete). Posted by `LedgerService.postPayoutReturn`, driven exclusively by `PayoutService
+  // .returnPayout` — never by a bare webhook event. See `payout_attempt`'s own doc comment
+  // (src/db/schema/payoutAttempt.ts) for the full provider-independent payout lifecycle this closes.
+  "payout_returned",
 ]);
 
 export const ledgerPostingDirectionEnum = pgEnum("ledger_posting_direction", ["debit", "credit"]);
@@ -689,6 +733,33 @@ export const relationshipFinancialAccountAssignmentStatusEnum = pgEnum("relation
 ]);
 
 /**
+ * PAID2YOU — B0-D ADYEN PHASE 2A (final bank-security correction). `bank_link_attempt` is a
+ * short-lived, purely operational bookkeeping row — never sensitive, never a raw bank credential —
+ * that binds one Adyen tokenization `/sessions` object back to the exact authenticated Paid2You
+ * party that initiated it. See `bankLinkAttempt.ts`'s own doc comment for the full webhook-only
+ * correlation chain this status tracks — the Phase 2 before/after token-list-difference mechanism
+ * has been removed entirely.
+ *
+ * `pending`: session created; no Adyen-authenticated confirmation of anything yet.
+ * `authorised`: a matching AUTHORISATION webhook (success:true, `merchantReference` match) was
+ * durably processed — `confirmedPspReference` is now set — but the resulting token has not yet been
+ * confirmed by a `recurring.token.created`/`alreadyExisting` webhook.
+ * `completed`: the matching token webhook arrived and was verified (pspReference + shopperReference
+ * + merchantAccount all matched) — the resulting `financial_account` now exists.
+ * `failed`: the AUTHORISATION webhook reported `success:false` for this attempt's own
+ * `merchantReference` — never retried automatically.
+ * `expired`: never confirmed within the attempt's own TTL — a stale, safe-to-ignore row, never
+ * silently reused.
+ */
+export const bankLinkAttemptStatusEnum = pgEnum("bank_link_attempt_status", [
+  "pending",
+  "authorised",
+  "completed",
+  "failed",
+  "expired",
+]);
+
+/**
  * Sprint 18 (docs/sprints/SPRINT_18_AdminSupport_Appeals.md): the fine-grained internal-staff role a
  * `platform_admin` (Sprint 6A) may additionally hold, narrowing which admin capabilities they may
  * exercise — entirely separate from `PlatformRole` (member/platform_admin/platform_owner), which
@@ -755,3 +826,24 @@ export const cardTransactionEventTypeEnum = pgEnum("card_transaction_event_type"
   "decline",
   "reversal",
 ]);
+
+/**
+ * PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts). The minimum provider-independent lifecycle
+ * needed to distinguish a creditor payout's real state from a bare internal ledger posting — see
+ * `payout_attempt`'s own doc comment (src/db/schema/payoutAttempt.ts) for the full design.
+ *
+ * `pending`: a payment cleared and a creditor is owed a payout — nothing has been provider-confirmed
+ * yet. This is the ONLY state `PaymentWebhookService` itself ever creates.
+ * `confirmed`: `PayoutService.confirmPayout` was called with non-empty, caller-supplied
+ * `providerName`/`providerPayoutReference` evidence — never merely because a webhook event of some
+ * eventType arrived. No code path in this phase ever calls `confirmPayout` — it exists as
+ * provider-independent infrastructure a future live-provider integration wires into, never invented
+ * here (no Adyen event mapping is assumed).
+ * `failed`: the payout could not be completed — the creditor's own `creditor_proceeds_payable`
+ * liability is left completely untouched (this is the concrete mechanism behind "failed payout
+ * preserves creditor liability").
+ * `returned`: a previously-`confirmed` payout was later reversed by the receiving bank —
+ * `LedgerService.postPayoutReturn` reinstates the liability by flipping the original `payout` entry's
+ * own postings, mirroring `refund_correction`'s identical precedent.
+ */
+export const payoutAttemptStatusEnum = pgEnum("payout_attempt_status", ["pending", "confirmed", "failed", "returned"]);

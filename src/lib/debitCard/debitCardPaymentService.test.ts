@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
-import { ConflictError, ValidationError } from "@/lib/errors";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ConflictError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import { createTestBalanceService, createTestLedgerService } from "@/lib/ledger/testFakes";
 import { createTestPaymentWebhookService } from "@/lib/payments/testFakes";
 import { computeCardProcessorFeeMinorUnits } from "./cardFeeAllocation";
+import { DebitCardPaymentService } from "./debitCardPaymentService";
 import { createTestDebitCardServices, seedAgreementForCardTest, TEST_FUTURE_CARD_EXPIRY, TEST_PAST_CARD_EXPIRY } from "./testFakes";
 
 const PAYER = { profileKind: "personal" as const, profileId: "payer-1" };
@@ -188,8 +189,11 @@ describe("DebitCardPaymentService", () => {
     // sandbox provider's designated test hook for that (mirrors src/lib/payments/paymentService.test.ts's
     // refund test, which monkey-patches createPayment's simulateOutcome for the same reason).
     card.paymentCtx.provider.simulateSettlement(submitted.providerPaymentId!, "succeeded");
+    // PAID2YOU — B0-D ADYEN PHASE 1A (blocker 3 — cancel/refund finality): the refund REQUEST being
+    // accepted no longer finalizes the status synchronously — it stays "succeeded" until an async
+    // REFUND webhook confirms it (never sent in this test).
     const refunded = await card.paymentCtx.paymentService.refundPayment(submitted.id, RECIPIENT_USER_ID);
-    expect(refunded.status).toBe("refunded");
+    expect(refunded.status).toBe("succeeded");
   });
 
   it("card replacement: after replacing the card, a new payment schedules successfully and the old card no longer counts as active", async () => {
@@ -340,5 +344,85 @@ describe("DebitCardPaymentService", () => {
     const methodNames = Object.getOwnPropertyNames(Object.getPrototypeOf(card.debitCardPaymentService));
     expect(methodNames).not.toContain("createRecipientAccount");
     expect(methodNames).not.toContain("verifyWebhookSignature");
+  });
+
+  describe("PAID2YOU — B0-D C2 (payment activation gate)", () => {
+    function blockedCard() {
+      return new DebitCardPaymentService({
+        cards: card.debitCardMethodService,
+        payments: card.paymentCtx.paymentService,
+        paymentAttempts: card.paymentCtx.payments,
+        feeAllocation: card.feeAllocation,
+        newPaymentInitiationVerified: false,
+      });
+    }
+
+    it("T4/T10: default FALSE blocks submitScheduledPayment with ProviderNotAvailableError, provider NEVER called, no state mutation — the payment stays exactly 'scheduled'", async () => {
+      const scheduled = await card.debitCardPaymentService.scheduleInstallmentPayment({
+        idempotencyKey: "gate-card-1",
+        installmentScheduleItemId: installmentId,
+        agreementId,
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+      });
+      expect(scheduled.status).toBe("scheduled");
+
+      const providerSpy = vi.spyOn(card.paymentCtx.provider, "createPayment");
+      await expect(blockedCard().submitScheduledPayment(scheduled.id, PAYER_USER_ID)).rejects.toThrow(ProviderNotAvailableError);
+      expect(providerSpy).not.toHaveBeenCalled();
+
+      const reloaded = await card.paymentCtx.payments.findById(scheduled.id);
+      expect(reloaded?.status).toBe("scheduled"); // no fake success, no financial mutation.
+      expect(reloaded?.providerPaymentId).toBeNull();
+    });
+
+    it("T4/T10: CORRECTION (this pass) — disabled initiation DOES block createManualPayment's genuinely-new-attempt branch, provider NEVER called — a manual payment is a brand-new payment_attempt the provider has never seen, not recovery of an existing one. See this class's own doc comment for why an earlier version of this test had this backwards.", async () => {
+      const providerSpy = vi.spyOn(card.paymentCtx.provider, "createPayment");
+      await expect(
+        blockedCard().createManualPayment({
+          idempotencyKey: "gate-card-manual-1",
+          agreementId,
+          payer: PAYER,
+          recipient: RECIPIENT,
+          amountMinorUnits: 5_000,
+          currency: "USD",
+          actingUserId: PAYER_USER_ID,
+        }),
+      ).rejects.toThrow(ProviderNotAvailableError);
+      expect(providerSpy).not.toHaveBeenCalled();
+
+      const scheduled = await card.paymentCtx.payments.findByIdempotencyKey("gate-card-manual-1");
+      expect(scheduled?.status).toBe("scheduled"); // no fake success, no financial mutation.
+      expect(scheduled?.providerPaymentId).toBeNull();
+    });
+
+    it("idempotent replay of an ALREADY-SUBMITTED manual payment stays fully functional when initiation is disabled — real evidence of prior provider submission, not merely a pending local record", async () => {
+      const first = await card.debitCardPaymentService.createManualPayment({
+        idempotencyKey: "gate-card-manual-replay-1",
+        agreementId,
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+      });
+      expect(first.status).not.toBe("scheduled");
+      expect(first.providerPaymentId).toBeTruthy();
+
+      const replay = await blockedCard().createManualPayment({
+        idempotencyKey: "gate-card-manual-replay-1",
+        agreementId,
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+      });
+      expect(replay.id).toBe(first.id);
+      expect(replay.status).toBe(first.status);
+    });
   });
 });

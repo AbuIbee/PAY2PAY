@@ -124,6 +124,14 @@ export interface FinancialAccountRepository {
     addedByUserId: string;
   }): Promise<FinancialAccountRecord>;
   findById(id: string): Promise<FinancialAccountRecord | null>;
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 2: looks up a `financial_account` by its own provider-issued
+   * identity `(providerName, providerAccountRef)` — e.g. `("adyen", storedPaymentMethodId)`. Used by
+   * the Adyen token-lifecycle webhook handler (`disableAccountByProviderRef`) to resolve a
+   * provider-initiated event back to Paid2You's own row, keyed by the SAME opaque token every other
+   * lookup already uses — never a second, parallel identity scheme.
+   */
+  findByProviderRef(providerName: string, providerAccountRef: string): Promise<FinancialAccountRecord | null>;
   listForParty(individualProfileId: string | null, organizationId: string | null): Promise<FinancialAccountRecord[]>;
   markVerified(id: string, verifiedAt: Date): Promise<FinancialAccountRecord>;
   markFailed(id: string): Promise<FinancialAccountRecord>;
@@ -376,6 +384,28 @@ export class RelationshipFinancialAccountService {
     }
     const updated = await this.deps.financialAccounts.markDisabled(account.id, new Date());
     await this.recordAccountAudit(updated, "FINANCIAL_ACCOUNT_DISABLED", input.actingUserId, input.reason);
+    return updated;
+  }
+
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 2: the SYSTEM-triggered counterpart to `disableAccount` above — called
+   * ONLY from the Adyen token-lifecycle webhook handler when Adyen itself reports a token disabled
+   * (`recurring.token.disabled`), never from a route handler with a real acting user (there is none —
+   * the provider is the authority here, exactly like `LedgerService`'s own `"ledger_system"` actor
+   * precedent for provider/system-originated mutations). Unlike `disableAccount`, this deliberately
+   * does NOT block on active relationship assignments — Adyen has already made the token unusable;
+   * refusing to reflect that locally would leave Paid2You's own state lying about a token it can no
+   * longer actually charge. Idempotent: a second delivery for an already-disabled account is a safe
+   * no-op (never a duplicate audit entry). Returns `null` (not an error) when no matching account is
+   * found — a webhook for a token this Paid2You instance never tokenized (e.g. a different merchant
+   * account) is not itself a failure.
+   */
+  async disableAccountByProviderRef(providerName: string, providerAccountRef: string, reason: string): Promise<FinancialAccountRecord | null> {
+    const account = await this.deps.financialAccounts.findByProviderRef(providerName, providerAccountRef);
+    if (!account) return null;
+    if (account.status === "disabled") return account;
+    const updated = await this.deps.financialAccounts.markDisabled(account.id, new Date());
+    await this.recordAccountAudit(updated, "FINANCIAL_ACCOUNT_DISABLED_BY_PROVIDER", null, reason, "payment_provider_webhook");
     return updated;
   }
 
@@ -733,10 +763,16 @@ export class RelationshipFinancialAccountService {
     await this.deps.staffService.requireCapability(party.id, actingUserId, FINANCIAL_ACCOUNT_CAPABILITY);
   }
 
-  private async recordAccountAudit(account: FinancialAccountRecord, action: string, actorUserId: string, reason: string | null): Promise<void> {
+  private async recordAccountAudit(
+    account: FinancialAccountRecord,
+    action: string,
+    actorUserId: string | null,
+    reason: string | null,
+    actorRole = "agreement_party",
+  ): Promise<void> {
     await this.deps.audit.record({
       actorUserId,
-      actorRole: "agreement_party",
+      actorRole,
       profileKind: account.individualProfileId ? "personal" : "business",
       profileId: account.individualProfileId ?? account.organizationId,
       agreementId: null,

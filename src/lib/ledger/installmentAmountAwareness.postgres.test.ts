@@ -39,7 +39,7 @@ import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAt
 import { DrizzlePaymentWebhookEventRepository } from "@/lib/payments/drizzlePaymentWebhookEventRepository";
 import { DrizzlePaymentInitiationEligibilityService } from "@/lib/payments/paymentInitiationEligibilityService";
 import { DrizzleSettlementContextVerifier } from "@/lib/payments/drizzleSettlementContextVerifier";
-import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 import { DrizzlePaymentTransitionCoordinator } from "@/lib/payments/paymentTransitionCoordinator";
 import { PaymentService, type ManualPaymentInstallmentHook, type PaymentAttemptRecord } from "@/lib/payments/paymentService";
 import { PaymentWebhookService } from "@/lib/payments/paymentWebhookService";
@@ -171,6 +171,7 @@ function buildContextForLinkageTests(overrides?: {
     installmentReserver: overrides?.installmentReserver ?? new DrizzleInstallmentAwarePaymentReserver(),
     scheduleReader: new DrizzleAgreementScheduleReader(),
     settlementContext: new DrizzleSettlementContextVerifier(),
+    newPaymentInitiationVerified: true,
     installmentHook: overrides?.installmentHook,
   });
   return { verificationCtx, paymentService, payments, ledger };
@@ -235,6 +236,7 @@ function buildAchPaymentServiceForTest(paymentService: PaymentService): AchPayme
     mandates: mandateStub,
     payments: paymentService,
     paymentAttempts: new DrizzlePaymentAttemptRepository(),
+    newPaymentInitiationVerified: true,
   });
 }
 
@@ -2574,6 +2576,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
       installmentReserver: new DrizzleInstallmentAwarePaymentReserver(),
       scheduleReader: new DrizzleAgreementScheduleReader(),
       settlementContext: new DrizzleSettlementContextVerifier(),
+      newPaymentInitiationVerified: true,
     });
     const achPaymentService = buildAchPaymentServiceForTest(paymentService);
 

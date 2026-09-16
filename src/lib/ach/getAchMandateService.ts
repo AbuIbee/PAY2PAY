@@ -5,6 +5,7 @@ import { DrizzleAgreementRepository } from "@/lib/agreements/drizzleAgreementRep
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { AchMandateService } from "./achMandateService";
 import { DrizzleAchMandateRepository } from "./drizzleAchMandateRepository";
+import { DrizzleFinancialAccountOwnershipVerifier } from "./drizzleFinancialAccountOwnershipVerifier";
 
 let cached: AchMandateService | null = null;
 
@@ -16,6 +17,9 @@ export function getAchMandateService(): AchMandateService {
       // R08 B1 (ACH-1): narrow read-only dependency — never AgreementService, never a second DB client.
       agreements: new DrizzleAgreementRepository(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
+      // PAID2YOU — B0-D ADYEN PHASE 2 (item 5): always wired in production — see
+      // FinancialAccountOwnershipVerifier's own doc comment.
+      financialAccounts: new DrizzleFinancialAccountOwnershipVerifier(),
     });
   }
   return cached;

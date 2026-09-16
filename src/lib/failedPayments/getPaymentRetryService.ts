@@ -1,4 +1,5 @@
 import "server-only";
+import { getServerEnv } from "@/config/env";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getAchPaymentService } from "@/lib/ach/getAchPaymentService";
@@ -34,6 +35,10 @@ export function getPaymentRetryService(): PaymentRetryService {
         verification: getVerificationService(),
         payments: new DrizzlePaymentAttemptRepository(),
         balances: getBalanceService(),
+        // PAID2YOU — B0-D C2 (payment activation gate): the real production value, explicitly wired
+        // — see DrizzlePaymentInitiationEligibilityService's own doc comment on this field for why
+        // its default (`true`) is never relied on here.
+        newPaymentInitiationVerified: getServerEnv().ADYEN_PAYMENTS_VERIFIED,
       }),
       // PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 2, and CRITICAL fix — Section
       // B1): the SAME singleton every real webhook delivery already processes through — see

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
+import { ProviderCapabilityUnsupportedError } from "@/lib/errors";
+import type { PaymentProvider } from "@/lib/payments/paymentProvider";
 import { createFullLedgerTestContext } from "./integrationTestFakes";
+import { ReconciliationService } from "./reconciliationService";
 
 const PAYER = { profileKind: "personal" as const, profileId: randomUUID() };
 const RECIPIENT = { profileKind: "business" as const, profileId: randomUUID() };
@@ -67,6 +70,34 @@ describe("ReconciliationService", () => {
     await ctx.paymentCtx.payments.updateStatus(payment.id, "succeeded", { providerPaymentId: "sandbox_pay_never_existed" });
     const found = await ctx.reconciliationService.reconcilePaymentAttempt(payment.id);
     expect(found.map((e) => e.exceptionType)).toContain("unmatched_provider_transaction");
+  });
+
+  it("PAID2YOU — B0-D ADYEN PHASE 1A (blocker 2 — retry/reconciliation): a provider that structurally cannot support retrievePayment (e.g. Adyen — ProviderCapabilityUnsupportedError) is skipped entirely, never flagged as unmatched_provider_transaction — every payment would otherwise false-positive the same way", async () => {
+    const payment = await insertPayment();
+    await ctx.paymentCtx.payments.updateStatus(payment.id, "succeeded", { providerPaymentId: "psp_some_real_looking_reference" });
+
+    const unsupportedProvider = new Proxy(ctx.paymentCtx.provider, {
+      get(target, prop, receiver) {
+        if (prop === "retrievePayment") {
+          return async () => {
+            throw new ProviderCapabilityUnsupportedError("Adyen has no GET-by-pspReference endpoint.");
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as unknown as PaymentProvider;
+    const reconciliationWithUnsupportedProvider = new ReconciliationService({
+      payments: ctx.paymentCtx.payments,
+      webhookEvents: ctx.webhookCtx.events,
+      provider: unsupportedProvider,
+      ledger: ctx.ledgerCtx.ledgerService,
+      exceptions: ctx.exceptions,
+      completion: ctx.completionService,
+    });
+
+    const found = await reconciliationWithUnsupportedProvider.reconcilePaymentAttempt(payment.id);
+    expect(found.map((e) => e.exceptionType)).not.toContain("unmatched_provider_transaction");
+    expect(found.map((e) => e.exceptionType)).not.toContain("status_mismatch");
   });
 
   it("detects status_mismatch: our status disagrees with the provider's own status for the same id", async () => {

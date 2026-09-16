@@ -1,0 +1,1 @@
+ALTER TYPE "public"."payment_attempt_status" ADD VALUE 'refund_reversed';

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError, apiFetch } from "@/lib/ui/apiFetch";
 import { formatMoney } from "@/lib/ui/money";
 import { formatDate, formatDateTime } from "@/lib/ui/date";
-import { paymentAttemptStatusLabel, paymentDisputeStatusLabel } from "@/lib/ui/statusLabels";
+import { creditorPayoutStatusLabel, paymentAttemptStatusLabel, paymentDisputeStatusLabel } from "@/lib/ui/statusLabels";
 
 interface PaymentDetailData {
   id: string;
@@ -21,6 +21,8 @@ interface PaymentDetailData {
   installmentScheduleItemId: string | null;
   recipientConfirmedAt: string | null;
   failureReason: string | null;
+  /** PAID2YOU — B0-D PHASE 3D (payout status accuracy): the authoritative payout_attempt status — null when no payout obligation has been recorded yet. Never derived from `status` alone. */
+  payoutStatus: "pending" | "confirmed" | "failed" | "returned" | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -160,6 +162,12 @@ export function PaymentDetail() {
 
   const { label, tone } = paymentAttemptStatusLabel(payment.status as never);
   const isFailed = payment.status === "failed";
+  // PAID2YOU — B0-D PHASE 3D (payout status accuracy): the creditor's own payout status, distinct from
+  // this payment's own "Cleared"/"Pending" chip above — a cleared payment does not, by itself, mean the
+  // creditor has been paid out. Shown regardless of viewer role (both parties already have access to
+  // this payment record); never derived from `payment.status` alone, never "Paid"/"Transferred" unless
+  // payout_attempt is genuinely `confirmed`.
+  const payout = creditorPayoutStatusLabel(payment.status, payment.payoutStatus);
 
   return (
     <div style={{ display: "grid", gap: "1.25rem" }}>
@@ -179,6 +187,12 @@ export function PaymentDetail() {
           <div>
             <dt style={{ color: "var(--ink-soft)", fontSize: "0.8rem" }}>Last updated</dt>
             <dd style={{ margin: 0 }}>{formatDateTime(payment.updatedAt)}</dd>
+          </div>
+          <div>
+            <dt style={{ color: "var(--ink-soft)", fontSize: "0.8rem" }}>Payout to creditor</dt>
+            <dd style={{ margin: 0 }}>
+              <span className={`chip chip--${payout.tone}`}>{payout.label}</span>
+            </dd>
           </div>
           {payment.agreementId && (
             <div>
