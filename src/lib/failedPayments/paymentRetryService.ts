@@ -1,6 +1,7 @@
 import "server-only";
 import { DrizzleQueryError } from "drizzle-orm";
 import type { AuditService } from "@/lib/audit/auditService";
+import { ProviderNotAvailableError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import type { ProfileKind, ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentMethod } from "@/lib/payments/paymentService";
@@ -452,7 +453,18 @@ export class PaymentRetryService {
           else if (outcome.outcome === "failed") canceled += 1;
           // "not_claimable" (already settled/superseded by the time the lock was acquired) — no-op.
         } catch (error) {
-          // Any pre-lock eligibility/preparation failure (prepareRetrySubmission,
+          // PAID2YOU — B0-D C2 FINAL SECURITY GATE: a `ProviderNotAvailableError` from
+          // `assertPreLockEligible` means the operator has not confirmed live-payment approval — it is
+          // NEVER a definite provider rejection (the provider was never even contacted) and must NEVER
+          // be treated the same as a genuine preparation/eligibility failure. Deliberately left
+          // untouched — still "scheduled", not "canceled", not counted below — so this exact retry
+          // remains discoverable and fires normally on a later run once the operator sets
+          // ADYEN_PAYMENTS_VERIFIED=true. Checked first, before the generic catch-all below.
+          if (error instanceof ProviderNotAvailableError) {
+            logger.warn("payment_retry_firing_deferred_activation_gate", { paymentRetryId: retry.id });
+            continue;
+          }
+          // Any OTHER pre-lock eligibility/preparation failure (prepareRetrySubmission,
           // assertPreLockEligible) — never touches the installment lock or the provider; the retry is
           // still merely "scheduled" here, so `markCanceled`'s conditional `WHERE status = 'scheduled'`
           // guard correctly cancels it below.
@@ -541,6 +553,13 @@ export class PaymentRetryService {
         await this.deps.retries.markFired(retry.id, resulting.id, now);
         fired += 1;
       } catch (error) {
+        // PAID2YOU — B0-D C2 FINAL SECURITY GATE: see the atomic-coordinator branch above's identical
+        // handling of this exact error type for why this must never be treated as a definite
+        // rejection or cancel this retry.
+        if (error instanceof ProviderNotAvailableError) {
+          logger.warn("payment_retry_firing_deferred_activation_gate", { paymentRetryId: retry.id });
+          continue;
+        }
         const reason = error instanceof Error ? error.message : "unknown_retry_firing_error";
         logger.error("payment_retry_firing_failed", { paymentRetryId: retry.id, error: reason });
         const stillScheduled = await this.deps.retries.markCanceled(retry.id, now, `Firing failed: ${reason}`);

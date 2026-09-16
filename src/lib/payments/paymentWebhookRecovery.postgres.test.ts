@@ -6,7 +6,7 @@ import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getDb } from "@/db/client";
 import { agreement, agreementVersion, auditEvent, installmentScheduleItem, paymentAttempt, paymentRetry, paymentWebhookEvent } from "@/db/schema";
-import { ConfigurationError } from "@/lib/errors";
+import { ConfigurationError, ProviderCapabilityUnsupportedError } from "@/lib/errors";
 import { AgreementCompletionService, type AgreementBalanceComputer, type AgreementStatusRepository } from "@/lib/ledger/agreementCompletionService";
 import { BalanceService } from "@/lib/ledger/balanceService";
 import { DrizzleAgreementTermsReader } from "@/lib/ledger/drizzleAgreementTermsReader";
@@ -1543,6 +1543,7 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       payments: realPayments,
       audit: new AuditService(new DrizzleAuditEventRepository()),
       agreements: new InMemoryAgreementPartiesReader(),
+      newPaymentInitiationVerified: true,
     });
     const scenarioAIdempotencyKey = `b19-scenario-a-${randomUUID()}`;
 
@@ -1610,6 +1611,7 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       audit: new AuditService(new DrizzleAuditEventRepository()),
       agreements: manualAgreements,
       ledger: ctx.ledger,
+      newPaymentInitiationVerified: true,
     });
     const manualRecord = await manualPaymentService.recordManualOffPlatformPayment({
       idempotencyKey: `b19-scenario-c-${randomUUID()}`,
@@ -2400,6 +2402,216 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     expect(retryRow?.status).toBe("canceled");
   });
 
+  // ---------------------------------------------------------------------------------------------
+  // PAID2YOU — B0-D C2 FINAL SECURITY GATE (T5, T9, T10): ADYEN_PAYMENTS_VERIFIED=false must block
+  // every genuinely NEW automatic-retry dispatch (T5) through the REAL `PaymentRetryService
+  // .fireDueRetries` atomic-coordinator entry point, WITHOUT canceling the retry or mutating anything
+  // (T10) — unlike R-B54A-E above (a DIFFERENT, pre-existing eligibility control that DOES cancel on
+  // block), and must also block the two ambiguity-RESOLUTION redispatch points inside
+  // `DrizzleFailedPaymentRetryCoordinator` itself (T9), since neither is reachable through
+  // `assertPreLockEligible`.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Local copy of the identically-named helper used deeper in this file (out of scope here, nested inside a later describe block) — see that copy's own doc comment. Produces a provider whose createPayment genuinely dispatches, then reports AmbiguousProviderResponseError, mirroring "the application lost the response after the provider already accepted it." */
+  function buildLossyAmbiguousProviderForActivationGateTests(): { lossyProvider: SandboxPaymentProvider } {
+    const realProvider = new SandboxPaymentProvider(WEBHOOK_SECRET);
+    const lossyProvider = new Proxy(realProvider, {
+      get(target, prop, receiver) {
+        if (prop === "createPayment") {
+          return async (...args: unknown[]) => {
+            await (target.createPayment as (...a: unknown[]) => Promise<{ providerPaymentId: string; status: string }>).apply(target, args);
+            throw new AmbiguousProviderResponseError();
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as unknown as SandboxPaymentProvider;
+    return { lossyProvider };
+  }
+
+  it("T5/T10 — ADYEN_PAYMENTS_VERIFIED=false blocks a genuinely NEW automatic retry dispatch, provider NEVER called, retry left untouched (still 'scheduled', not canceled)", async () => {
+    const ctx = buildContext();
+    const verificationCtx = createTestVerificationService();
+    const { spiedProvider, callCount } = spyOnCreatePayment(new SandboxPaymentProvider(WEBHOOK_SECRET));
+    const eligibility = new DrizzlePaymentInitiationEligibilityService({
+      verification: verificationCtx.verificationService,
+      payments: ctx.payments,
+      balances: ctx.balances,
+      newPaymentInitiationVerified: false, // the gate under test.
+    });
+    const fakeInitiator: RetryPaymentMethodInitiator = {
+      async createManualPayment() {
+        throw new Error("not used in this test");
+      },
+      async prepareRetrySubmission(input) {
+        return { amountMinorUnits: input.amountMinorUnits, currency: input.currency, paymentMethod: "ach", bankConnectionId: null };
+      },
+    };
+    const coordinator = new DrizzleFailedPaymentRetryCoordinator();
+    const retryService = new PaymentRetryService({
+      retries: new DrizzlePaymentRetryRepository(),
+      paymentAttempts: ctx.payments,
+      initiators: { ach: fakeInitiator, debit_card: fakeInitiator, manual_off_platform: fakeInitiator },
+      profileOwners: verificationCtx.profileOwners,
+      audit: new AuditService(new DrizzleAuditEventRepository()),
+      retryCoordinator: coordinator,
+      provider: spiedProvider,
+      eligibility,
+      effectApplier: ctx.buildWebhookService(),
+    });
+
+    const { creditor, debtor } = await seedTwoParties();
+    const { agreementId, installmentScheduleItemId } = await seedAgreementWithInstallment(creditor.profileId, debtor.profileId, creditor.userId, 5_000);
+    await seedVerifiedParties(verificationCtx, debtor, creditor);
+    const payment = await seedInstallmentPaymentWithMethod(agreementId, installmentScheduleItemId, debtor, creditor);
+    const failure = await coordinator.coordinateFailure({ installmentScheduleItemId, payment });
+    if (failure.outcome !== "retry_scheduled") throw new Error("expected a retry to be scheduled");
+    await backdateRetryScheduledFor(failure.retryId);
+
+    const result = await retryService.fireDueRetries(new Date());
+
+    expect(callCount()).toBe(0); // T5: zero outbound POST /payments.
+    expect(result.canceled).toBe(0); // T10: never counted/treated as a definite rejection.
+    const retryRow = (await listRetriesForInstallment(installmentScheduleItemId)).find((r) => r.id === failure.retryId);
+    expect(retryRow?.status).toBe("scheduled"); // T10: left completely untouched, still eligible to fire once the flag is true.
+    const originalReloaded = await ctx.payments.findById(payment.id);
+    expect(originalReloaded?.status).toBe(payment.status); // T10: the original failed attempt is unaffected.
+
+    // Test-isolation cleanup ONLY (after every assertion above already ran): this retry was left
+    // "scheduled" by DESIGN (the whole point of this test) — but `findDueForFiring` is a deliberately
+    // UNSCOPED, database-wide scheduler sweep, so leaving it "scheduled" would make it due forever and
+    // pollute every LATER test in this file that calls the real `fireDueRetries` broadly. Finalizing it
+    // here mirrors every other test in this file's own existing invariant (every retry it creates
+    // reaches a terminal state by the test's end) — it is not part of what this test is proving.
+    await getDb().update(paymentRetry).set({ status: "canceled", canceledAt: new Date(), canceledReason: "test cleanup" }).where(eq(paymentRetry.id, failure.retryId));
+  });
+
+  it("T9 — resolveAmbiguousRetry's 'not found' redispatch is deferred (never re-POSTs) when ADYEN_PAYMENTS_VERIFIED=false — existing ambiguous evidence is left completely untouched", async () => {
+    const { ctx, verificationCtx, coordinator } = await buildRetryEligibilityHarness();
+    const { creditor, debtor } = await seedTwoParties();
+    const { agreementId, installmentScheduleItemId } = await seedAgreementWithInstallment(creditor.profileId, debtor.profileId, creditor.userId, 5_000);
+    await seedVerifiedParties(verificationCtx, debtor, creditor);
+    const payment = await seedInstallmentPaymentWithMethod(agreementId, installmentScheduleItemId, debtor, creditor);
+    const failure = await coordinator.coordinateFailure({ installmentScheduleItemId, payment });
+    if (failure.outcome !== "retry_scheduled") throw new Error("expected a retry to be scheduled");
+    const idempotencyKey = `retry-${failure.retryId}`;
+
+    // Dispatch genuinely ambiguously (flag TRUE at dispatch time — this is what created the existing,
+    // real "submitted"/"claimed" evidence this test's blocked resolution attempt must never disturb).
+    const { lossyProvider } = buildLossyAmbiguousProviderForActivationGateTests();
+    const dispatchOutcome = await coordinator.claimAndExecuteRetry({
+      installmentScheduleItemId,
+      retryId: failure.retryId,
+      idempotencyKey,
+      agreementId,
+      provider: lossyProvider,
+      prepared: { amountMinorUnits: 5_000, currency: "USD", paymentMethod: "ach", bankConnectionId: null },
+      payer: { profileKind: "personal", profileId: debtor.profileId },
+      recipient: { profileKind: "personal", profileId: creditor.profileId },
+      effectApplier: ctx.buildWebhookService(),
+    });
+    if (dispatchOutcome.outcome !== "ambiguous") throw new Error("expected ambiguous");
+    const beforePayment = await ctx.payments.findById(dispatchOutcome.paymentAttemptId);
+    expect(beforePayment?.status).toBe("submitted");
+
+    // Now the operator flips ADYEN_PAYMENTS_VERIFIED back to false. A SEPARATE coordinator instance
+    // wired with the gate closed — the provider itself genuinely has no record of this key (a real
+    // "not found" lookup), which would normally trigger a same-key redispatch.
+    let createPaymentCallsDuringResolution = 0;
+    const notFoundProvider = new Proxy(new SandboxPaymentProvider(WEBHOOK_SECRET), {
+      get(target, prop, receiver) {
+        if (prop === "retrievePaymentByIdempotencyKey") return async () => null;
+        if (prop === "createPayment") {
+          return async (...args: unknown[]) => {
+            createPaymentCallsDuringResolution += 1;
+            return (target.createPayment as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as unknown as SandboxPaymentProvider;
+    const blockedCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, undefined, false);
+
+    const resolution = await blockedCoordinator.resolveAmbiguousRetry({
+      retryId: failure.retryId,
+      idempotencyKey,
+      provider: notFoundProvider,
+      effectApplier: ctx.buildWebhookService(),
+    });
+
+    expect(resolution.outcome).toBe("still_ambiguous"); // never misclassified as a definite rejection.
+    expect(createPaymentCallsDuringResolution).toBe(0); // T9: zero outbound POST /payments.
+    const afterPayment = await ctx.payments.findById(dispatchOutcome.paymentAttemptId);
+    expect(afterPayment?.status).toBe("submitted"); // completely untouched — no fabricated evidence.
+    const retryRow = (await listRetriesForInstallment(installmentScheduleItemId)).find((r) => r.id === failure.retryId);
+    expect(retryRow?.status).toBe("claimed"); // never canceled, never fired — still discoverable later.
+
+    // Test-isolation cleanup ONLY — see the T5/T10 test's own identical comment above for why a retry
+    // deliberately left "claimed" must still be finalized before this test ends, so it can never be
+    // swept up by a LATER test's own unscoped `findClaimedForResumption` scan.
+    await getDb().update(paymentRetry).set({ status: "canceled", canceledAt: new Date(), canceledReason: "test cleanup" }).where(eq(paymentRetry.id, failure.retryId));
+  });
+
+  it("T9 — dispatchProviderCallForAnchor's post-dispatch resolveSubmittedAnchor ProviderCapabilityUnsupportedError (Adyen has no GET-by-reference) fallback redispatch is deferred (never re-POSTs a second time) when ADYEN_PAYMENTS_VERIFIED=false — CORRECTION: `resolveAmbiguousRetry` itself calls `retrievePaymentByIdempotencyKey` directly with no such fallback (a separate, pre-existing gap this pass does not touch — see this test's own note below); `resolveSubmittedAnchor`'s fallback is reachable ONLY from `dispatchProviderCallForAnchor`'s own post-dispatch confirmation step, exercised here directly.", async () => {
+    const { ctx, verificationCtx, coordinator } = await buildRetryEligibilityHarness();
+    const { creditor, debtor } = await seedTwoParties();
+    const { agreementId, installmentScheduleItemId } = await seedAgreementWithInstallment(creditor.profileId, debtor.profileId, creditor.userId, 5_000);
+    await seedVerifiedParties(verificationCtx, debtor, creditor);
+    const payment = await seedInstallmentPaymentWithMethod(agreementId, installmentScheduleItemId, debtor, creditor);
+    const failure = await coordinator.coordinateFailure({ installmentScheduleItemId, payment });
+    if (failure.outcome !== "retry_scheduled") throw new Error("expected a retry to be scheduled");
+    const idempotencyKey = `retry-${failure.retryId}`;
+
+    // A provider that genuinely accepts the dispatch (never throws AmbiguousProviderResponseError —
+    // this reaches dispatchProviderCallForAnchor's "dispatched" case, which immediately calls
+    // resolveSubmittedAnchor in the SAME claimAndExecuteRetry invocation) but has no GET-by-reference
+    // endpoint at all — the real, documented Adyen shape.
+    let createPaymentCalls = 0;
+    const unsupportedLookupProvider = new Proxy(new SandboxPaymentProvider(WEBHOOK_SECRET), {
+      get(target, prop, receiver) {
+        if (prop === "retrievePaymentByIdempotencyKey") {
+          return async () => {
+            throw new ProviderCapabilityUnsupportedError("this provider has no GET-by-reference endpoint");
+          };
+        }
+        if (prop === "createPayment") {
+          return async (...args: unknown[]) => {
+            createPaymentCalls += 1;
+            return (target.createPayment as (...a: unknown[]) => Promise<{ providerPaymentId: string; status: string }>).apply(target, args);
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as unknown as SandboxPaymentProvider;
+    // The operator has ADYEN_PAYMENTS_VERIFIED=false at the moment resolveSubmittedAnchor's own
+    // fallback would otherwise fire the same-idempotency-key replay POST.
+    const blockedCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, undefined, false);
+
+    const outcome = await blockedCoordinator.claimAndExecuteRetry({
+      installmentScheduleItemId,
+      retryId: failure.retryId,
+      idempotencyKey,
+      agreementId,
+      provider: unsupportedLookupProvider,
+      prepared: { amountMinorUnits: 5_000, currency: "USD", paymentMethod: "ach", bankConnectionId: null },
+      payer: { profileKind: "personal", profileId: debtor.profileId },
+      recipient: { profileKind: "personal", profileId: creditor.profileId },
+      effectApplier: ctx.buildWebhookService(),
+    });
+
+    expect(outcome.outcome).toBe("ambiguous"); // never "fired" — the outcome was never actually confirmed.
+    expect(createPaymentCalls).toBe(1); // T9: exactly the one REAL dispatch — the same-key replay fallback was never attempted a second time.
+    const paymentAttemptId = outcome.outcome === "ambiguous" ? outcome.paymentAttemptId : null;
+    expect(paymentAttemptId).toBeTruthy();
+    const afterPayment = await ctx.payments.findById(paymentAttemptId!);
+    expect(afterPayment?.status).toBe("processing"); // Phase B's own real dispatch already persisted this — never advanced further, never fabricated.
+    const retryRow = (await listRetriesForInstallment(installmentScheduleItemId)).find((r) => r.id === failure.retryId);
+    expect(retryRow?.status).toBe("claimed"); // never fired, never canceled — still discoverable for a later resolution attempt.
+
+    // Test-isolation cleanup ONLY — see the T5/T10 test's own identical comment above.
+    await getDb().update(paymentRetry).set({ status: "canceled", canceledAt: new Date(), canceledReason: "test cleanup" }).where(eq(paymentRetry.id, failure.retryId));
+  });
+
   it("R-B55 — provider accepts payment, application loses the response; the scheduler's own automatic recovery discovers and correlates it, with the provider called exactly once, and a revoked mandate afterward never cancels the already-dispatched attempt", async () => {
     const { ctx, verificationCtx, coordinator } = await buildRetryEligibilityHarness();
     const { creditor, debtor } = await seedTwoParties();
@@ -2640,6 +2852,7 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
       payments: new DrizzlePaymentAttemptRepository(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
       agreements: new InMemoryAgreementPartiesReader(),
+      newPaymentInitiationVerified: true,
     });
     const coordinator = new DrizzleFailedPaymentRetryCoordinator();
 

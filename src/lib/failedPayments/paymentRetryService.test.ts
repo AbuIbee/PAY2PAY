@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleQueryError } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AchPaymentService } from "@/lib/ach/achPaymentService";
 import { createTestAchServices, seedAgreementForMandateTest } from "@/lib/ach/testFakes";
 import { createTestDebitCardServices, seedAgreementForCardTest, TEST_FUTURE_CARD_EXPIRY } from "@/lib/debitCard/testFakes";
 import { createTestFailedPaymentWorkflow, InMemoryPaymentRetryRepository } from "./testFakes";
@@ -276,6 +277,43 @@ describe("PaymentRetryService", () => {
     const retry = await retries.findByOriginalPaymentAttemptId(submitted.id);
     const resulting = await card.paymentCtx.payments.findById(retry!.resultingPaymentAttemptId!);
     expect(resulting?.paymentMethod).toBe("debit_card");
+  });
+
+  describe("PAID2YOU — B0-D C2 FINAL SECURITY GATE", () => {
+    it("T5/T10 (fallback dispatch path) — ADYEN_PAYMENTS_VERIFIED=false blocks a genuinely NEW automatic retry firing, provider NEVER called, retry left untouched (not canceled, not fired)", async () => {
+      const submitted = await failAnInstallmentPayment("k-gate-retry-fallback-1");
+      const providerSpy = vi.spyOn(ctx.ach.paymentCtx.provider, "createPayment");
+
+      const blockedAch = new AchPaymentService({
+        mandates: ctx.ach.achMandateService,
+        payments: ctx.ach.paymentCtx.paymentService,
+        paymentAttempts: ctx.ach.paymentCtx.payments,
+        newPaymentInitiationVerified: false,
+      });
+      const blockedRetryService = new PaymentRetryService({
+        retries: ctx.retries,
+        paymentAttempts: ctx.ach.paymentCtx.payments,
+        initiators: {
+          ach: blockedAch,
+          debit_card: ctx.card.debitCardPaymentService,
+          manual_off_platform: {
+            createManualPayment: () => Promise.reject(new Error("not retryable")),
+            prepareRetrySubmission: () => Promise.reject(new Error("not retryable")),
+          },
+        },
+        profileOwners: ctx.ach.paymentCtx.verificationCtx.profileOwners,
+        audit: new AuditService(ctx.auditRepo),
+      });
+
+      const { fired, canceled } = await blockedRetryService.fireDueRetries(new Date(Date.now() + 1000));
+
+      expect(fired).toBe(0);
+      expect(canceled).toBe(0); // T10: never treated as a definite rejection, never canceled.
+      expect(providerSpy).not.toHaveBeenCalled(); // T5: zero outbound POST /payments.
+
+      const retry = await ctx.retries.findByOriginalPaymentAttemptId(submitted.id);
+      expect(retry?.status).toBe("scheduled"); // T10: left completely untouched, still eligible once the flag flips true.
+    });
   });
 });
 

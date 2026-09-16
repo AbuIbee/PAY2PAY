@@ -726,6 +726,32 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
      * this is unaffected.
      */
     private readonly achMandateProviderRefs?: AchMandateProviderRefReader,
+    /**
+     * PAID2YOU — B0-D C2 FINAL SECURITY GATE. Defaults to `true` (mirroring this codebase's
+     * "pre-existing test/call site unaffected" convention — this constructor has ~60 pre-existing
+     * positional-argument call sites across postgres integration suites that predate this flag) since
+     * `claimAndExecuteRetry`'s own new-attempt dispatch (`dispatchProviderCallForAnchor`) is already
+     * gated at its ONLY real caller, `PaymentRetryService.fireDueRetries`, via
+     * `DrizzlePaymentInitiationEligibilityService.assertPreLockEligible` — see that class's own doc
+     * comment. This field exists for the TWO remaining `provider.createPayment` call sites that
+     * `assertPreLockEligible` cannot reach because they run from `resolveAmbiguousRetry` (the
+     * `findClaimedForResumption` resumption loop, which `fireDueRetries` deliberately never runs
+     * eligibility checks before — see that method's own doc comment on why re-authorizing there would
+     * itself be a defect): `resolveSubmittedAnchor`'s `ProviderCapabilityUnsupportedError` fallback
+     * (Adyen has no GET-by-reference endpoint, so resolving an already-submitted attempt's outcome
+     * falls back to a same-idempotency-key `createPayment` replay) and `resolveNotFoundOutcome`'s
+     * explicit redispatch (the provider confirmed no record of this key, so a fresh attempt is safe to
+     * send). Both are genuine "another POST" moments the B0-D C2 FINAL SECURITY GATE task explicitly
+     * requires deferred, never sent, while this flag is false — checked BEFORE either call, never
+     * inside their surrounding try/catch, so a blocked call is indistinguishable from "the provider
+     * lookup was inconclusive" (`{ outcome: "still_ambiguous" }`) and is NEVER misclassified as a
+     * definite provider rejection (no `payment_attempt`/`payment_retry` mutation of any kind — the
+     * existing, already-committed `"submitted"`/`"claimed"` state is left completely untouched,
+     * remaining discoverable for a later resolution attempt once the flag is true). The ONE real
+     * production call site (`getFailedPaymentRetryCoordinator.ts`) explicitly wires
+     * `getServerEnv().ADYEN_PAYMENTS_VERIFIED` rather than relying on this default.
+     */
+    private readonly newPaymentInitiationVerified: boolean = true,
   ) {}
 
   /**
@@ -1947,6 +1973,16 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
       if (!(error instanceof ProviderCapabilityUnsupportedError)) {
         return { outcome: "still_ambiguous" };
       }
+      // PAID2YOU — B0-D C2 FINAL SECURITY GATE: this fallback is itself an outbound POST /payments
+      // (a same-idempotency-key `createPayment` replay, the only way to resolve an outcome against a
+      // provider with no GET-by-reference endpoint) — see this class's own constructor doc comment on
+      // `newPaymentInitiationVerified` for exactly why this specific call needs its own check (never
+      // reached by `PaymentRetryService.fireDueRetries`'s eligibility pre-check). Checked BEFORE the
+      // call, never inside its own try/catch, so a block is indistinguishable from an inconclusive
+      // provider lookup — never a definite rejection, never a mutation.
+      if (!this.newPaymentInitiationVerified) {
+        return { outcome: "still_ambiguous" };
+      }
       let viaCreatePayment: CreatePaymentResult;
       try {
         viaCreatePayment = await provider.createPayment(await this.buildCreatePaymentInput(existing));
@@ -2147,6 +2183,15 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
     provider: PaymentProvider,
     effectApplier: ProviderOutcomeEffectApplier,
   ): Promise<ResolveAmbiguousResult> {
+    // PAID2YOU — B0-D C2 FINAL SECURITY GATE: this entire method exists to redispatch (a genuine
+    // outbound POST /payments, same idempotency key) — see this class's own constructor doc comment
+    // on `newPaymentInitiationVerified` for exactly why this call needs its own check (never reached
+    // by `PaymentRetryService.fireDueRetries`'s eligibility pre-check). Checked BEFORE the installment
+    // lock is even acquired — no DB access, no mutation, and a block is indistinguishable from an
+    // inconclusive provider lookup, never a definite rejection.
+    if (!this.newPaymentInitiationVerified) {
+      return { outcome: "still_ambiguous" };
+    }
     type Outcome =
       | { kind: "already_resolved"; anchor: typeof paymentAttempt.$inferSelect }
       | { kind: "closed" }

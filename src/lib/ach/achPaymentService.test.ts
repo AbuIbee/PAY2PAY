@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConflictError, ValidationError } from "@/lib/errors";
 import { createTestBalanceService, createTestLedgerService } from "@/lib/ledger/testFakes";
 import { createTestPaymentWebhookService } from "@/lib/payments/testFakes";
+import { ProviderNotAvailableError } from "@/lib/errors";
+import { AchPaymentService } from "./achPaymentService";
 import { createTestAchServices, seedAgreementForMandateTest } from "./testFakes";
 
 const PAYER = { profileKind: "personal" as const, profileId: "payer-1" };
@@ -243,5 +245,150 @@ describe("AchPaymentService", () => {
     const methodNames = Object.getOwnPropertyNames(Object.getPrototypeOf(ach.achPaymentService));
     expect(methodNames).not.toContain("createRecipientAccount");
     expect(methodNames).not.toContain("verifyWebhookSignature");
+  });
+
+  describe("PAID2YOU — B0-D C2 (payment activation gate)", () => {
+    function blockedAch() {
+      return new AchPaymentService({
+        mandates: ach.achMandateService,
+        payments: ach.paymentCtx.paymentService,
+        paymentAttempts: ach.paymentCtx.payments,
+        newPaymentInitiationVerified: false,
+      });
+    }
+
+    it("T2/T10: default FALSE blocks submitScheduledPayment with ProviderNotAvailableError, provider NEVER called, no state mutation — the payment stays exactly 'scheduled'", async () => {
+      const scheduled = await ach.achPaymentService.scheduleInstallmentPayment({
+        idempotencyKey: "gate-ach-1",
+        installmentScheduleItemId: installmentId,
+        agreementId,
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+      });
+      expect(scheduled.status).toBe("scheduled");
+
+      const providerSpy = vi.spyOn(ach.paymentCtx.provider, "createPayment");
+      await expect(blockedAch().submitScheduledPayment(scheduled.id, PAYER_USER_ID)).rejects.toThrow(ProviderNotAvailableError);
+      expect(providerSpy).not.toHaveBeenCalled();
+
+      const reloaded = await ach.paymentCtx.payments.findById(scheduled.id);
+      expect(reloaded?.status).toBe("scheduled"); // no fake success, no financial mutation.
+      expect(reloaded?.providerPaymentId).toBeNull();
+    });
+
+    it("T3/T10: CORRECTION (this pass) — disabled initiation DOES block createManualPayment's genuinely-new-attempt branch, provider NEVER called — a manual payment is a brand-new payment_attempt the provider has never seen, not recovery of an existing one. See this class's own doc comment for why an earlier version of this test had this backwards.", async () => {
+      const providerSpy = vi.spyOn(ach.paymentCtx.provider, "createPayment");
+      await expect(
+        blockedAch().createManualPayment({
+          idempotencyKey: "gate-ach-manual-1",
+          agreementId,
+          payer: PAYER,
+          recipient: RECIPIENT,
+          amountMinorUnits: 5_000,
+          currency: "USD",
+          actingUserId: PAYER_USER_ID,
+        }),
+      ).rejects.toThrow(ProviderNotAvailableError);
+      expect(providerSpy).not.toHaveBeenCalled();
+
+      const scheduled = await ach.paymentCtx.payments.findByIdempotencyKey("gate-ach-manual-1");
+      expect(scheduled?.status).toBe("scheduled"); // no fake success, no financial mutation.
+      expect(scheduled?.providerPaymentId).toBeNull();
+    });
+
+    it("idempotent replay of an ALREADY-SUBMITTED manual payment stays fully functional when initiation is disabled — real evidence of prior provider submission, not merely a pending local record", async () => {
+      // First, with the gate open, a genuinely new manual payment reaches the (sandbox) provider —
+      // real evidence of submission now exists for this idempotencyKey.
+      const first = await ach.achPaymentService.createManualPayment({
+        idempotencyKey: "gate-ach-manual-replay-1",
+        agreementId,
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+      });
+      expect(first.status).not.toBe("scheduled");
+      expect(first.providerPaymentId).toBeTruthy();
+
+      // Now the gate closes. Replaying the EXACT same idempotencyKey/parameters must still succeed —
+      // this is recovery of an already-submitted attempt, never a new debit.
+      const replay = await blockedAch().createManualPayment({
+        idempotencyKey: "gate-ach-manual-replay-1",
+        agreementId,
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+      });
+      expect(replay.id).toBe(first.id);
+      expect(replay.status).toBe(first.status);
+    });
+
+    it("T11: a valid authenticated webhook for an already-submitted payment is fully processed regardless of the activation gate — PaymentWebhookService has no dependency on this flag at all", async () => {
+      // Submitted while the gate was open (real provider evidence now exists).
+      const submitted = await ach.achPaymentService.createManualPayment({
+        idempotencyKey: "gate-ach-webhook-1",
+        agreementId,
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+      });
+      expect(submitted.providerPaymentId).toBeTruthy();
+
+      // webhookCtx.paymentWebhookService is constructed directly from ach.paymentCtx (provider/
+      // payments/ledger) and never receives `newPaymentInitiationVerified` at all — there is no way to
+      // "block" it with this flag, by construction. A real signed webhook for this payment is fully
+      // processed, exactly as if the gate were open.
+      const result = await webhookCtx.paymentWebhookService.receiveWebhook(
+        signedWebhook({ providerEventId: "evt-gate-webhook-1", eventType: "payment.succeeded", providerPaymentId: submitted.providerPaymentId }),
+      );
+      expect(result.status).toBe("processed");
+      const reloaded = await ach.paymentCtx.payments.findById(submitted.id);
+      expect(reloaded?.status).toBe("succeeded");
+    });
+
+    it("T12: cancelPayment/refundPayment never reference this flag at all and remain fully functional regardless of its value", async () => {
+      // cancelPayment on a still-"scheduled" (never-submitted) payment is a pure local transition —
+      // never calls the provider either way, gate open or closed.
+      const scheduled = await ach.achPaymentService.scheduleInstallmentPayment({
+        idempotencyKey: "gate-ach-cancel-1",
+        installmentScheduleItemId: installmentId,
+        agreementId,
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+      });
+      const canceled = await ach.paymentCtx.paymentService.cancelPayment(scheduled.id, PAYER_USER_ID);
+      expect(canceled.status).toBe("canceled");
+
+      // refundPayment on an already-succeeded payment (submitted while the gate was open). Force an
+      // immediate-succeeded provider outcome, mirroring PaymentService.test.ts's own identical
+      // monkey-patch precedent for this exact scenario.
+      const originalCreatePayment = ach.paymentCtx.provider.createPayment.bind(ach.paymentCtx.provider);
+      ach.paymentCtx.provider.createPayment = (input) => originalCreatePayment({ ...input, simulateOutcome: "succeeded" });
+      const submitted = await ach.achPaymentService.createManualPayment({
+        idempotencyKey: "gate-ach-refund-1",
+        agreementId,
+        payer: PAYER,
+        recipient: RECIPIENT,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        actingUserId: PAYER_USER_ID,
+      });
+      ach.paymentCtx.provider.createPayment = originalCreatePayment;
+      expect(submitted.status).toBe("succeeded");
+
+      const refunded = await ach.paymentCtx.paymentService.refundPayment(submitted.id, RECIPIENT_USER_ID);
+      expect(refunded.status).toBe("succeeded"); // still "succeeded" — the refund confirmation is async, exactly like the pre-existing refund contract.
+    });
   });
 });

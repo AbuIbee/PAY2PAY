@@ -11,40 +11,67 @@ item 152 requires ("Production provider readiness should have its own checklist"
 
 ## 1. Current state (as of this writing)
 
-**No live financial provider has been selected or contracted, and — as of the 2026-09-15 B0-D TOTAL
-SANDBOX ELIMINATION remediation — sandbox/mock provider implementations are no longer reachable from
-application runtime at all.** The 2026-09-15 B0-D production-gate audit found that every
+**No live financial provider account, contract, or approval exists, and — as of the 2026-09-15 B0-D
+TOTAL SANDBOX ELIMINATION remediation — sandbox/mock provider implementations are no longer reachable
+from application runtime at all.** The 2026-09-15 B0-D production-gate audit found that every
 financial/KYC/card-issuing operation in production ran against sandbox providers with no disclosure to
 customers, and that `assertProviderEnvironmentConsistency`'s prior design explicitly *permitted*
 sandbox-in-production rather than blocking it — the release blocker this remediation exists to close.
 
-**What changed:** `PROVIDER_CAPABILITY_REGISTRY` (`src/lib/providers/providerCapabilities.ts`) is now
-genuinely empty — it no longer contains sandbox descriptors at all. `getPaymentProvider()`/
-`getKycProvider()`/`getCardIssuingProvider()` (`src/lib/payments`, `src/lib/kyc`, `src/lib/cards`) no
-longer import or construct `SandboxPaymentProvider`/`SandboxKycProvider`/`SandboxCardIssuingProvider` —
-those classes were relocated to `src/test-support/` and exist only as constructor-injected test
-doubles (see `src/lib/payments/testFakes.ts` and its KYC/cards siblings), never reachable from any
-route, page, or other production runtime module. Calling any of the three factories today throws
+**What changed:** `PROVIDER_CAPABILITY_REGISTRY` (`src/lib/providers/providerCapabilities.ts`) no
+longer contains sandbox descriptors at all — but it is **not empty**: `adyen` is registered as a
+`environment: "production"` descriptor for `ach_debit`/`webhook_delivery`/`bank_linking` (B0-D ADYEN
+PHASE 1/2, code-complete). **Registration is not operational readiness** — it means the adapter exists
+and is wired to construct if selected, never that Adyen has approved this merchant account or that
+live credentials exist (neither is true as of this writing). Nothing is registered for KYC/KYB or
+card issuing — `getKycProvider()`/`getCardIssuingProvider()` still throw unconditionally for every
+input, no vendor has been selected for either. `getPaymentProvider()`/`getKycProvider()`/
+`getCardIssuingProvider()` (`src/lib/payments`, `src/lib/kyc`, `src/lib/cards`) no longer import or
+construct `SandboxPaymentProvider`/`SandboxKycProvider`/`SandboxCardIssuingProvider` — those classes
+were relocated to `src/test-support/` and exist only as constructor-injected test doubles (see
+`src/lib/payments/testFakes.ts` and its KYC/cards siblings), never reachable from any route, page, or
+other production runtime module. `getKycProvider()`/`getCardIssuingProvider()` throw
 `ProviderNotAvailableError` (503) unconditionally — there is no sandbox fallback branch to fall into.
-Because every payment/KYC/card-issuing route and webhook constructs its service through exactly these
-three factories (directly or transitively via `getPaymentService`/`getBankConnectionService`/
-`getAchPaymentService`/`getKycVerificationService`/`getCardService`/etc.), every one of those routes
-now fails closed before any provider call, financial mutation, ledger mutation, or lifecycle
-transition — with no per-route code required. The customer-facing bank-connection flow
-(`/payment-methods/add-bank`) and the admin sandbox-settlement-simulation endpoint
-(`/api/admin/sandbox/simulate-settlement`, now deleted) no longer exist/execute. `PAYMENT_PROVIDER`/
+`getPaymentProvider()` throws the same way for any name other than `"adyen"`; for `"adyen"` itself it
+throws `ConfigurationError` unless `ADYEN_API_KEY`/`ADYEN_MERCHANT_ACCOUNT`/`ADYEN_LIVE_PREFIX`/
+`ADYEN_PAYMENTS_HMAC_KEY` are all genuinely configured (none are, today) — equally fail-closed, by
+credential absence rather than by an unregistered name. On top of that, **new** payment initiation
+specifically (`PaymentService.createPayment`; `AchPaymentService`/`DebitCardPaymentService`
+`.submitScheduledPayment`; `AchPaymentService`/`DebitCardPaymentService.createManualPayment`'s
+genuinely-new-attempt branch, reached by the manual-payment routes and by
+`PaymentRetryService.fireDueRetries`'s non-production fallback branch; and, for the real
+production automatic-retry path, `PaymentRetryService.fireDueRetries`'s atomic-coordinator branch via
+`DrizzlePaymentInitiationEligibilityService.assertPreLockEligible`) additionally requires
+`ADYEN_PAYMENTS_VERIFIED=true` (B0-D C2, defaults `false`) — an operator-only confirmation that
+registration/credentials alone can never substitute for; see that env var's own doc comment in
+`src/config/env.ts`. **Resume-B0-D-C2 correction (this pass):** an earlier version of this gate left
+`createManualPayment`'s genuinely-new-attempt branch and the automatic-retry dispatch path unguarded —
+both have now been closed; only genuine idempotent replay of an attempt with persisted evidence of
+prior provider submission (a payment_attempt already past `"scheduled"`) and ambiguous-retry
+*resolution* (`resolveAmbiguousRetry`, which never calls `provider.createPayment` again) remain exempt,
+matching webhooks/refunds/reconciliation, which this gate never touches. Because every payment/KYC/card-issuing
+route and webhook constructs its service through exactly these three factories (directly or
+transitively via `getPaymentService`/`getBankConnectionService`/`getAchPaymentService`/
+`getKycVerificationService`/`getCardService`/etc.), every one of those routes fails closed — by one of
+these three independent mechanisms — before any real financial mutation, ledger mutation, or lifecycle
+transition reaches Adyen. The customer-facing bank-connection flow (`/payment-methods/add-bank`)
+remains additionally gated by `ADYEN_ACH_TOKENIZATION_VERIFIED` (defaults `false`, unrelated Adyen
+capability); the admin sandbox-settlement-simulation endpoint
+(`/api/admin/sandbox/simulate-settlement`, now deleted) no longer exists/executes. `PAYMENT_PROVIDER`/
 `KYC_PROVIDER`/`CARD_ISSUING_PROVIDER` (`src/config/env.ts`) reject any sandbox/mock/fake/demo/dummy/
 stub/simulated/test-shaped value outright at environment-parse time — a CI regression gate
 (`scripts/check-no-sandbox-runtime.mjs`, run on every push/PR) fails the build if sandbox provider
-functionality is ever reintroduced into application runtime source.
+functionality is ever reintroduced into application runtime source, and remains unaffected by any of
+the above: **sandbox runtime stays permanently disabled regardless of what is or isn't registered for
+a live provider.**
 
 **Status: `EXTERNAL BLOCKER — LIVE FINANCIAL PROVIDER APPROVAL/CONFIGURATION REQUIRED`**, per
 SPRINT_18C_PRODUCTION_READY.md item 26's exact required label — **unchanged**: this remediation makes
-the *absence* of a live provider fail closed instead of silently substituting sandbox behavior, it does
-not resolve the underlying blocker (a live provider still has not been selected/contracted/approved).
-B-1 (live provider integration) remains on hard hold. This blocker is not resolved by any Phase 6
-PRSprint — Phase 6's explicit scope is architecture, not live activation (see the phase kickoff's own
-"CRITICAL SAFETY BOUNDARY").
+the *absence* of a live, *approved* provider fail closed instead of silently substituting sandbox
+behavior, it does not resolve the underlying blocker (a live provider still has not been
+contracted/approved, regardless of what is registered in code). B-1 (live provider integration)
+remains on hard hold. This blocker is not resolved by any Phase 6 PRSprint — Phase 6's explicit scope
+is architecture, not live activation (see the phase kickoff's own "CRITICAL SAFETY BOUNDARY").
 
 ## 2. Required capabilities
 
@@ -72,7 +99,9 @@ vendor SDK call scattered through business logic or UI (SPRINT_18C item 150's ex
 - `KycKybProvider` (`src/lib/kyc/kycProvider.ts`) — individual/business identity verification.
 - `CardIssuingProvider` (`src/lib/cards/cardIssuingProvider.ts`, PRSprint 24) — card issuance/lifecycle.
 
-Each interface has exactly one registered implementation today (its sandbox mock), selected via an env
+`PaymentProvider` has one registered implementation today (`AdyenPaymentProvider`, `environment:
+"production"`, gated by credentials plus `ADYEN_PAYMENTS_VERIFIED` — see §1); `KycKybProvider` and
+`CardIssuingProvider` have none — no vendor has been selected for either. Selection happens via an env
 var (`PAYMENT_PROVIDER`, `KYC_PROVIDER`, `CARD_ISSUING_PROVIDER`) resolved through the capability
 registry in `src/lib/providers/providerCapabilities.ts`. Adding a real provider is additive at every
 layer: a new class implementing the same interface, a new registry entry declaring its capabilities and

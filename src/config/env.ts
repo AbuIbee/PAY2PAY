@@ -137,6 +137,28 @@ const serverEnvSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // PAID2YOU — B0-D C2 (payment activation gate). `adyen` being REGISTERED as a production provider
+  // (src/lib/providers/providerCapabilities.ts) is a statement that this codebase's Adyen ACH-debit
+  // adapter exists and is code-complete — it is NOT a statement that a real Adyen account, contract,
+  // or approval exists (none does, as of this writing; see docs/PRODUCTION_PROVIDER_READINESS.md).
+  // Even with real ADYEN_API_KEY/etc. credentials configured, this flag must ALSO be explicitly set to
+  // "true" before ANY genuinely new outbound payment request reaches Adyen — `PaymentService
+  // .createPayment`/`.submitPending` (the single authoritative enforcement point every scheduled-
+  // payment/manual-payment/retry submission ultimately routes through), and the atomic automatic-
+  // retry-coordinator path (`DrizzlePaymentInitiationEligibilityService.assertPreLockEligible` and
+  // `DrizzleFailedPaymentRetryCoordinator`'s own two ambiguity-resolution redispatch points) all check
+  // it — mirroring ADYEN_ACH_TOKENIZATION_VERIFIED's and PAYOUT_PROVIDER_INTEGRATION_VERIFIED's
+  // identical "registration/credentials alone are never sufficient" precedent. Deliberately narrow: it
+  // gates only a genuinely NEW outbound POST /payments — never webhook processing, refunds,
+  // cancellations, disputes, reconciliation that creates no new debit, or true idempotent replay of an
+  // attempt with persisted evidence of prior provider submission — those remain fully functional
+  // regardless of this flag. Never a proxy for "the code is ready" — the code is ready; this
+  // represents an operator's explicit confirmation that Adyen has actually approved this merchant
+  // account for live payments, which this codebase cannot verify or assume for itself.
+  ADYEN_PAYMENTS_VERIFIED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // PAID2YOU — B0-D PHASE 3B (payout integrity): a SECOND, INDEPENDENT gate — deliberately never
   // satisfied merely by `PayoutService.confirmPayout` receiving non-empty `providerName`/
   // `providerPayoutReference` arguments. Those two fields prove a CALLER claims a provider confirmed

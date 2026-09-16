@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DependencyError, ForbiddenError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import { createTestNotificationService } from "@/lib/notify/testFakes";
 import { createTestPaymentService } from "./testFakes";
 import type { ProfileKind } from "./paymentProvider";
@@ -549,4 +549,85 @@ describe("PaymentService", () => {
       });
     },
   );
+
+  describe("PAID2YOU — B0-D C2 (payment activation gate)", () => {
+    it("T1: default FALSE blocks new payment creation with ProviderNotAvailableError, provider NEVER called, before any verification/reservation logic runs", async () => {
+      const unverifiedCtx = createTestPaymentService({ newPaymentInitiationVerified: false });
+      unverifiedCtx.verificationCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+      unverifiedCtx.verificationCtx.profileOwners.set(RECIPIENT.profileKind, RECIPIENT.profileId, RECIPIENT_USER_ID);
+      // Deliberately NOT marking either party FULL_VERIFIED — proves the activation gate fires FIRST,
+      // before this class's own "the only place that calls isFullyVerified" verification gate, not
+      // merely as a side effect of failing verification instead.
+
+      const providerSpy = vi.spyOn(unverifiedCtx.provider, "createPayment");
+      await expect(unverifiedCtx.paymentService.createPayment(baseInput())).rejects.toThrow(ProviderNotAvailableError);
+      expect(providerSpy).not.toHaveBeenCalled();
+    });
+
+    it("no fake success or financial mutation on blocked initiation — no payment_attempt row, no audit record, no provider call", async () => {
+      const unverifiedCtx = createTestPaymentService({ newPaymentInitiationVerified: false });
+      unverifiedCtx.verificationCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+      unverifiedCtx.verificationCtx.profileOwners.set(RECIPIENT.profileKind, RECIPIENT.profileId, RECIPIENT_USER_ID);
+
+      await expect(unverifiedCtx.paymentService.createPayment(baseInput({ idempotencyKey: "gate-blocked-1" }))).rejects.toThrow(
+        ProviderNotAvailableError,
+      );
+
+      expect(await unverifiedCtx.payments.findByIdempotencyKey("gate-blocked-1")).toBeNull();
+      expect(unverifiedCtx.auditRepo.events).toHaveLength(0);
+    });
+
+    it("regression: newPaymentInitiationVerified: true (the default in every pre-existing test) still lets createPayment succeed", async () => {
+      await markFullyVerified(PAYER.profileKind, PAYER.profileId);
+      await markFullyVerified(RECIPIENT.profileKind, RECIPIENT.profileId);
+      const record = await ctx.paymentService.createPayment(baseInput({ idempotencyKey: "gate-allowed-1" }));
+      expect(record.status).not.toBe("failed");
+    });
+
+    it("CORRECTION (B0-D C2 FINAL SECURITY GATE): disabled initiation DOES block submitPending — a 'scheduled' record structurally proves the provider has never seen this payment_attempt, so this is always a genuinely NEW debit, never recovery. See this class's own doc comment on submitPending for why an earlier version of this test had this backwards.", async () => {
+      const unverifiedCtx = createTestPaymentService({ newPaymentInitiationVerified: false });
+      unverifiedCtx.verificationCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+      unverifiedCtx.verificationCtx.profileOwners.set(RECIPIENT.profileKind, RECIPIENT.profileId, RECIPIENT_USER_ID);
+      await unverifiedCtx.verificationCtx.verificationService.submitFullVerificationRequest(PAYER.profileKind, PAYER.profileId);
+      await unverifiedCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
+        profileKind: PAYER.profileKind,
+        profileId: PAYER.profileId,
+        decision: "verified",
+        reviewerUserId: REVIEWER_USER_ID,
+        reason: null,
+      });
+      await unverifiedCtx.verificationCtx.verificationService.submitFullVerificationRequest(RECIPIENT.profileKind, RECIPIENT.profileId);
+      await unverifiedCtx.verificationCtx.verificationService.recordManualVerificationDecision({
+        actingRole: "platform_owner",
+        profileKind: RECIPIENT.profileKind,
+        profileId: RECIPIENT.profileId,
+        decision: "verified",
+        reviewerUserId: REVIEWER_USER_ID,
+        reason: null,
+      });
+
+      // T6: schedulePayment never calls the provider at all — unaffected by this flag regardless. A
+      // reserved-but-never-submitted payment simply sits "scheduled" forever; it is never
+      // auto-submitted by anything.
+      const scheduled = await unverifiedCtx.paymentService.schedulePayment(baseInput({ idempotencyKey: "gate-existing-obligation-1" }));
+      expect(scheduled.status).toBe("scheduled");
+      const providerSpyAfterScheduling = vi.spyOn(unverifiedCtx.provider, "createPayment");
+      expect(providerSpyAfterScheduling).not.toHaveBeenCalled();
+
+      // T7/T8: submitPending is the authoritative B0-D C2 FINAL SECURITY GATE enforcement point —
+      // checked here regardless of caller, because `status === "scheduled"` at this point structurally
+      // proves no provider request has ever been sent for this specific payment_attempt (it can never
+      // return to "scheduled" once it leaves it) — there is no legitimate "replay" case at this layer.
+      // `submitToProvider` (T8) is PRIVATE and has exactly two callers, `createPayment` (T1, above) and
+      // `submitPending` (this test) — both independently gated, so this spy assertion is complete proof
+      // for submitToProvider's own only two reachable entry points.
+      await expect(unverifiedCtx.paymentService.submitPending(scheduled.id, PAYER_USER_ID)).rejects.toThrow(ProviderNotAvailableError);
+      expect(providerSpyAfterScheduling).not.toHaveBeenCalled();
+
+      const reloaded = await unverifiedCtx.payments.findById(scheduled.id);
+      expect(reloaded?.status).toBe("scheduled"); // no fake success, no financial mutation.
+      expect(reloaded?.providerPaymentId).toBeNull();
+    });
+  });
 });
