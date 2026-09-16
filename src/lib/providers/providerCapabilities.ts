@@ -21,10 +21,25 @@ import { ConfigurationError, ProviderNotAvailableError } from "@/lib/errors";
  *      value, or an unset env var) -> `assertProviderAvailableForRuntime` throws
  *      `ProviderNotAvailableError`. There is no sandbox fallback branch to fall into.
  *
- * `PROVIDER_CAPABILITY_REGISTRY` is empty today because no live provider has been selected/approved
- * (see docs/PRODUCTION_PROVIDER_READINESS.md) — B-1 remains on hard hold. Adding a real provider later
- * is still additive and requires no change to this file's *shape*: a new descriptor entry here, a new
- * adapter class implementing the relevant interface, and a matching
+ * PAID2YOU — B0-D C1 (documentation correction): `PROVIDER_CAPABILITY_REGISTRY` is NOT empty — as of
+ * B0-D ADYEN PHASE 1/2, `adyen` is registered below as a `environment: "production"` payment provider
+ * for `ach_debit`/`webhook_delivery`/`bank_linking`. Registration means the Adyen ACH-debit adapter
+ * (`AdyenPaymentProvider`) exists, is code-complete, and is wired to construct if selected — it does
+ * NOT mean Adyen has approved this merchant account, that live credentials exist, or that this
+ * codebase is operationally ready to send Adyen real traffic. No live Adyen account exists as of this
+ * writing (see docs/PRODUCTION_PROVIDER_READINESS.md, kept in sync with this file); B-1 remains on
+ * hard hold regardless of what is registered here. Registration alone cannot move real money: (1)
+ * `getPaymentProvider()` still throws `ConfigurationError` unless `ADYEN_API_KEY`/`ADYEN_MERCHANT_
+ * ACCOUNT`/`ADYEN_LIVE_PREFIX`/`ADYEN_PAYMENTS_HMAC_KEY` are all genuinely configured; (2) even then,
+ * `ADYEN_PAYMENTS_VERIFIED` (src/config/env.ts, defaults `false`) independently gates NEW payment
+ * initiation specifically — see that env var's own doc comment; (3) KYC/KYB and card-issuing remain
+ * genuinely unregistered (no descriptor of any kind exists for those two `ProviderKind`s below) — no
+ * vendor has been selected for either. Sandbox/mock provider implementations remain permanently
+ * absent from this registry and from all production runtime paths (see this file's own module doc
+ * comment above) — that invariant is unaffected by any of the above and remains independently
+ * enforced by `scripts/check-no-sandbox-runtime.mjs`. Adding a further real provider later remains
+ * additive and requires no change to this file's *shape*: a new descriptor entry here, a new adapter
+ * class implementing the relevant interface, and a matching
  * PAYMENT_PROVIDER/KYC_PROVIDER/CARD_ISSUING_PROVIDER value in src/config/env.ts.
  *
  * Sandbox/mock provider *implementations* (SandboxPaymentProvider, SandboxKycProvider,

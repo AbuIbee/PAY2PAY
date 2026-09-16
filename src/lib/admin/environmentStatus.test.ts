@@ -28,6 +28,7 @@ function baseEnv(overrides: Partial<ServerEnv> = {}): ServerEnv {
     SMS_DELIVERY_ENABLED: true,
     ADYEN_ACH_TOKENIZATION_VERIFIED: false,
     PAYOUT_PROVIDER_INTEGRATION_VERIFIED: false,
+    ADYEN_PAYMENTS_VERIFIED: false,
     ...overrides,
   };
 }

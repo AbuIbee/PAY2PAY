@@ -1,5 +1,5 @@
 import "server-only";
-import { ConflictError, ValidationError } from "@/lib/errors";
+import { ConflictError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import type { ProfileRef } from "@/lib/payments/paymentProvider";
 import type { PaymentAttemptRecord, PaymentAttemptRepository, PaymentService } from "@/lib/payments/paymentService";
 import type { AchMandateRecord, AchMandateService } from "./achMandateService";
@@ -18,6 +18,22 @@ export class AchPaymentService {
       mandates: AchMandateService;
       payments: PaymentService;
       paymentAttempts: PaymentAttemptRepository;
+      /**
+       * PAID2YOU — B0-D C2 (payment activation gate). Required — mirrors `PaymentService`'s identical
+       * `newPaymentInitiationVerified` field (this class holds its own copy since `PaymentService`'s
+       * own internal deps are private and not reachable from here). Checked in BOTH
+       * `submitScheduledPayment` (an installment's FIRST submission) AND `createManualPayment`'s
+       * genuinely-new-attempt branch — see each method's own doc comment. CORRECTION (this pass): an
+       * earlier version of this comment claimed `createManualPayment` was "deliberately" exempt because
+       * `RetryPaymentMethodInitiator`-driven recovery "depends on it for an already-existing,
+       * already-failed obligation" — that reasoning was wrong. `createManualPayment` still creates and
+       * submits a BRAND NEW `payment_attempt` row the provider has never seen (the "already-failed
+       * obligation" is the *installment*, not the payment_attempt) — leaving it unguarded was a genuine
+       * new-debit bypass reachable via POST /api/ach/payments/manual and automatic retry firing alike.
+       * `createManualPayment`'s own idempotent-replay branch (an existing, already-submitted attempt
+       * found by idempotency key) is correctly exempt — see that method's own doc comment.
+       */
+      newPaymentInitiationVerified: boolean;
     },
   ) {}
 
@@ -71,8 +87,19 @@ export class AchPaymentService {
     );
   }
 
-  /** Submission time reached (docs/PAYMENT_STATE_MACHINE.md §1: "Scheduled → Submitted") — calls the provider. */
+  /**
+   * Submission time reached (docs/PAYMENT_STATE_MACHINE.md §1: "Scheduled → Submitted") — calls the
+   * provider. PAID2YOU — B0-D C2 (payment activation gate): checked FIRST, before `submitPending`
+   * ever transitions the row out of "scheduled" — a blocked call produces ZERO mutation. This is the
+   * FIRST-EVER submission of this specific payment_attempt (structurally guaranteed non-retryable-into
+   * by `submitPending`'s own "only a scheduled payment can be submitted" guard), never a retry.
+   */
   async submitScheduledPayment(paymentAttemptId: string, actingUserId: string): Promise<PaymentAttemptRecord> {
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires ADYEN_PAYMENTS_VERIFIED=true — Adyen registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See ADYEN_PAYMENTS_VERIFIED's own doc comment in src/config/env.ts.",
+      );
+    }
     return this.deps.payments.submitPending(paymentAttemptId, actingUserId);
   }
 
@@ -117,8 +144,21 @@ export class AchPaymentService {
       "scheduled",
     );
     if (scheduled.status !== "scheduled") {
-      // Idempotent replay of an already-submitted manual payment — nothing further to do.
+      // Idempotent replay of an already-submitted manual payment — nothing further to do. Never
+      // gated: this row already left "scheduled" on a PRIOR call (real provider evidence exists, or
+      // is already in flight), so this is recovery of an existing obligation, not a new debit.
       return scheduled;
+    }
+    // PAID2YOU — B0-D C2 (payment activation gate): checked here, not earlier — a `scheduled` status
+    // at this point proves the provider has NEVER seen this idempotencyKey (see this class's own
+    // top-level doc comment on this field for why an earlier version of this comment wrongly exempted
+    // this method entirely). Checked AFTER the replay branch above, so a genuine replay is never
+    // blocked, and BEFORE `submitPending` ever transitions the row — a blocked call produces ZERO
+    // additional mutation beyond the already-committed "scheduled" row.
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires ADYEN_PAYMENTS_VERIFIED=true — Adyen registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See ADYEN_PAYMENTS_VERIFIED's own doc comment in src/config/env.ts.",
+      );
     }
     return this.deps.payments.submitPending(scheduled.id, input.actingUserId, null, null, input.finalGuard);
   }

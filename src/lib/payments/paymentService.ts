@@ -1,6 +1,6 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
-import { ConfigurationError, DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { ConfigurationError, DependencyError, ForbiddenError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { getDailyAmountLimitMinorUnits, getDailyAttemptCountLimit, getMaxPaymentMinorUnits, getReviewThresholdMinorUnits, getRollingWindowMs, summarizeRecentActivity } from "./transactionLimits";
 import { logger } from "@/lib/logger";
@@ -540,6 +540,22 @@ export class PaymentService {
       notifications?: NotificationService;
       /** PAID2YOU — B0-D ADYEN PHASE 1A: see `AchMandateProviderRefReader`'s own doc comment. */
       achMandateProviderRefs?: AchMandateProviderRefReader;
+      /**
+       * PAID2YOU — B0-D C2 (payment activation gate). Required (not optional) — a mandatory security
+       * control with no legitimate "unwired" state, mirroring `PayoutService`'s identical
+       * `payoutProviderIntegrationVerified` precedent. Production (`getPaymentService.ts`) wires
+       * `getServerEnv().ADYEN_PAYMENTS_VERIFIED`; `testFakes.ts` defaults it to `true` so every
+       * pre-existing test that exercises real payment creation is unaffected. Checked in
+       * `createPayment` (see that method's own doc comment for exactly why) AND, as the AUTHORITATIVE
+       * enforcement point regardless of caller, in `submitPending` (see that method's own doc
+       * comment) — CORRECTION (B0-D C2 FINAL SECURITY GATE pass): an earlier version of this comment
+       * claimed `submitPending`/`submitToProvider` were "deliberately" exempt because retries/manual-
+       * payment recovery "depend on" them for an already-existing obligation — that reasoning was
+       * wrong. `submitPending` only ever runs against a row whose status is STILL `"scheduled"`,
+       * which structurally proves the provider has never seen it; there is no legitimate replay case
+       * at that layer. Leaving it unguarded was a genuine new-debit bypass.
+       */
+      newPaymentInitiationVerified: boolean;
     },
   ) {}
 
@@ -559,6 +575,20 @@ export class PaymentService {
     /** R11: the ONLY sanctioned exemption from the linkage requirement above — see `SettlementContextVerifier`'s own doc comment. */
     settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord> {
+    // PAID2YOU — B0-D C2 (payment activation gate). Checked FIRST, before `reserveAttempt` ever
+    // writes a payout_attempt/payment_attempt row — a blocked call produces ZERO mutation, never a
+    // reserved-then-abandoned row. This is the genuinely-NEW-payment entry point (POST
+    // /api/payments/create is its only caller): a brand-new payment_attempt that has never existed
+    // before, submitted to the provider immediately. `submitPending` (the shared path
+    // `AchPaymentService`/`DebitCardPaymentService`'s `submitScheduledPayment`/`createManualPayment`
+    // and `FailedPaymentRetryCoordinator`'s retry dispatch all route through) carries its OWN,
+    // independent copy of this exact check — see that method's own doc comment for why it is the
+    // authoritative enforcement point regardless of caller.
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires ADYEN_PAYMENTS_VERIFIED=true — Adyen registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See ADYEN_PAYMENTS_VERIFIED's own doc comment in src/config/env.ts.",
+      );
+    }
     const reserved = await this.reserveAttempt(input);
     if (reserved.alreadyResolved) return reserved.record;
     return this.submitToProvider(reserved.record, input);
@@ -627,6 +657,19 @@ export class PaymentService {
     const record = await this.getAuthorizedRecord(id, actingUserId, "payer_only");
     if (record.status !== "scheduled") {
       throw new ValidationError("Only a scheduled payment can be submitted.");
+    }
+    // PAID2YOU — B0-D C2 FINAL SECURITY GATE: the AUTHORITATIVE enforcement point for this flag —
+    // checked here, not merely in each orchestration-layer caller (AchPaymentService/
+    // DebitCardPaymentService's own identical checks are defense-in-depth, not the only line of
+    // defense). `submitPending` is a PUBLIC method: `record.status === "scheduled"` at this point
+    // structurally proves the provider has NEVER seen this payment_attempt (a payment can never
+    // return to "scheduled" once it leaves it), so this is unconditionally a genuinely NEW debit,
+    // never a replay — checked before `updateStatus` ever transitions the row, so a blocked call
+    // produces ZERO mutation, not even the "submitted" status write.
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires ADYEN_PAYMENTS_VERIFIED=true — Adyen registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See ADYEN_PAYMENTS_VERIFIED's own doc comment in src/config/env.ts.",
+      );
     }
     const submitted = await this.deps.payments.updateStatus(record.id, "submitted", {});
     return this.submitToProvider(submitted, {

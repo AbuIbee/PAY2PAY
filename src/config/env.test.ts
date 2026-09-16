@@ -33,6 +33,19 @@ describe("parseServerEnv", () => {
     expect(env.APP_ENV).toBe("development");
   });
 
+  // PAID2YOU — B0-D C2 FINAL SECURITY GATE, T14: the payment-activation gate must fail closed by
+  // default — an operator who never sets this var at all must never accidentally allow live payment
+  // initiation.
+  it("T14: ADYEN_PAYMENTS_VERIFIED defaults to false when omitted", () => {
+    const env = parseServerEnv(validEnv);
+    expect(env.ADYEN_PAYMENTS_VERIFIED).toBe(false);
+  });
+
+  it("T14: ADYEN_PAYMENTS_VERIFIED=true parses to true only on that exact explicit value", () => {
+    const env = parseServerEnv({ ...validEnv, ADYEN_PAYMENTS_VERIFIED: "true" });
+    expect(env.ADYEN_PAYMENTS_VERIFIED).toBe(true);
+  });
+
   it("rejects a missing DATABASE_URL", () => {
     expect(() => parseServerEnv(omit(validEnv, "DATABASE_URL"))).toThrow(
       EnvironmentValidationError,

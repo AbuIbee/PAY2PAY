@@ -1,4 +1,5 @@
 import "server-only";
+import { getServerEnv } from "@/config/env";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getPartialPaymentAutoApplicationService } from "@/lib/partialPayments/getPartialPaymentAutoApplicationService";
@@ -27,6 +28,10 @@ export function getFailedPaymentRetryCoordinator(): FailedPaymentRetryCoordinato
       // PAID2YOU — B0-D ADYEN PHASE 1A (blocker 1 — exact payment method): the SAME resolver
       // `getPaymentService.ts` uses — see `DrizzleAchMandateProviderRefReader`'s own doc comment.
       new DrizzleAchMandateProviderRefReader(),
+      // PAID2YOU — B0-D C2 FINAL SECURITY GATE: the real production value, explicitly wired — see
+      // `DrizzleFailedPaymentRetryCoordinator`'s own doc comment on this field for why its default
+      // (`true`) is never relied on here.
+      getServerEnv().ADYEN_PAYMENTS_VERIFIED,
     );
   }
   return cached;

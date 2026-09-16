@@ -293,6 +293,8 @@ export function createTestPaymentService(options?: {
   atomicManualPayments?: AtomicManualPaymentPoster;
   /** Restore agreement payment functionality: optional, so every pre-existing call site is unaffected — see PaymentService's own doc comment on this dependency. */
   notifications?: NotificationService;
+  /** PAID2YOU — B0-D C2 (payment activation gate): defaults to `true` so every pre-existing test that exercises real `createPayment` completion is unaffected — mirrors this codebase's established "optional override, defaults to the pre-existing behavior" convention. This phase's own tests override it to `false` to prove the gate. */
+  newPaymentInitiationVerified?: boolean;
 }) {
   const verificationCtx = createTestVerificationService();
   const provider = new SandboxPaymentProvider(TEST_WEBHOOK_SECRET);
@@ -313,6 +315,7 @@ export function createTestPaymentService(options?: {
     installmentHook: options?.installmentHook,
     atomicManualPayments: options?.atomicManualPayments,
     notifications: options?.notifications,
+    newPaymentInitiationVerified: options?.newPaymentInitiationVerified ?? true,
   });
 
   return { verificationCtx, provider, payments, auditRepo, agreements, paymentService };
