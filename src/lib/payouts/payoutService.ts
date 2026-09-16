@@ -1,8 +1,9 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
-import { ProviderNotAvailableError, ValidationError } from "@/lib/errors";
+import { CreditorNotVerifiedError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import type { LedgerService } from "@/lib/ledger/ledgerService";
 import type { PaymentAttemptRepository } from "@/lib/payments/paymentService";
+import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { AtomicPayoutConfirmer } from "./atomicPayoutConfirmer";
 import type { AtomicPayoutReturner } from "./atomicPayoutReturner";
 import type { PayoutAttemptRecord, PayoutAttemptRepository } from "./payoutAttemptRepository";
@@ -40,14 +41,32 @@ import type { PayoutAttemptRecord, PayoutAttemptRepository } from "./payoutAttem
  * payout until an operator has explicitly flipped this flag after confirming the integration is real —
  * defense in depth against exactly the kind of "syntactically-valid-looking but never actually
  * provider-verified" completion this whole phase exists to close.
+ *
+ * PAID2YOU — B0-D PHASE 3C (creditor payout eligibility): a THIRD, also-independent gate on
+ * `confirmPayout` — the payment's own creditor (`recipientProfileKind`/`recipientProfileId`) must have
+ * reached this codebase's FULL identity-verification tier (`VerificationService.isFullyVerified`),
+ * looked up fresh on every call, exact-profile-scoped (never a caller-supplied identifier). This is
+ * INTERNAL eligibility only — a human-reviewed decision this codebase already makes independently of
+ * any payment provider — and is explicitly NOT Adyen KYC/KYB approval; it neither satisfies nor is
+ * satisfied by `payoutProviderIntegrationVerified` above. `recordPayoutOwed`/`failPayout` are
+ * deliberately NOT gated by this check: a payment that clears always establishes the creditor's
+ * liability and a pending payout obligation, verified or not — only *paying out* requires it.
  */
 export class PayoutService {
   constructor(
     private readonly deps: {
       payoutAttempts: PayoutAttemptRepository;
       ledger: LedgerService;
-      payments: Pick<PaymentAttemptRepository, "markPayoutCompleted" | "clearPayoutCompleted">;
+      payments: Pick<PaymentAttemptRepository, "findById" | "markPayoutCompleted" | "clearPayoutCompleted">;
       audit: AuditService;
+      /**
+       * PAID2YOU — B0-D PHASE 3C (creditor payout eligibility): required (not optional) — unlike
+       * `atomicConfirmer`/`atomicReturner` below, this is a mandatory security control with no
+       * legitimate "unwired" state. Production (`getPayoutService.ts`) wires the real
+       * `VerificationService`; `testFakes.ts` wires a permissive-by-default stub so every pre-existing
+       * test that never exercised this gate is unaffected, with this phase's own tests overriding it.
+       */
+      verification: Pick<VerificationService, "isFullyVerified">;
       /**
        * PAID2YOU — B0-D PHASE 3B (payout integrity): mirrors `BankConnectionService`'s identical
        * `adyenMerchantAccount`-style pattern of injecting a resolved env value rather than the whole
@@ -108,13 +127,15 @@ export class PayoutService {
    * independent gate rather than something the `providerName`/`providerPayoutReference` checks below
    * already cover. This gate runs identically regardless of which branch below executes.
    *
-   * PAID2YOU — B0-D PHASE 3B (G2 correction): when `this.deps.atomicConfirmer` is wired (always true
-   * in production — see `getPayoutService.ts`), the claim/ledger-post/mark/set sequence below is
-   * entirely replaced by ONE delegated call into `DrizzleAtomicPayoutConfirmer.confirmAtomically`,
-   * which performs all four operations inside a single database transaction with row-lock-based
-   * concurrency control — see that class's own doc comment for the full mechanism. The sequential,
-   * multi-statement logic further below runs ONLY when no atomic confirmer is wired (the pre-existing
-   * in-memory unit-test harness).
+   * PAID2YOU — B0-D PHASE 3C (creditor payout eligibility): checked immediately after, ALSO before
+   * touching the atomic confirmer or the fallback's own repositories — the payment's own creditor
+   * (its authoritative `recipientProfileKind`/`recipientProfileId`, never caller input) must satisfy
+   * `VerificationService.isFullyVerified` or this throws `CreditorNotVerifiedError`. Missing, pending,
+   * rejected, or a verification recorded for a different profile all fail this the same way — there is
+   * no code path where a bare provider-flag pass alone, or a verification belonging to someone other
+   * than this specific payment's creditor, is sufficient. Independent of the provider-integration gate
+   * above: a fully-verified creditor still cannot be paid out with no live provider wired, and a live
+   * provider still cannot pay out an unverified creditor.
    */
   async confirmPayout(input: { paymentAttemptId: string; providerName: string; providerPayoutReference: string }): Promise<PayoutAttemptRecord> {
     if (!this.deps.payoutProviderIntegrationVerified) {
@@ -125,6 +146,7 @@ export class PayoutService {
     if (!input.providerName.trim() || !input.providerPayoutReference.trim()) {
       throw new ValidationError("confirmPayout requires a non-empty providerName and providerPayoutReference — a payout may never be confirmed without real provider evidence.");
     }
+    await this.requireCreditorEligible(input.paymentAttemptId);
 
     if (this.deps.atomicConfirmer) {
       const result = await this.deps.atomicConfirmer.confirmAtomically(input);
@@ -189,6 +211,28 @@ export class PayoutService {
       targetResourceId: updated.id,
     });
     return updated;
+  }
+
+  /**
+   * PAID2YOU — B0-D PHASE 3C (creditor payout eligibility). Resolves the payment's OWN authoritative
+   * `recipientProfileKind`/`recipientProfileId` (never a caller-supplied identifier — there is no
+   * parameter through which a caller could name a different profile to check) and requires
+   * `VerificationService.isFullyVerified` to be `true` for exactly that profile. Throws
+   * `CreditorNotVerifiedError` (an instanceof `ValidationError`) otherwise — covering "missing" (no
+   * verification record at all), "pending" (submitted, not yet decided), "rejected" (decided against),
+   * and "a different profile's verification" (structurally impossible to satisfy by accident, since
+   * the lookup is keyed on the payment's own fields) uniformly, with no special-cased bypass for any
+   * of them.
+   */
+  private async requireCreditorEligible(paymentAttemptId: string): Promise<void> {
+    const payment = await this.deps.payments.findById(paymentAttemptId);
+    if (!payment) {
+      throw new ValidationError("Cannot confirm a payout for a payment_attempt that does not exist.");
+    }
+    const eligible = await this.deps.verification.isFullyVerified(payment.recipientProfileKind, payment.recipientProfileId);
+    if (!eligible) {
+      throw new CreditorNotVerifiedError();
+    }
   }
 
   /**

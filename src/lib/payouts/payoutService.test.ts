@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ProviderNotAvailableError, ValidationError } from "@/lib/errors";
+import { CreditorNotVerifiedError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import { createTestLedgerService } from "@/lib/ledger/testFakes";
 import { InMemoryPaymentAttemptRepository } from "@/lib/payments/testFakes";
+import { createTestVerificationService } from "@/lib/profiles/testFakes";
 import { createTestPayoutService } from "./testFakes";
 
 const AGREEMENT_ID = "agreement-payout-1";
@@ -266,6 +267,112 @@ describe("PayoutService (PAID2YOU — B0-D PHASE 3A)", () => {
       const second = await payoutCtx.payoutService.returnPayout({ paymentAttemptId: payment.id, reason: "ignored" });
       expect(second.returnedAt).toEqual(first.returnedAt);
       expect(await payoutEntriesFor(payment.id, "payout_returned")).toHaveLength(1);
+    });
+  });
+
+  describe("PAID2YOU — B0-D PHASE 3C (creditor payout eligibility)", () => {
+    const CREDITOR_KIND = "business" as const;
+    const CREDITOR_ID = "creditor-1"; // matches seedClearedPayment's own recipientProfileId.
+
+    function buildCtxWithVerification(overrides: { payoutProviderIntegrationVerified?: boolean } = {}) {
+      const verificationCtx = createTestVerificationService();
+      const ctx = createTestPayoutService({
+        ledger: ledgerCtx.ledgerService,
+        payments,
+        verification: verificationCtx.verificationService,
+        payoutProviderIntegrationVerified: overrides.payoutProviderIntegrationVerified ?? true,
+      });
+      return { verificationCtx, ...ctx };
+    }
+
+    it("recordPayoutOwed is NEVER gated by creditor verification — an UNVERIFIED creditor's liability and pending payout obligation are established exactly as normal", async () => {
+      const ctx = buildCtxWithVerification();
+      const payment = await seedClearedPayment(5_000);
+
+      const owed = await ctx.payoutService.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: AGREEMENT_ID });
+
+      expect(owed.status).toBe("pending");
+      expect(await creditorLiability(payment.id)).toBe(5_000); // the liability a cleared payment establishes is unconditional.
+    });
+
+    it("confirmPayout fails closed with CreditorNotVerifiedError when the creditor has NO verification record at all", async () => {
+      const ctx = buildCtxWithVerification();
+      const payment = await seedClearedPayment(5_000);
+      await ctx.payoutService.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: AGREEMENT_ID });
+
+      await expect(
+        ctx.payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "ref-1" }),
+      ).rejects.toThrow(CreditorNotVerifiedError);
+
+      // No premature payout, ledger mutation, or completed status.
+      expect((await payments.findById(payment.id))?.payoutCompletedAt).toBeNull();
+      expect((await ctx.payoutService.getPayoutStatus(payment.id))?.status).toBe("pending");
+      expect(await creditorLiability(payment.id)).toBe(5_000);
+      expect(await payoutEntriesFor(payment.id, "payout")).toHaveLength(0);
+    });
+
+    it("confirmPayout fails closed with CreditorNotVerifiedError when the creditor's FULL verification is still PENDING (submitted, not yet decided)", async () => {
+      const ctx = buildCtxWithVerification();
+      await ctx.verificationCtx.records.insert({ profileKind: CREDITOR_KIND, profileId: CREDITOR_ID, tier: "full" }); // status defaults "pending".
+      const payment = await seedClearedPayment(5_000);
+      await ctx.payoutService.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: AGREEMENT_ID });
+
+      await expect(
+        ctx.payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "ref-1" }),
+      ).rejects.toThrow(CreditorNotVerifiedError);
+    });
+
+    it("confirmPayout fails closed with CreditorNotVerifiedError when the creditor's FULL verification was REJECTED", async () => {
+      const ctx = buildCtxWithVerification();
+      const rec = await ctx.verificationCtx.records.insert({ profileKind: CREDITOR_KIND, profileId: CREDITOR_ID, tier: "full" });
+      await ctx.verificationCtx.records.updateDecision(rec.id, { status: "rejected", reviewerUserId: randomUUID(), reason: "could not confirm identity" });
+      const payment = await seedClearedPayment(5_000);
+      await ctx.payoutService.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: AGREEMENT_ID });
+
+      await expect(
+        ctx.payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "ref-1" }),
+      ).rejects.toThrow(CreditorNotVerifiedError);
+    });
+
+    it("confirmPayout fails closed when FULL verification exists only for a DIFFERENT profile — another user's verification never satisfies THIS creditor's eligibility", async () => {
+      const ctx = buildCtxWithVerification();
+      const rec = await ctx.verificationCtx.records.insert({ profileKind: CREDITOR_KIND, profileId: "some-other-business-9999", tier: "full" });
+      await ctx.verificationCtx.records.updateDecision(rec.id, { status: "verified", reviewerUserId: randomUUID(), reason: null });
+      const payment = await seedClearedPayment(5_000);
+      await ctx.payoutService.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: AGREEMENT_ID });
+
+      await expect(
+        ctx.payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "ref-1" }),
+      ).rejects.toThrow(CreditorNotVerifiedError);
+      expect(await creditorLiability(payment.id)).toBe(5_000); // still owed — no premature payout.
+    });
+
+    it("approved FULL verification satisfies ONLY internal eligibility — confirmPayout still fails closed with ProviderNotAvailableError when no live payout provider is verified, regardless of creditor verification", async () => {
+      const ctx = buildCtxWithVerification({ payoutProviderIntegrationVerified: false }); // missing provider.
+      const rec = await ctx.verificationCtx.records.insert({ profileKind: CREDITOR_KIND, profileId: CREDITOR_ID, tier: "full" });
+      await ctx.verificationCtx.records.updateDecision(rec.id, { status: "verified", reviewerUserId: randomUUID(), reason: null });
+      const payment = await seedClearedPayment(5_000);
+      await ctx.payoutService.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: AGREEMENT_ID });
+
+      await expect(
+        ctx.payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "ref-1" }),
+      ).rejects.toThrow(ProviderNotAvailableError);
+
+      expect((await payments.findById(payment.id))?.payoutCompletedAt).toBeNull();
+      expect((await ctx.payoutService.getPayoutStatus(payment.id))?.status).toBe("pending");
+      expect(await creditorLiability(payment.id)).toBe(5_000);
+      expect(await payoutEntriesFor(payment.id, "payout")).toHaveLength(0);
+    });
+
+    it("regression: a creditor who is BOTH fully verified AND has a verified payout provider can be confirmed — the two independent gates compose, they don't just block", async () => {
+      const ctx = buildCtxWithVerification({ payoutProviderIntegrationVerified: true });
+      const rec = await ctx.verificationCtx.records.insert({ profileKind: CREDITOR_KIND, profileId: CREDITOR_ID, tier: "full" });
+      await ctx.verificationCtx.records.updateDecision(rec.id, { status: "verified", reviewerUserId: randomUUID(), reason: null });
+      const payment = await seedClearedPayment(5_000);
+      await ctx.payoutService.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: AGREEMENT_ID });
+
+      const confirmed = await ctx.payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "ref-1" });
+      expect(confirmed.status).toBe("confirmed");
     });
   });
 });
