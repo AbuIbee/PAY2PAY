@@ -3,8 +3,10 @@ import { DEFAULT_CHANNELS, type NotificationEventType } from "@/lib/notify/event
 import {
   agreementStatusLabel,
   appealDecisionLabel,
+  creditorPayoutStatusLabel,
   notificationDeliveryStatusLabel,
   notificationEventLabel,
+  payoutAttemptStatusLabel,
   relationshipStatusLabel,
   settlementProposalStatusLabel,
 } from "./statusLabels";
@@ -61,5 +63,45 @@ describe("statusLabels registries", () => {
     // "sent" and "delivered" must stay visually/textually distinct — see notificationService.ts's own
     // "provider accepted" vs "provider-confirmed delivery" distinction this reflects.
     expect(notificationDeliveryStatusLabel("sent").label).not.toBe(notificationDeliveryStatusLabel("delivered").label);
+  });
+
+  describe("PAID2YOU — B0-D PHASE 3D (payout status accuracy)", () => {
+    it("only 'confirmed' ever makes an affirmative paid claim — pending/failed/returned all read as still owed, never merely negated", () => {
+      expect(payoutAttemptStatusLabel("confirmed").label).toBe("Paid to you");
+      for (const status of ["pending", "failed", "returned"] as const) {
+        const { label } = payoutAttemptStatusLabel(status);
+        expect(label.toLowerCase()).toContain("owed");
+        expect(label.toLowerCase()).not.toContain("transferred");
+        expect(label).not.toBe("Paid to you");
+      }
+    });
+
+    it("gives failed and returned distinct, non-success tones from confirmed — color is never the only signal, and neither ever reads as success", () => {
+      expect(payoutAttemptStatusLabel("confirmed").tone).toBe("success");
+      expect(payoutAttemptStatusLabel("failed").tone).not.toBe("success");
+      expect(payoutAttemptStatusLabel("returned").tone).not.toBe("success");
+    });
+
+    it("creditorPayoutStatusLabel never says 'Paid'/'Transferred' from payment clearance or initiation alone — only a genuinely confirmed payout_attempt does", () => {
+      // A cleared payment with NO payout_attempt recorded yet is exactly the "payout initiated but
+      // not confirmed" shape this rule exists to guard against — must never read as paid.
+      expect(creditorPayoutStatusLabel("succeeded", null).label).not.toBe("Paid to you");
+      expect(creditorPayoutStatusLabel("succeeded", "pending").label).not.toBe("Paid to you");
+      expect(creditorPayoutStatusLabel("succeeded", "failed").label).not.toBe("Paid to you");
+      expect(creditorPayoutStatusLabel("succeeded", "returned").label).not.toBe("Paid to you");
+      // The ONLY combination that may say "Paid to you."
+      expect(creditorPayoutStatusLabel("succeeded", "confirmed").label).toBe("Paid to you");
+    });
+
+    it("a payment that hasn't even cleared shows 'Not yet owed', never any payout-owed language", () => {
+      const label = creditorPayoutStatusLabel("pending", null);
+      expect(label).toEqual({ label: "Not yet owed", tone: "neutral" });
+    });
+
+    it("distinguishes all four payout_attempt states with distinct, non-empty labels (Pending/Confirmed/Failed/Returned)", () => {
+      const labels = (["pending", "confirmed", "failed", "returned"] as const).map((s) => payoutAttemptStatusLabel(s).label);
+      expect(new Set(labels).size).toBe(4);
+      for (const label of labels) expect(label.length).toBeGreaterThan(0);
+    });
   });
 });

@@ -83,6 +83,40 @@ class InMemoryAuditEventRepositoryForPayouts implements AuditEventRepository {
 }
 
 /**
+ * PAID2YOU — B0-D PHASE 3D (payout status accuracy). A minimal, standalone fake for routes/components
+ * that only need `PayoutService.getPayoutStatus` (read-only reporting) — never the full lifecycle
+ * (`confirmPayout`/`returnPayout`), which is what `createTestPayoutService` above is for. Avoids
+ * forcing every payout-status-display test to also wire a `LedgerService`/`PaymentAttemptRepository`
+ * it has no use for.
+ */
+export class FakePayoutStatusReader {
+  private byPaymentAttemptId = new Map<string, PayoutAttemptRecord>();
+
+  /** Seeds a payout_attempt row for a payment, with sensible defaults for every field this fake's callers don't care about. */
+  seed(paymentAttemptId: string, status: PayoutAttemptRecord["status"], overrides: Partial<PayoutAttemptRecord> = {}): void {
+    this.byPaymentAttemptId.set(paymentAttemptId, {
+      id: randomUUID(),
+      paymentAttemptId,
+      agreementId: "fake-agreement",
+      status,
+      createdAt: new Date(),
+      confirmedAt: status === "confirmed" || status === "returned" ? new Date() : null,
+      providerName: status === "confirmed" || status === "returned" ? "adyen" : null,
+      providerPayoutReference: status === "confirmed" || status === "returned" ? "psp_fake" : null,
+      failedAt: status === "failed" ? new Date() : null,
+      failureReason: status === "failed" ? "provider rejected transfer" : null,
+      returnedAt: status === "returned" ? new Date() : null,
+      returnReason: status === "returned" ? "bank returned the transfer" : null,
+      ...overrides,
+    });
+  }
+
+  async getPayoutStatus(paymentAttemptId: string): Promise<PayoutAttemptRecord | null> {
+    return this.byPaymentAttemptId.get(paymentAttemptId) ?? null;
+  }
+}
+
+/**
  * Test harness: a real `PayoutService` over an in-memory `payoutAttempts` repository, sharing a
  * caller-supplied `ledger`/`payments` so it exercises real ledger-posting/payment-status behavior
  * against the exact same fakes the rest of a test's own webhook/ledger context already uses.
