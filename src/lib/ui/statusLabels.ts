@@ -87,6 +87,44 @@ export const paymentAttemptStatusLabel = registry<
   returned: { label: "Returned", tone: "danger" },
 });
 
+/**
+ * PAID2YOU — B0-D PHASE 3D (payout status accuracy). Maps `payout_attempt.status` (the ONLY
+ * authoritative record of whether a creditor has actually been paid out — see
+ * `src/db/schema/payoutAttempt.ts`'s own doc comment) to plain language. Deliberately distinct from
+ * `paymentAttemptStatusLabel`'s `succeeded: "Cleared"` above: a payment clearing means the DEBTOR's
+ * funds moved into Paid2You's own processing — it says nothing about whether Paid2You has since paid
+ * the CREDITOR out. Only `confirmed` may ever say "Paid" — `pending`, `failed`, and `returned` all
+ * mean the creditor's liability is still owed, never paid, regardless of the underlying payment's own
+ * status.
+ */
+export const payoutAttemptStatusLabel = registry<"pending" | "confirmed" | "failed" | "returned">({
+  pending: { label: "Owed — not yet paid", tone: "info" },
+  confirmed: { label: "Paid to you", tone: "success" },
+  failed: { label: "Payout failed — still owed", tone: "danger" },
+  returned: { label: "Payout returned — still owed", tone: "danger" },
+});
+
+/**
+ * PAID2YOU — B0-D PHASE 3D (payout status accuracy). Composes a payment's own status with its
+ * `payout_attempt`'s status (if any) into ONE truthful label for "has the creditor actually been paid
+ * out" — never derived from `payment.status` alone, and never displaying "Paid"/"Transferred" or
+ * equivalent based solely on payment clearance, ledger posting, or payout initiation.
+ *
+ * `payoutStatus` is `null` in two cases, both handled without ever overclaiming: (1) the payment has
+ * not cleared yet, so nothing is owed to the creditor at all — "Not yet owed"; (2) the payment HAS
+ * cleared but no `payout_attempt` row has been recorded yet (a narrow timing case) — treated
+ * identically to `"pending"`, since a cleared payment always establishes the creditor's liability
+ * (Phase 3A) even before the durable obligation row exists.
+ */
+export function creditorPayoutStatusLabel(
+  paymentStatus: string,
+  payoutStatus: "pending" | "confirmed" | "failed" | "returned" | null,
+): StatusLabel {
+  if (payoutStatus) return payoutAttemptStatusLabel(payoutStatus);
+  if (paymentStatus === "succeeded") return payoutAttemptStatusLabel("pending");
+  return { label: "Not yet owed", tone: "neutral" };
+}
+
 export const achMandateStatusLabel = registry<"active" | "revoked" | "expired">({
   active: { label: "Mandate active", tone: "success" },
   revoked: { label: "Authorization revoked", tone: "danger" },
