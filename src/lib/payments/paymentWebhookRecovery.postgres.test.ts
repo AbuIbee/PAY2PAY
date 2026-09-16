@@ -40,7 +40,7 @@ import { PaymentService, type PaymentAttemptRecord, type PaymentMethod } from ".
 import { DrizzlePaymentTransitionCoordinator } from "./paymentTransitionCoordinator";
 import { computeBackoffMs, PaymentWebhookService, type FailedPaymentWorkflow } from "./paymentWebhookService";
 import type { PlatformFeePolicy } from "./platformFeePolicy";
-import { SandboxPaymentProvider } from "./sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 
 const DATABASE_URL = process.env.DATABASE_URL!;
 const WEBHOOK_SECRET = "r06-r09-postgres-test-webhook-secret";

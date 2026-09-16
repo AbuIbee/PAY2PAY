@@ -156,14 +156,18 @@ describe("PaymentService", () => {
       await expect(ctx.paymentService.retrievePayment(record.id, OTHER_USER_ID)).rejects.toThrow(ForbiddenError);
     });
 
-    it("cancels only while pending", async () => {
+    it("PAID2YOU — B0-D ADYEN PHASE 1A (blocker 3 — cancel/refund finality): cancels only while pending; the request being ACCEPTED does not finalize the status — it stays 'pending' until an async CANCELLATION webhook confirms it", async () => {
       const record = await ctx.paymentService.createPayment(baseInput());
       const canceled = await ctx.paymentService.cancelPayment(record.id, PAYER_USER_ID);
-      expect(canceled.status).toBe("canceled");
+      // Not "canceled" — the provider only ACCEPTED the request; finality is webhook-driven.
+      expect(canceled.status).toBe("pending");
+      // The sandbox provider's own internal state no longer considers this payment "pending" after
+      // the first cancel request, so a second attempt is refused by the provider itself (still a
+      // real, provider-driven refusal — just via a different mechanism than a local terminal status).
       await expect(ctx.paymentService.cancelPayment(record.id, PAYER_USER_ID)).rejects.toThrow(ValidationError);
     });
 
-    it("refunds only a succeeded payment, and only for the recipient", async () => {
+    it("PAID2YOU — B0-D ADYEN PHASE 1A (blocker 3 — cancel/refund finality): refunds only a succeeded payment, and only for the recipient; the request being ACCEPTED does not finalize the status — it stays 'succeeded' until an async REFUND webhook confirms it", async () => {
       // Force an immediate-succeeded provider outcome for this test by monkey-patching createPayment once.
       const originalCreatePayment = ctx.provider.createPayment.bind(ctx.provider);
       ctx.provider.createPayment = (input) => originalCreatePayment({ ...input, simulateOutcome: "succeeded" });
@@ -173,7 +177,8 @@ describe("PaymentService", () => {
 
       await expect(ctx.paymentService.refundPayment(record.id, PAYER_USER_ID)).rejects.toThrow(ForbiddenError);
       const refunded = await ctx.paymentService.refundPayment(record.id, RECIPIENT_USER_ID);
-      expect(refunded.status).toBe("refunded");
+      // Not "refunded" — the provider only ACCEPTED the request; finality is webhook-driven.
+      expect(refunded.status).toBe("succeeded");
     });
 
     it("rejects refunding a still-pending payment", async () => {

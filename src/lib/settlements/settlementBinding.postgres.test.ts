@@ -16,7 +16,7 @@ import { DrizzleAgreementScheduleReader } from "@/lib/payments/drizzleAgreementS
 import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAttemptRepository";
 import { DrizzleSettlementContextVerifier } from "@/lib/payments/drizzleSettlementContextVerifier";
 import { PaymentService } from "@/lib/payments/paymentService";
-import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 import { DrizzleLedgerAccountRepository } from "@/lib/ledger/drizzleLedgerAccountRepository";
 import { DrizzleLedgerJournalEntryRepository } from "@/lib/ledger/drizzleLedgerJournalEntryRepository";
 import { LedgerService } from "@/lib/ledger/ledgerService";

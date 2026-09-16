@@ -39,7 +39,7 @@ import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAt
 import { DrizzlePaymentWebhookEventRepository } from "@/lib/payments/drizzlePaymentWebhookEventRepository";
 import { DrizzlePaymentInitiationEligibilityService } from "@/lib/payments/paymentInitiationEligibilityService";
 import { DrizzleSettlementContextVerifier } from "@/lib/payments/drizzleSettlementContextVerifier";
-import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 import { DrizzlePaymentTransitionCoordinator } from "@/lib/payments/paymentTransitionCoordinator";
 import { PaymentService, type ManualPaymentInstallmentHook, type PaymentAttemptRecord } from "@/lib/payments/paymentService";
 import { PaymentWebhookService } from "@/lib/payments/paymentWebhookService";

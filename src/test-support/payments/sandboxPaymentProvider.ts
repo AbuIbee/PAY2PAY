@@ -4,22 +4,26 @@ import { ValidationError } from "@/lib/errors";
 import { computeHmacSignature, verifyHmacSignature } from "@/lib/webhookSignature";
 import type {
   CancelPaymentResult,
+  CreateBankAccountSessionInput,
+  CreateBankAccountSessionResult,
   CreatePaymentInput,
   CreatePaymentMethodTokenInput,
   CreatePaymentMethodTokenResult,
   CreatePaymentResult,
   CreateRecipientAccountInput,
   CreateRecipientAccountResult,
+  DisableStoredPaymentMethodInput,
   LinkBankAccountInput,
   LinkBankAccountResult,
   ParsedWebhookEvent,
   PaymentProvider,
   PaymentProviderPaymentStatus,
+  ProfileRef,
   RefundPaymentResult,
   RetrievePaymentResult,
   TokenizeBankAccountInput,
   TokenizeBankAccountResult,
-} from "./paymentProvider";
+} from "@/lib/payments/paymentProvider";
 
 interface StoredSandboxPayment {
   status: PaymentProviderPaymentStatus;
@@ -32,16 +36,22 @@ interface StoredSandboxPayment {
 }
 
 /**
- * Sprint 9's sandbox/mock PaymentProvider — NOT a real Stripe/Plaid sandbox integration (this
+ * PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION: relocated out of src/lib/payments/ (application runtime
+ * source) into src/test-support/ specifically so it is structurally impossible for any production
+ * route/factory to import it — src/lib/payments/getPaymentProvider.ts no longer references this class
+ * at all, and the capability registry it used to be registered in (src/lib/providers/
+ * providerCapabilities.ts) is now empty. This class exists ONLY as a constructor-injected test double
+ * for PaymentService/PaymentWebhookService/etc. — see src/lib/payments/testFakes.ts's
+ * createTestPaymentService(), which is imported exclusively by *.test.ts files, never by any route,
+ * page, or other production runtime module.
+ *
+ * Sprint 9's original sandbox/mock PaymentProvider — NOT a real Stripe/Plaid sandbox integration (this
  * environment has no live processor credentials). Every operation is a deterministic, purely local
  * simulation; nothing here ever reaches a real network or moves real money ("NO PRODUCTION MONEY"
  * per this sprint's text). The one piece of *real* behavior is the webhook HMAC signing/verification
  * — that cryptography is genuine and correctly implemented, standing in for wherever a real
  * processor's own signing scheme would sit, so "webhook spoof" tests exercise real signature
  * rejection rather than a tautology.
- *
- * No UI may present a sandbox transaction as real; the caller (PaymentService/routes) is
- * responsible for surfacing `providerName` so downstream code/consumers can tell.
  */
 export class SandboxPaymentProvider implements PaymentProvider {
   readonly providerName = "sandbox_mock";
@@ -85,6 +95,24 @@ export class SandboxPaymentProvider implements PaymentProvider {
     }
     const maskedLast4 = input.accountNumber.slice(-4);
     return { providerAccountRef: `sandbox_bank_${randomUUID()}`, maskedLast4 };
+  }
+
+  // PAID2YOU — B0-D ADYEN PHASE 2: this retired sandbox provider is test-support only (never
+  // constructed by any production factory — see this class's own module doc comment) and has no
+  // Adyen-shaped bank-tokenization behavior of its own to simulate; these three exist only to satisfy
+  // `PaymentProvider`'s interface shape for tests that construct this class for unrelated concerns and
+  // never call them. Deliberately throw rather than fabricate a fake session/token, mirroring
+  // `AdyenPaymentProvider`'s own "not implemented" stubs for out-of-scope methods.
+  deriveShopperReference(profile: ProfileRef): string {
+    return `${profile.profileKind}:${profile.profileId}`;
+  }
+
+  async createBankAccountSession(_input: CreateBankAccountSessionInput): Promise<CreateBankAccountSessionResult> {
+    throw new Error("SandboxPaymentProvider.createBankAccountSession is not implemented — sandbox bank tokenization was retired, see B0-D TOTAL SANDBOX ELIMINATION.");
+  }
+
+  async disableStoredPaymentMethod(_input: DisableStoredPaymentMethodInput): Promise<void> {
+    throw new Error("SandboxPaymentProvider.disableStoredPaymentMethod is not implemented — sandbox bank tokenization was retired, see B0-D TOTAL SANDBOX ELIMINATION.");
   }
 
   /**

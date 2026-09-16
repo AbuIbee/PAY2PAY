@@ -1,25 +1,20 @@
 import "server-only";
 import { getServerEnv } from "@/config/env";
 import { ConfigurationError } from "@/lib/errors";
-import { assertProviderEnvironmentConsistency, getProviderCapabilityDescriptor } from "@/lib/providers/providerCapabilities";
-import { SandboxKycProvider } from "./sandboxKycProvider";
+import { assertProviderAvailableForRuntime } from "@/lib/providers/providerCapabilities";
 import type { KycKybProvider } from "./kycProvider";
 
-let cached: SandboxKycProvider | null = null;
+// See getPaymentProvider.ts's identical comment: reassigned once a real provider is registered;
+// today the function always throws first.
+// eslint-disable-next-line prefer-const
+let cached: KycKybProvider | null = null;
 
-/** PRSprint 21 — see getPaymentProvider.ts's identical doc comment for the runtime-switch/registry pattern this mirrors. */
+/** PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION — see getPaymentProvider.ts's identical doc comment for the fail-closed pattern this mirrors. */
 export function getKycProvider(): KycKybProvider {
   if (!cached) {
-    const { KYC_PROVIDER, KYC_SANDBOX_WEBHOOK_SECRET, APP_ENV } = getServerEnv();
-    if (KYC_PROVIDER === "sandbox") {
-      if (!KYC_SANDBOX_WEBHOOK_SECRET) {
-        throw new ConfigurationError("KYC_SANDBOX_WEBHOOK_SECRET is not configured.");
-      }
-      cached = new SandboxKycProvider(KYC_SANDBOX_WEBHOOK_SECRET);
-    } else {
-      throw new ConfigurationError(`No KYC/KYB provider factory is registered for "${KYC_PROVIDER}".`);
-    }
-    assertProviderEnvironmentConsistency(getProviderCapabilityDescriptor(cached.providerName), APP_ENV);
+    const { KYC_PROVIDER, APP_ENV } = getServerEnv();
+    const descriptor = assertProviderAvailableForRuntime("kyc", KYC_PROVIDER, APP_ENV);
+    throw new ConfigurationError(`No KYC/KYB provider factory is registered for "${descriptor.providerName}".`);
   }
   return cached;
 }

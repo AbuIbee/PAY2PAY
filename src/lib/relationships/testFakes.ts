@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { ConflictError } from "@/lib/errors";
+import { ConflictError, ValidationError } from "@/lib/errors";
 import { generateRelationshipReferenceCode } from "@/lib/auth/token";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
+import type {
+  CreateBankAccountSessionInput,
+  CreateBankAccountSessionResult,
+  DisableStoredPaymentMethodInput,
+  PaymentProvider,
+  ProfileKind,
+  ProfileRef,
+} from "@/lib/payments/paymentProvider";
+import type { BankLinkAttemptRecord, BankLinkAttemptRepository } from "./bankLinkAttemptRepository";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { AgreementService } from "@/lib/agreements/agreementService";
 import {
@@ -529,6 +539,10 @@ export class InMemoryFinancialAccountRepository implements FinancialAccountRepos
     return this.byId.get(id) ?? null;
   }
 
+  async findByProviderRef(providerName: string, providerAccountRef: string): Promise<FinancialAccountRecord | null> {
+    return [...this.byId.values()].find((a) => a.providerName === providerName && a.providerAccountRef === providerAccountRef) ?? null;
+  }
+
   async listForParty(individualProfileId: string | null, organizationId: string | null): Promise<FinancialAccountRecord[]> {
     return [...this.byId.values()].filter(
       (a) => (individualProfileId && a.individualProfileId === individualProfileId) || (organizationId && a.organizationId === organizationId),
@@ -561,6 +575,124 @@ export class InMemoryFinancialAccountRepository implements FinancialAccountRepos
   private mustFind(id: string): FinancialAccountRecord {
     const record = this.byId.get(id);
     if (!record) throw new Error("financial_account not found");
+    return record;
+  }
+}
+
+/**
+ * PAID2YOU — B0-D ADYEN PHASE 2A: a minimal, stateful `PaymentProvider` test double for
+ * `BankConnectionService` tests — delegates every payment-related method to a real
+ * `SandboxPaymentProvider` instance (irrelevant to bank-tokenization tests), and implements
+ * `createBankAccountSession`/`disableStoredPaymentMethod` itself. Unlike Phase 2's own fake, this
+ * carries NO shopper-token-list state at all — token attribution is exercised entirely by calling
+ * `BankConnectionService.recordAuthorisationConfirmed`/`completeFromTokenEvent` directly in tests
+ * (simulating the two Adyen webhooks), matching this phase's own webhook-only correlation design.
+ */
+export class FakeBankPaymentProvider implements PaymentProvider {
+  readonly providerName = "adyen";
+  readonly providerEnvironment = "production" as const;
+  private readonly delegate = new SandboxPaymentProvider("test-webhook-secret");
+  private sessionCounter = 0;
+  readonly disabledTokens: DisableStoredPaymentMethodInput[] = [];
+  /** Test control: when true, the NEXT createBankAccountSession call throws — simulates "Adyen could not initialize" for fail-closed tests. */
+  nextSessionShouldFail = false;
+
+  deriveShopperReference(profile: ProfileRef): string {
+    return `${profile.profileKind}:${profile.profileId}`;
+  }
+
+  async createBankAccountSession(input: CreateBankAccountSessionInput): Promise<CreateBankAccountSessionResult> {
+    if (!input.merchantReference.trim()) throw new ValidationError("merchantReference is required.");
+    if (this.nextSessionShouldFail) {
+      this.nextSessionShouldFail = false;
+      throw new ValidationError("Simulated Adyen /sessions failure.");
+    }
+    const providerSessionId = `fake-session-${++this.sessionCounter}`;
+    return { providerSessionId, sessionData: `fake-session-data-${providerSessionId}` };
+  }
+
+  async disableStoredPaymentMethod(input: DisableStoredPaymentMethodInput): Promise<void> {
+    this.disabledTokens.push(input);
+  }
+
+  createRecipientAccount: PaymentProvider["createRecipientAccount"] = (input) => this.delegate.createRecipientAccount(input);
+  linkBankAccount: PaymentProvider["linkBankAccount"] = (input) => this.delegate.linkBankAccount(input);
+  tokenizeBankAccount: PaymentProvider["tokenizeBankAccount"] = (input) => this.delegate.tokenizeBankAccount(input);
+  createPaymentMethodToken: PaymentProvider["createPaymentMethodToken"] = (input) => this.delegate.createPaymentMethodToken(input);
+  createPayment: PaymentProvider["createPayment"] = (input) => this.delegate.createPayment(input);
+  retrievePayment: PaymentProvider["retrievePayment"] = (id) => this.delegate.retrievePayment(id);
+  retrievePaymentByIdempotencyKey: PaymentProvider["retrievePaymentByIdempotencyKey"] = (key) => this.delegate.retrievePaymentByIdempotencyKey(key);
+  cancelPayment: PaymentProvider["cancelPayment"] = (id) => this.delegate.cancelPayment(id);
+  refundPayment: PaymentProvider["refundPayment"] = (id, amount) => this.delegate.refundPayment(id, amount);
+  verifyWebhookSignature: PaymentProvider["verifyWebhookSignature"] = (body, sig) => this.delegate.verifyWebhookSignature(body, sig);
+  parseWebhookEvent: PaymentProvider["parseWebhookEvent"] = (body) => this.delegate.parseWebhookEvent(body);
+}
+
+export class InMemoryBankLinkAttemptRepository implements BankLinkAttemptRepository {
+  byProviderSessionId = new Map<string, BankLinkAttemptRecord>();
+
+  async insert(input: {
+    providerSessionId: string;
+    merchantReference: string;
+    actingUserId: string;
+    partyProfileKind: ProfileKind;
+    partyIndividualProfileId: string | null;
+    partyOrganizationId: string | null;
+    shopperReference: string;
+    institutionDisplayName: string | null;
+    expiresAt: Date;
+  }): Promise<BankLinkAttemptRecord> {
+    const record: BankLinkAttemptRecord = {
+      id: randomUUID(),
+      status: "pending",
+      confirmedPspReference: null,
+      resultFinancialAccountId: null,
+      createdAt: new Date(),
+      confirmedAt: null,
+      completedAt: null,
+      ...input,
+    };
+    this.byProviderSessionId.set(record.providerSessionId, record);
+    return record;
+  }
+
+  async findByProviderSessionId(providerSessionId: string): Promise<BankLinkAttemptRecord | null> {
+    return this.byProviderSessionId.get(providerSessionId) ?? null;
+  }
+
+  async findByMerchantReference(merchantReference: string): Promise<BankLinkAttemptRecord | null> {
+    return [...this.byProviderSessionId.values()].find((r) => r.merchantReference === merchantReference) ?? null;
+  }
+
+  async findByConfirmedPspReference(pspReference: string): Promise<BankLinkAttemptRecord | null> {
+    return [...this.byProviderSessionId.values()].find((r) => r.confirmedPspReference === pspReference) ?? null;
+  }
+
+  private mustFind(id: string): BankLinkAttemptRecord {
+    const record = [...this.byProviderSessionId.values()].find((r) => r.id === id);
+    if (!record) throw new Error("bank_link_attempt not found");
+    return record;
+  }
+
+  async markAuthorised(id: string, confirmedPspReference: string, confirmedAt: Date): Promise<BankLinkAttemptRecord> {
+    const record = this.mustFind(id);
+    record.status = "authorised";
+    record.confirmedPspReference = confirmedPspReference;
+    record.confirmedAt = confirmedAt;
+    return record;
+  }
+
+  async markCompleted(id: string, resultFinancialAccountId: string, completedAt: Date): Promise<BankLinkAttemptRecord> {
+    const record = this.mustFind(id);
+    record.status = "completed";
+    record.resultFinancialAccountId = resultFinancialAccountId;
+    record.completedAt = completedAt;
+    return record;
+  }
+
+  async markFailed(id: string): Promise<BankLinkAttemptRecord> {
+    const record = this.mustFind(id);
+    record.status = "failed";
     return record;
   }
 }
@@ -938,6 +1070,7 @@ export function createTestRelationshipServices(appUrl: string = "https://app.tes
     relationshipInvitationService,
     relationshipFinancialAccountService,
     agreementRoles,
+    auditRepo: financialAccountAuditRepo,
   };
 }
 

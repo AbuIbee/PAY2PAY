@@ -22,7 +22,7 @@ import type { ProfileRef } from "./paymentProvider";
 import type { PaymentTransitionCoordinator, TransitionApplyResult } from "./paymentTransitionCoordinator";
 import { PaymentWebhookService } from "./paymentWebhookService";
 import type { ClaimOutcome, FailedPaymentWorkflow, PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
-import { SandboxPaymentProvider } from "./sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 
 /** Test-only in-memory doubles for PaymentService, mirroring src/lib/csvImport/testFakes.ts's pattern. */
 

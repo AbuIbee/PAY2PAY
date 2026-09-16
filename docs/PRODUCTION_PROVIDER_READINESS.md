@@ -11,17 +11,40 @@ item 152 requires ("Production provider readiness should have its own checklist"
 
 ## 1. Current state (as of this writing)
 
-**No live financial provider has been selected or contracted.** Every financial-provider integration
-in this codebase — payments (ACH/card charging) and KYC/KYB — runs exclusively against sandbox/mock
-implementations (`SandboxPaymentProvider`, `SandboxKycProvider`). This is visible at runtime via
-`GET /api/admin/overview`'s `environmentStatus.paymentProviderEnvironment`/`kycProviderEnvironment`
-fields (both `"sandbox"` today) and in the Admin Dashboard UI, which labels this explicitly rather than
-implying live capability.
+**No live financial provider has been selected or contracted, and — as of the 2026-09-15 B0-D TOTAL
+SANDBOX ELIMINATION remediation — sandbox/mock provider implementations are no longer reachable from
+application runtime at all.** The 2026-09-15 B0-D production-gate audit found that every
+financial/KYC/card-issuing operation in production ran against sandbox providers with no disclosure to
+customers, and that `assertProviderEnvironmentConsistency`'s prior design explicitly *permitted*
+sandbox-in-production rather than blocking it — the release blocker this remediation exists to close.
+
+**What changed:** `PROVIDER_CAPABILITY_REGISTRY` (`src/lib/providers/providerCapabilities.ts`) is now
+genuinely empty — it no longer contains sandbox descriptors at all. `getPaymentProvider()`/
+`getKycProvider()`/`getCardIssuingProvider()` (`src/lib/payments`, `src/lib/kyc`, `src/lib/cards`) no
+longer import or construct `SandboxPaymentProvider`/`SandboxKycProvider`/`SandboxCardIssuingProvider` —
+those classes were relocated to `src/test-support/` and exist only as constructor-injected test
+doubles (see `src/lib/payments/testFakes.ts` and its KYC/cards siblings), never reachable from any
+route, page, or other production runtime module. Calling any of the three factories today throws
+`ProviderNotAvailableError` (503) unconditionally — there is no sandbox fallback branch to fall into.
+Because every payment/KYC/card-issuing route and webhook constructs its service through exactly these
+three factories (directly or transitively via `getPaymentService`/`getBankConnectionService`/
+`getAchPaymentService`/`getKycVerificationService`/`getCardService`/etc.), every one of those routes
+now fails closed before any provider call, financial mutation, ledger mutation, or lifecycle
+transition — with no per-route code required. The customer-facing bank-connection flow
+(`/payment-methods/add-bank`) and the admin sandbox-settlement-simulation endpoint
+(`/api/admin/sandbox/simulate-settlement`, now deleted) no longer exist/execute. `PAYMENT_PROVIDER`/
+`KYC_PROVIDER`/`CARD_ISSUING_PROVIDER` (`src/config/env.ts`) reject any sandbox/mock/fake/demo/dummy/
+stub/simulated/test-shaped value outright at environment-parse time — a CI regression gate
+(`scripts/check-no-sandbox-runtime.mjs`, run on every push/PR) fails the build if sandbox provider
+functionality is ever reintroduced into application runtime source.
 
 **Status: `EXTERNAL BLOCKER — LIVE FINANCIAL PROVIDER APPROVAL/CONFIGURATION REQUIRED`**, per
-SPRINT_18C_PRODUCTION_READY.md item 26's exact required label. This blocker is not resolved by any
-Phase 6 PRSprint — Phase 6's explicit scope is architecture, not live activation (see the phase
-kickoff's own "CRITICAL SAFETY BOUNDARY").
+SPRINT_18C_PRODUCTION_READY.md item 26's exact required label — **unchanged**: this remediation makes
+the *absence* of a live provider fail closed instead of silently substituting sandbox behavior, it does
+not resolve the underlying blocker (a live provider still has not been selected/contracted/approved).
+B-1 (live provider integration) remains on hard hold. This blocker is not resolved by any Phase 6
+PRSprint — Phase 6's explicit scope is architecture, not live activation (see the phase kickoff's own
+"CRITICAL SAFETY BOUNDARY").
 
 ## 2. Required capabilities
 
@@ -59,12 +82,14 @@ route/UI that consumes them.**
 
 ## 4. Environment separation
 
-`assertProviderEnvironmentConsistency` (`providerCapabilities.ts`) structurally prevents a
-`environment: "production"`-tagged provider from ever being constructed outside `APP_ENV ===
-"production"` — a real credential can never be silently exercised from a preview/staging/development
-deployment. The reverse (sandbox running inside production, today's actual state) is explicitly
-permitted and clearly labeled, not blocked, matching the Hard Stop rule ("mark it EXTERNAL BLOCKER,
-never represent it as live") rather than treating sandbox-in-production as an error condition.
+`assertProviderAvailableForRuntime` (`providerCapabilities.ts`) — renamed and rewritten by the B0-D
+TOTAL SANDBOX ELIMINATION remediation, superseding the prior `assertProviderEnvironmentConsistency` —
+structurally allows exactly two outcomes, never a third: (1) a registered, `environment:
+"production"`-tagged provider, constructed only when `APP_ENV === "production"` — a real credential
+can never be silently exercised from a preview/staging/development deployment; or (2) anything else
+(nothing registered, an unknown name, a sandbox/mock name, or the env var left unset) throws
+`ProviderNotAvailableError`. Unlike the prior design, sandbox-in-production is no longer a permitted,
+labeled exception — it is structurally impossible, because no sandbox descriptor is registered at all.
 
 ## 5. Per-provider go-live checklist (for whichever provider(s) are eventually selected)
 

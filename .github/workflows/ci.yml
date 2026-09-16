@@ -62,6 +62,15 @@ jobs:
       - name: Tooling script tests
         run: npm run test:tooling
 
+      # PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION, requirement #12: fails the build if sandbox
+      # financial/KYC/card-issuing provider functionality is ever reintroduced into application
+      # runtime source (as opposed to src/test-support/, or a *.test.ts(x) file). See
+      # scripts/check-no-sandbox-runtime.mjs's own doc comment for exactly what this does and does not
+      # flag — it is a live scan of the actual current tree, not just this script's own unit tests
+      # (which `npm run test:tooling` above already covers).
+      - name: No sandbox runtime regression gate
+        run: npm run check-no-sandbox-runtime
+
   fresh-migration-test:
     name: Fresh-database migration test
     runs-on: ubuntu-latest

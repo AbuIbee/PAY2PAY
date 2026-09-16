@@ -10,14 +10,18 @@ import type {
   SubmitBusinessVerificationInput,
   SubmitIndividualVerificationInput,
   SubmitVerificationResult,
-} from "./kycProvider";
+} from "@/lib/kyc/kycProvider";
 
 /**
- * Sprint 9's sandbox/mock KYC/KYB provider — NOT a real Persona/Onfido/Stripe-Identity sandbox
- * integration (this environment has no live provider credentials). Every submission starts
+ * PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION: relocated out of src/lib/kyc/ into src/test-support/ so
+ * no production route/factory can import it — src/lib/kyc/getKycProvider.ts no longer references this
+ * class, and the capability registry it used to be registered in is now empty. Test-double only: see
+ * src/lib/kyc/testFakes.ts's createTestKycServices(), imported exclusively by *.test.ts files.
+ *
+ * Sprint 9's original sandbox/mock KYC/KYB provider — NOT a real Persona/Onfido/Stripe-Identity
+ * sandbox integration (this environment has no live provider credentials). Every submission starts
  * "pending" and only transitions via `simulateDecision` (mirroring a real provider's async webhook
- * callback) or a direct webhook payload — never auto-approved on submission. "No UI may claim that
- * sandbox verification is a real identity check" applies to every caller of this class.
+ * callback) or a direct webhook payload — never auto-approved on submission.
  */
 export class SandboxKycProvider implements KycKybProvider {
   readonly providerName = "sandbox_kyc_mock";

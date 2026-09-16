@@ -8,7 +8,7 @@ import { agreement, agreementVersion, auditEvent, installmentScheduleItem, ledge
 import { AuditService } from "@/lib/audit/auditService";
 import { appendAuditEventTxBound, DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { computeAuditEventHash, type AuditEventPayload } from "@/lib/audit/hash";
-import { ConfigurationError, ValidationError } from "@/lib/errors";
+import { ConfigurationError, ProviderCapabilityUnsupportedError, ValidationError } from "@/lib/errors";
 import type { AgreementTerms } from "@/lib/agreements/agreementService";
 import { isPastDate } from "@/lib/agreements/schedule";
 import { reconstructPaidAndReversed } from "@/lib/ledger/balanceService";
@@ -19,8 +19,8 @@ import {
 } from "@/lib/ledger/installmentSettlementTx";
 import type { LedgerJournalEntryRecord } from "@/lib/ledger/ledgerService";
 import { logger } from "@/lib/logger";
-import type { PaymentAttemptRecord } from "@/lib/payments/paymentService";
-import type { PaymentProvider, ProfileRef, RetrievePaymentResult } from "@/lib/payments/paymentProvider";
+import type { AchMandateProviderRefReader, PaymentAttemptRecord } from "@/lib/payments/paymentService";
+import type { CreatePaymentInput, CreatePaymentResult, PaymentProvider, ProfileRef, RetrievePaymentResult } from "@/lib/payments/paymentProvider";
 import { DefaultPlatformFeePolicy, type PlatformFeePolicy } from "@/lib/payments/platformFeePolicy";
 import { addBusinessDays } from "./businessDays";
 import { AMBIGUOUS_RETRY_RESOLUTION_BACKOFF_MS, DEFAULT_RETRY_DELAY_BUSINESS_DAYS, type PreparedRetrySubmission, type ProviderOutcomeEffectApplier } from "./paymentRetryService";
@@ -717,7 +717,40 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
     // Used ONLY by the "already resolved" adoption branches (`dispatchProviderCallForAnchor`,
     // `resolveNotFoundOutcome`) — see `repairLegacyLineageAndApply`'s own doc comment.
     private readonly partialPaymentApplication?: PartialPaymentApplicationForRepair,
+    /**
+     * PAID2YOU — B0-D ADYEN PHASE 1A (blocker 1 — exact payment method): see
+     * `AchMandateProviderRefReader`'s own doc comment (`paymentService.ts`) — the SAME resolver
+     * `PaymentService.submitToProvider` uses, reused here so a re-dispatch/ambiguity-resolution
+     * `createPayment` call submits the exact same provider payment-method reference the original
+     * attempt would have. Optional so every pre-existing test/production call site that never wires
+     * this is unaffected.
+     */
+    private readonly achMandateProviderRefs?: AchMandateProviderRefReader,
   ) {}
+
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 1A (blocker 1 — exact payment method): the SHARED request-builder
+   * every `provider.createPayment()` call site in this file uses — `dispatchProviderCallForAnchor`'s
+   * own initial dispatch, `resolveNotFoundOutcome`'s legacy-lineage re-dispatch, and
+   * `resolveSubmittedAnchor`'s idempotency-key-replay resolution (Phase 1A blocker 2) — so all three
+   * always submit the identical exact reference for the identical anchor, never three independently
+   * (and possibly inconsistently) derived ones. Resolves from Paid2You's own persisted state only —
+   * never a provider-side shopper-directory lookup.
+   */
+  private async buildCreatePaymentInput(anchor: typeof paymentAttempt.$inferSelect): Promise<CreatePaymentInput> {
+    const providerPaymentMethodRef =
+      anchor.paymentMethod === "ach" && anchor.agreementId && this.achMandateProviderRefs
+        ? ((await this.achMandateProviderRefs.getActiveProviderRef(anchor.agreementId)) ?? undefined)
+        : undefined;
+    return {
+      idempotencyKey: anchor.idempotencyKey,
+      amountMinorUnits: anchor.amountMinorUnits,
+      currency: anchor.currency,
+      payer: { profileKind: anchor.payerProfileKind, profileId: anchor.payerProfileId },
+      recipient: { profileKind: anchor.recipientProfileKind, profileId: anchor.recipientProfileId },
+      providerPaymentMethodRef,
+    };
+  }
 
   /**
    * R11 PASS B1 — FINAL LIFECYCLE CLOSURE (Defect 1A/1B). Called ONLY from an "already resolved"
@@ -1771,13 +1804,7 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
       let providerResult;
       try {
         if (this.hooks?.beforeProviderCall) await this.hooks.beforeProviderCall();
-        providerResult = await input.provider.createPayment({
-          idempotencyKey: anchor.idempotencyKey,
-          amountMinorUnits: anchor.amountMinorUnits,
-          currency: anchor.currency,
-          payer: { profileKind: anchor.payerProfileKind, profileId: anchor.payerProfileId },
-          recipient: { profileKind: anchor.recipientProfileKind, profileId: anchor.recipientProfileId },
-        });
+        providerResult = await input.provider.createPayment(await this.buildCreatePaymentInput(anchor));
       } catch (error) {
         if (error instanceof AmbiguousProviderResponseError) {
           // The anchor is left exactly as it is ("submitted") — this transaction still COMMITS
@@ -1890,6 +1917,21 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
    * Marks the retry `fired` on any outcome here (terminal or not) — mirrors `claimAndExecuteRetry`'s
    * own "fired" semantics: "a definite response was durably obtained from the provider", not "the
    * payment has definitively settled."
+   *
+   * PAID2YOU — B0-D ADYEN PHASE 1A (blocker 2 — retry/reconciliation): the PRIMARY path
+   * (`provider.retrievePaymentByIdempotencyKey`) is UNCHANGED — this is deliberate, not an oversight.
+   * An extensive existing test suite (`paymentWebhookRecovery.postgres.test.ts` and siblings) is built
+   * around this exact mechanism against `SandboxPaymentProvider`, which genuinely supports it; rerouting
+   * every provider through a different mechanism would silently invalidate all of that coverage for no
+   * benefit — the real, narrow problem is only that ONE specific provider (Adyen) cannot support this
+   * call at all. So: when `retrievePaymentByIdempotencyKey` throws `ProviderCapabilityUnsupportedError`
+   * specifically, this falls back to re-submitting `createPayment` with the EXACT SAME `idempotencyKey`
+   * (and the exact same provider payment-method reference) the original attempt used, relying on the
+   * provider's own real, documented Idempotency-Key semantics (a repeated request with the same key
+   * returns the ORIGINAL cached response — never creates a second payment) — genuine "use persisted
+   * Paid2You state + Adyen pspReference + Idempotency-Key semantics," never an invented GET endpoint.
+   * ANY OTHER failure (from either path) leaves this genuinely unresolved (`"still_ambiguous"`) rather
+   * than guessing — the retry stays `claimed`, discoverable for another resolution attempt later.
    */
   private async resolveSubmittedAnchor(
     existing: typeof paymentAttempt.$inferSelect,
@@ -1898,7 +1940,44 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
     provider: PaymentProvider,
     effectApplier: ProviderOutcomeEffectApplier,
   ): Promise<ResolveAmbiguousResult> {
-    const found = await provider.retrievePaymentByIdempotencyKey(existing.idempotencyKey);
+    let found: RetrievePaymentResult | null;
+    try {
+      found = await provider.retrievePaymentByIdempotencyKey(existing.idempotencyKey);
+    } catch (error) {
+      if (!(error instanceof ProviderCapabilityUnsupportedError)) {
+        return { outcome: "still_ambiguous" };
+      }
+      let viaCreatePayment: CreatePaymentResult;
+      try {
+        viaCreatePayment = await provider.createPayment(await this.buildCreatePaymentInput(existing));
+      } catch {
+        return { outcome: "still_ambiguous" };
+      }
+      return this.applyFoundOutcome(
+        existing,
+        {
+          providerPaymentId: viaCreatePayment.providerPaymentId,
+          status: viaCreatePayment.status,
+          // PAID2YOU — B0-D ADYEN PHASE 1A (blocker 2): `CreatePaymentResult` never carries amount/
+          // currency/fee the way `RetrievePaymentResult` does — sourced from Paid2You's OWN persisted,
+          // already-trustworthy record instead (this is our own row, not unverified provider input).
+          amountMinorUnits: existing.amountMinorUnits,
+          currency: existing.currency,
+          // PAID2YOU — B0-D ADYEN PHASE 1B (item 2): genuinely unknown at this layer (Adyen does not
+          // report a per-transaction fee via this `createPayment`-based idempotency-replay fallback —
+          // see `AdyenPaymentProvider`'s own module doc comment). `RetrievePaymentResult.feeMinorUnits`
+          // now accepts `null` for exactly this case, and `postLedgerEntryRequired`'s
+          // `source: "provider_lookup"` evidence gate accepts it as a disclosed known-unknown (skipping
+          // the fee-magnitude comparison checks that don't apply to it) rather than requiring a
+          // fabricated non-null placeholder. Never a claim Adyen charged nothing.
+          feeMinorUnits: null,
+        },
+        retryId,
+        retryExecutionToken,
+        provider,
+        effectApplier,
+      );
+    }
     if (!found) return { outcome: "still_ambiguous" };
     return this.applyFoundOutcome(existing, found, retryId, retryExecutionToken, provider, effectApplier);
   }
@@ -2136,13 +2215,7 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
       let providerResult;
       try {
         if (this.hooks?.beforeProviderCall) await this.hooks.beforeProviderCall();
-        providerResult = await provider.createPayment({
-          idempotencyKey: anchor.idempotencyKey,
-          amountMinorUnits: anchor.amountMinorUnits,
-          currency: anchor.currency,
-          payer: { profileKind: anchor.payerProfileKind, profileId: anchor.payerProfileId },
-          recipient: { profileKind: anchor.recipientProfileKind, profileId: anchor.recipientProfileId },
-        });
+        providerResult = await provider.createPayment(await this.buildCreatePaymentInput(anchor));
       } catch (error) {
         if (error instanceof AmbiguousProviderResponseError) return { kind: "ambiguous" };
         const reason = error instanceof Error ? error.message : "unknown_processor_error";

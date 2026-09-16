@@ -202,6 +202,50 @@ export class DependencyError extends AppError {
   }
 }
 
+/**
+ * PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION: thrown by the provider-availability guard
+ * (src/lib/providers/providerCapabilities.ts's assertProviderAvailableForRuntime, invoked by
+ * getPaymentProvider()/getKycProvider()/getCardIssuingProvider()) whenever no live, production-tagged
+ * provider is registered for the requested capability. Deliberately distinct from ConfigurationError
+ * (which means "this is a bug in how the app is wired") — this is an *expected*, operator-visible
+ * state ("no live financial/KYC/card provider has been approved yet") that must stop the request
+ * before any provider call, financial mutation, ledger mutation, or lifecycle transition — never a
+ * silent substitution of sandbox/mock behavior. 503, not 500: this is the same "not a bug, a
+ * temporarily/structurally unavailable dependency" shape DependencyError already uses, with its own
+ * code so a client can reliably show "not yet available" instead of a generic error.
+ */
+export class ProviderNotAvailableError extends AppError {
+  constructor(message = "This feature is not available yet. No live provider has been approved and configured.") {
+    super(message, {
+      statusCode: 503,
+      code: "PROVIDER_NOT_AVAILABLE",
+      isOperational: true,
+    });
+    this.name = "ProviderNotAvailableError";
+  }
+}
+
+/**
+ * PAID2YOU — B0-D ADYEN PHASE 1A: thrown by a `PaymentProvider` implementation for a specific
+ * interface method it structurally cannot support against the real provider's actual API (e.g.
+ * `AdyenPaymentProvider.retrievePayment` — Adyen's Checkout API has no GET-by-reference endpoint at
+ * all). Deliberately distinct from `ProviderNotAvailableError` (no provider selected) and
+ * `ConfigurationError` (a real wiring bug) — this is "the selected, correctly-configured provider is
+ * live and working, but this one capability does not exist for it." Callers that have a safe
+ * fallback (e.g. `ReconciliationService`, which can skip a provider-driven check it cannot perform)
+ * should catch this specifically rather than treating it as a generic failure/data exception.
+ */
+export class ProviderCapabilityUnsupportedError extends AppError {
+  constructor(message: string) {
+    super(message, {
+      statusCode: 501,
+      code: "PROVIDER_CAPABILITY_UNSUPPORTED",
+      isOperational: true,
+    });
+    this.name = "ProviderCapabilityUnsupportedError";
+  }
+}
+
 export interface SafeErrorResponse {
   message: string;
   code: string;

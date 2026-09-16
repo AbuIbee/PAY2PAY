@@ -1,5 +1,5 @@
 import "server-only";
-import { eq, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import { financialAccount } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -60,6 +60,16 @@ export class DrizzleFinancialAccountRepository implements FinancialAccountReposi
   async findById(id: string): Promise<FinancialAccountRecord | null> {
     const db = getDb();
     const rows = await db.select().from(financialAccount).where(eq(financialAccount.id, id)).limit(1);
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  async findByProviderRef(providerName: string, providerAccountRef: string): Promise<FinancialAccountRecord | null> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(financialAccount)
+      .where(and(eq(financialAccount.providerName, providerName), eq(financialAccount.providerAccountRef, providerAccountRef)))
+      .limit(1);
     return rows[0] ? toRecord(rows[0]) : null;
   }
 

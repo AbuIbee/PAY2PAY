@@ -2,6 +2,7 @@ import "server-only";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getPartialPaymentAutoApplicationService } from "@/lib/partialPayments/getPartialPaymentAutoApplicationService";
+import { DrizzleAchMandateProviderRefReader } from "@/lib/payments/drizzleAchMandateProviderRefReader";
 import { getPlatformFeePolicy } from "@/lib/payments/getPlatformFeePolicy";
 import { DEFAULT_RETRY_DELAY_BUSINESS_DAYS } from "./paymentRetryService";
 import { DrizzleFailedPaymentRetryCoordinator, type FailedPaymentRetryCoordinator } from "./failedPaymentRetryCoordinator";
@@ -23,6 +24,9 @@ export function getFailedPaymentRetryCoordinator(): FailedPaymentRetryCoordinato
       // R11 PASS B1 — FINAL LIFECYCLE CLOSURE (Defect 1B): see
       // `DrizzleFailedPaymentRetryCoordinator.repairLegacyLineageAndApply`'s own doc comment.
       getPartialPaymentAutoApplicationService(),
+      // PAID2YOU — B0-D ADYEN PHASE 1A (blocker 1 — exact payment method): the SAME resolver
+      // `getPaymentService.ts` uses — see `DrizzleAchMandateProviderRefReader`'s own doc comment.
+      new DrizzleAchMandateProviderRefReader(),
     );
   }
   return cached;

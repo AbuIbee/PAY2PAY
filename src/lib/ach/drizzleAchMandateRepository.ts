@@ -54,6 +54,15 @@ export class DrizzleAchMandateRepository implements AchMandateRepository {
     return rows[0] ? toRecord(rows[0]) : null;
   }
 
+  async findActiveByBankAccountRef(bankAccountRef: string): Promise<AchMandateRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(achMandate)
+      .where(and(eq(achMandate.bankAccountRef, bankAccountRef), eq(achMandate.status, "active")));
+    return rows.map(toRecord);
+  }
+
   async markRevoked(id: string, revokedAt: Date, revokedReason: string): Promise<AchMandateRecord> {
     const db = getDb();
     const [row] = await db

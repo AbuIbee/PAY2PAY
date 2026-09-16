@@ -7,14 +7,18 @@ import { TwilioSmsSender } from "./twilioSmsSender";
 let cached: SmsSender | null = null;
 
 /**
- * PRSprint 15: the single decision point for which `SmsSender` every production wiring file uses —
+ * PRSprint 15: the single decision point for which `SmsSender` every production wiring file uses -
  * getNotificationService.ts, getMfaService.ts, getAgreementInvitationService.ts. Real delivery
  * (`TwilioSmsSender`) only when account credentials and a sender (messaging service or from-number)
  * are configured *and* the kill switch (`SMS_DELIVERY_ENABLED`) hasn't been flipped off; otherwise
- * falls back to `ConsoleSmsSender`, which is also what every environment without configured
- * credentials already got before this PRSprint — leaving Twilio unconfigured is a safe,
- * fully-backward-compatible default, not a degraded state. Mirrors getEmailSender.ts's identical
- * PRSprint 14 precedent exactly.
+ * falls back to `ConsoleSmsSender`.
+ *
+ * PAID2YOU - B0-D TOTAL SANDBOX ELIMINATION, requirement #9 - mirrors getEmailSender.ts's identical
+ * `failClosed` precedent exactly: outside production, an unconfigured `ConsoleSmsSender` remains a
+ * safe default; inside production, the same "no live Twilio config, or the kill switch is off"
+ * condition constructs a `failClosed: true` `ConsoleSmsSender`, which throws instead of silently
+ * logging-and-pretending-sent. This factory itself never throws - the failure surfaces only when an
+ * actual send is attempted, caught and dead-lettered by NotificationService.deliver().
  */
 export function getSmsSender(): SmsSender {
   if (!cached) {
@@ -29,7 +33,7 @@ export function getSmsSender(): SmsSender {
             fromNumber: env.TWILIO_FROM_NUMBER ?? null,
             statusCallbackUrl: `${env.APP_URL}/api/webhooks/sms/twilio/status`,
           })
-        : new ConsoleSmsSender();
+        : new ConsoleSmsSender({ failClosed: env.APP_ENV === "production" });
   }
   return cached;
 }

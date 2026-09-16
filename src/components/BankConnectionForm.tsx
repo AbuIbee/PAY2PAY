@@ -1,11 +1,12 @@
 "use client";
 
+import "@adyen/adyen-web/styles/adyen.css";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/ui/apiFetch";
+import { getPublicEnv } from "@/config/public-env";
 import { useStepUpGuardedAction } from "@/lib/ui/useStepUpGuardedAction";
 import { StepUpChallenge } from "./StepUpChallenge";
-import { accountNumbersMatch, isValidAccountNumber, isValidRoutingNumber } from "@/lib/finance/bankAccountValidation";
 
 interface ActiveProfile {
   kind: "personal" | "business";
@@ -13,31 +14,115 @@ interface ActiveProfile {
   businessProfileId?: string;
 }
 
-type Stage = "loading_identity" | "form" | "submitting" | "done" | "error";
+type Stage =
+  | "loading_identity"
+  | "collecting_details"
+  | "starting_session"
+  | "collecting"
+  | "confirming"
+  | "pending_confirmation"
+  | "done"
+  | "error";
+
+const STATUS_POLL_INTERVAL_MS = 2000;
+const STATUS_POLL_MAX_ATTEMPTS = 15; // ~30s — generous for the two webhook round-trips (AUTHORISATION, then the token event) to land.
 
 /**
- * Phase 6A (docs/prsprints/PHASE_6A_PREPRODUCTION_FINANCIAL_UX_COMPLETION.md) Part 3: the production
- * bank-account connection experience, replacing the old sandbox-token entry field. Submits the raw
- * routing/account number exactly once, to the dedicated tokenize-and-connect endpoint
- * (POST /api/relationships/accounts/bank/connect) — this component never persists them anywhere
- * itself (no localStorage/sessionStorage, and React state for the raw values is cleared the moment the
- * request settles, success or failure) and the values are never included in the URL, a GET request, or
- * any client-side log.
+ * PAID2YOU — B0-D ADYEN PHASE 2 (bank-account collection/tokenization). REPLACES this component's own
+ * prior Phase 6A form (raw routing/account number fields POSTed directly to this server — see git
+ * history / `paymentProvider.ts`'s `TokenizeBankAccountInput` doc comment). This component never
+ * collects, receives, or transmits a routing/account number itself, in any form (plaintext or
+ * otherwise) — the shopper types their bank details directly into Adyen's own hosted Web Component
+ * (`@adyen/adyen-web`, the `Ach` element), which submits them DIRECTLY to Adyen using the session this
+ * component obtains from Paid2You's server first — never through this server.
+ *
+ * PAID2YOU — B0-D ADYEN PHASE 2A (final bank-security correction): the client-triggered "finalize"
+ * mutation this component used to POST is gone — see `BankConnectionService`'s own doc comment for why
+ * (it trusted an unprovable before/after token-list diff). Completion now happens exclusively via two
+ * Adyen webhooks Paid2You's server processes independently; this component's only remaining job after
+ * `onPaymentCompleted` is to POLL the read-only GET status endpoint until the server reports
+ * "completed" (or "failed"/"expired"). `institutionDisplayName` is now collected BEFORE the session is
+ * created (`initiateBankConnection` persists it as part of the `bank_link_attempt` row itself), since
+ * there is no later client-trusted call left to attach it to.
+ *
+ * Flow:
+ *   1. Resolve the active profile, then let the shopper name their bank (optional) before anything
+ *      provider-facing starts.
+ *   2. `POST .../bank/session` (via `useStepUpGuardedAction`, mirroring this component's own prior MFA
+ *      step-up wiring) to obtain a tokenization session.
+ *   3. Dynamically import `@adyen/adyen-web` (never imported at module top level — this is a heavy,
+ *      browser-only SDK; a dynamic import also means a missing/unavailable client key never breaks the
+ *      page shell itself) and mount its `Ach` Component against that session.
+ *   4. On `onPaymentCompleted`, poll `GET .../bank/connect` (ownership-checked, read-only) with the
+ *      opaque `providerSessionId` until the server's own webhook-driven state machine reports this
+ *      attempt "completed" — never assumed complete from the client-side SDK callback alone.
+ *
+ * Item 7 (fail-closed configuration): if `NEXT_PUBLIC_ADYEN_CLIENT_KEY` is not configured, this
+ * component never attempts to fetch identity, start a session, or mount anything — `clientKey` is
+ * checked directly at render time (never via `stage` state) and short-circuits to the "unavailable"
+ * state, the same controlled state Adyen-side initialization failures fall back to.
  */
 export function BankConnectionForm() {
   const router = useRouter();
   const [stage, setStage] = useState<Stage>("loading_identity");
   const [party, setParty] = useState<{ kind: "personal" | "business"; id: string } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
   const [institutionDisplayName, setInstitutionDisplayName] = useState("");
-  const [accountHolderName, setAccountHolderName] = useState("");
-  const [accountSubtype, setAccountSubtype] = useState<"checking" | "savings">("checking");
-  const [routingNumber, setRoutingNumber] = useState("");
-  const [accountNumber, setAccountNumber] = useState("");
-  const [accountNumberConfirm, setAccountNumberConfirm] = useState("");
+  const [detailsConfirmed, setDetailsConfirmed] = useState(false);
+  const mountRef = useRef<HTMLDivElement>(null);
+  const providerSessionIdRef = useRef<string | null>(null);
+  const unmountComponentRef = useRef<(() => void) | null>(null);
 
+  const clientKey = getPublicEnv().NEXT_PUBLIC_ADYEN_CLIENT_KEY;
+
+  const sessionAction = useStepUpGuardedAction(
+    (input: { actingParty: { kind: "personal" | "business"; id: string }; institutionDisplayName: string | null }) =>
+      apiFetch<{ providerSessionId: string; sessionData: string }>("/api/relationships/accounts/bank/session", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+  );
+
+  async function confirmConnection() {
+    if (!party || !providerSessionIdRef.current) return;
+    setStage("confirming");
+    setErrorMessage(null);
+    try {
+      const query = new URLSearchParams({
+        actingPartyKind: party.kind,
+        actingPartyId: party.id,
+        providerSessionId: providerSessionIdRef.current,
+      });
+      for (let attempt = 0; attempt < STATUS_POLL_MAX_ATTEMPTS; attempt++) {
+        const result = await apiFetch<{ status: string; financialAccountId: string | null }>(
+          `/api/relationships/accounts/bank/connect?${query.toString()}`,
+        );
+        if (result.status === "completed") {
+          setStage("done");
+          router.push("/payment-methods");
+          router.refresh();
+          return;
+        }
+        if (result.status === "failed" || result.status === "expired") {
+          setStage("error");
+          setErrorMessage("Your bank couldn't be connected. Please try again.");
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, STATUS_POLL_INTERVAL_MS));
+      }
+      // Still "pending"/"authorised" after ~30s — not a failure. The server keeps processing this
+      // independently via Adyen's own webhook redelivery; never claim success OR failure here.
+      setStage("pending_confirmation");
+    } catch (error) {
+      setStage("error");
+      setErrorMessage(error instanceof Error ? error.message : "We couldn't check your bank connection status. Please try again.");
+    }
+  }
+
+  // Item 7: never even attempts to resolve identity when the client key is missing — see this
+  // component's own doc comment for why `clientKey` is checked at render time, not via `stage`.
   useEffect(() => {
+    if (!clientKey) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -46,7 +131,7 @@ export function BankConnectionForm() {
         if (!id) throw new Error("no active identity");
         if (!cancelled) {
           setParty({ kind: active.kind, id });
-          setStage("form");
+          setStage("collecting_details");
         }
       } catch {
         if (!cancelled) setStage("error");
@@ -55,62 +140,86 @@ export function BankConnectionForm() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [clientKey]);
 
-  const routingLooksValid = routingNumber.length === 0 || isValidRoutingNumber(routingNumber);
-  const accountLooksValid = accountNumber.length === 0 || isValidAccountNumber(accountNumber);
-  const confirmMatches = accountNumberConfirm.length === 0 || accountNumbersMatch(accountNumber, accountNumberConfirm);
+  // PAID2YOU — B0-D ADYEN PHASE 2: deliberately depends on [party, clientKey, detailsConfirmed] —
+  // NEVER `stage`. This effect itself calls `setStage(...)` as the flow progresses; including `stage`
+  // in the dependency array would make every one of those updates re-trigger this same effect, running
+  // its cleanup (which unmounts the just-mounted Adyen Component) immediately after mounting it.
+  // `detailsConfirmed` is set only by the "Continue"/"Try again" button click handlers below (normal
+  // event handlers, never inside this effect), so depending on it does not create the same
+  // self-triggering problem — a "Try again" click flips it false then a fresh "Continue" click flips it
+  // true again, which is the sole way this effect intentionally re-runs after `party`/`clientKey` are
+  // already stable.
+  useEffect(() => {
+    if (!party || !clientKey || !detailsConfirmed) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        setStage("starting_session");
+        const session = await sessionAction.run({ actingParty: party, institutionDisplayName: institutionDisplayName.trim() || null });
+        if (cancelled) return;
+        providerSessionIdRef.current = session.providerSessionId;
 
-  // SPRINT_20_ClosedBetaReadiness (P0): Sprint 19 added a fresh-MFA-step-up requirement to
-  // connectBankAccount (docs/SECURITY_MODEL.md threat #16, payout redirection) but never wired the
-  // UI side — this form called apiFetch directly, so a real user would hit a raw, unhandled
-  // StepUpRequiredError (403) with no way to complete the challenge, making it impossible to connect
-  // a bank account at all. useStepUpGuardedAction/StepUpChallenge is this codebase's own established
-  // pattern for exactly this (already used by AgreementDetail.tsx's sign/settlement actions).
-  const connectAction = useStepUpGuardedAction(
-    async (input: {
-      actingParty: { kind: "personal" | "business"; id: string };
-      institutionDisplayName: string | null;
-      accountHolderName: string;
-      routingNumber: string;
-      accountNumber: string;
-      accountNumberConfirm: string;
-      accountSubtype: "checking" | "savings";
-    }) => apiFetch("/api/relationships/accounts/bank/connect", { method: "POST", body: JSON.stringify(input) }),
-  );
+        const { AdyenCheckout, Ach } = await import("@adyen/adyen-web");
+        if (cancelled) return;
+        const checkout = await AdyenCheckout({
+          environment: "live-us",
+          clientKey,
+          session: { id: session.providerSessionId, sessionData: session.sessionData },
+          onPaymentCompleted: () => {
+            if (!cancelled) void confirmConnection();
+          },
+          onPaymentFailed: () => {
+            if (!cancelled) {
+              setStage("error");
+              setErrorMessage("Your bank couldn't be connected. Please try again.");
+            }
+          },
+          onError: () => {
+            if (!cancelled) {
+              setStage("error");
+              setErrorMessage("Something went wrong starting the secure bank connection. Please try again.");
+            }
+          },
+        });
+        if (cancelled || !mountRef.current) return;
+        // No `enableStoreDetails` here — that prop shows the shopper an OPT-IN checkbox, which would
+        // duplicate consent this flow's own session already establishes server-side
+        // (`storePaymentMethodMode: "enabled"`, set unconditionally — never "askForConsent" — so
+        // storage happens automatically, matching "Do not duplicate consent architecture").
+        const component = new Ach(checkout, {});
+        component.mount(mountRef.current);
+        unmountComponentRef.current = () => component.unmount();
+        setStage("collecting");
+      } catch (error) {
+        if (cancelled) return;
+        setStage("error");
+        setErrorMessage(error instanceof Error ? error.message : "Something went wrong. Please try again.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unmountComponentRef.current?.();
+      unmountComponentRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionAction.run/confirmConnection/institutionDisplayName intentionally excluded: including them would re-run this effect (and tear down the mounted Component) on every unrelated render. institutionDisplayName is read once, at the moment detailsConfirmed flips true, via the "Continue" button's own snapshot — see that handler below.
+  }, [party, clientKey, detailsConfirmed]);
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!party || stage === "submitting") return;
-    setStage("submitting");
-    setErrorMessage(null);
-    try {
-      await connectAction.run({
-        actingParty: party,
-        institutionDisplayName: institutionDisplayName || null,
-        accountHolderName,
-        routingNumber,
-        accountNumber,
-        accountNumberConfirm,
-        accountSubtype,
-      });
-      setStage("done");
-      // Clear the raw values from component state immediately — nothing left to linger in memory
-      // once the request has resolved.
-      setRoutingNumber("");
-      setAccountNumber("");
-      setAccountNumberConfirm("");
-      router.push("/payment-methods");
-      router.refresh();
-    } catch (error) {
-      setStage("form");
-      setErrorMessage(error instanceof Error ? error.message : "Something went wrong. Please try again.");
-    }
+  if (!clientKey) {
+    return (
+      <div className="empty-state">
+        <h3>Not yet available</h3>
+        <p>Connecting a bank account isn&apos;t available right now. We&apos;ll let you know when it is.</p>
+      </div>
+    );
   }
 
-  if (stage === "loading_identity") return <p role="status">Loading…</p>;
+  if (stage === "loading_identity") {
+    return <p role="status">Starting a secure connection to your bank…</p>;
+  }
 
-  if (stage === "error" || !party) {
+  if (stage === "error" && !party) {
     return (
       <p className="form-status form-status--error" role="alert">
         We couldn&apos;t determine which account to add this to. Please try again.
@@ -118,118 +227,82 @@ export function BankConnectionForm() {
     );
   }
 
-  const canSubmit =
-    accountHolderName.trim().length > 0 &&
-    isValidRoutingNumber(routingNumber) &&
-    isValidAccountNumber(accountNumber) &&
-    accountNumbersMatch(accountNumber, accountNumberConfirm);
+  if (stage === "collecting_details") {
+    return (
+      <div style={{ display: "grid", gap: "1rem", maxWidth: "30rem" }}>
+        <p style={{ margin: 0, color: "var(--ink-soft)", fontSize: "0.85rem" }}>
+          Your bank account and routing numbers are entered directly with our banking partner and are
+          never seen or stored by PAY2PAY — only your bank&apos;s name and the last 4 digits of your
+          account are kept on file.
+        </p>
 
+        <div className="field">
+          <label htmlFor="bank-institution">Bank name (optional)</label>
+          <input
+            id="bank-institution"
+            value={institutionDisplayName}
+            onChange={(event) => setInstitutionDisplayName(event.target.value)}
+            placeholder="e.g. First National Bank"
+          />
+        </div>
+
+        <button type="button" className="button button--primary" onClick={() => setDetailsConfirmed(true)}>
+          Continue
+        </button>
+      </div>
+    );
+  }
+
+  // PAID2YOU — B0-D ADYEN PHASE 2: the mount <div> below must be present in the DOM from
+  // "starting_session" onward — the session-creation effect needs `mountRef.current` populated the
+  // instant Adyen's Component is ready to mount, which can happen before this component's OWN state
+  // has transitioned to "collecting". Rendering it only for later stages left `mountRef.current` null
+  // throughout the entire session-creation phase, silently dropping the mount call.
   return (
     <>
-    <form onSubmit={(event) => void handleSubmit(event)} style={{ display: "grid", gap: "1rem", maxWidth: "30rem" }}>
-      <p style={{ margin: 0, color: "var(--ink-soft)", fontSize: "0.85rem" }}>
-        Your account and routing numbers are used once to connect your bank and are never stored by
-        PAY2PAY — only your bank&apos;s name and the last 4 digits of your account are kept on file.
-      </p>
+      <div style={{ display: "grid", gap: "1rem", maxWidth: "30rem" }}>
+        {stage === "starting_session" && <p role="status">Starting a secure connection to your bank…</p>}
 
-      <div className="field">
-        <label htmlFor="bank-institution">Bank name</label>
-        <input
-          id="bank-institution"
-          value={institutionDisplayName}
-          onChange={(event) => setInstitutionDisplayName(event.target.value)}
-          placeholder="e.g. First National Bank"
-        />
-      </div>
+        <div ref={mountRef} />
 
-      <div className="field">
-        <label htmlFor="bank-holder-name">Name on the account</label>
-        <input
-          id="bank-holder-name"
-          required
-          value={accountHolderName}
-          onChange={(event) => setAccountHolderName(event.target.value)}
-          autoComplete="name"
-        />
-      </div>
+        {stage === "confirming" && <p role="status">Confirming your bank connection…</p>}
 
-      <div className="field">
-        <label htmlFor="bank-account-subtype">Account type</label>
-        <select
-          id="bank-account-subtype"
-          value={accountSubtype}
-          onChange={(event) => setAccountSubtype(event.target.value as "checking" | "savings")}
-        >
-          <option value="checking">Checking</option>
-          <option value="savings">Savings</option>
-        </select>
-      </div>
+        {stage === "pending_confirmation" && (
+          <p role="status">
+            Your bank connection is still being confirmed. This can take a few minutes — check your
+            payment methods again shortly.
+          </p>
+        )}
 
-      <div className="field">
-        <label htmlFor="bank-routing">Routing number</label>
-        <input
-          id="bank-routing"
-          inputMode="numeric"
-          required
-          maxLength={9}
-          value={routingNumber}
-          onChange={(event) => setRoutingNumber(event.target.value.replace(/\D/g, ""))}
-          autoComplete="off"
-        />
-        {!routingLooksValid && (
-          <small style={{ color: "var(--danger, #b3261e)" }}>That doesn&apos;t look like a valid routing number.</small>
+        {errorMessage && (
+          <p className="field-error" role="alert">
+            {errorMessage}
+          </p>
+        )}
+
+        {stage === "error" && party && (
+          <button
+            type="button"
+            className="button button--ghost"
+            onClick={() => {
+              setErrorMessage(null);
+              setDetailsConfirmed(false);
+              setStage("collecting_details");
+            }}
+          >
+            Try again
+          </button>
         )}
       </div>
 
-      <div className="early-access-form__row">
-        <div className="field">
-          <label htmlFor="bank-account-number">Account number</label>
-          <input
-            id="bank-account-number"
-            inputMode="numeric"
-            required
-            maxLength={17}
-            value={accountNumber}
-            onChange={(event) => setAccountNumber(event.target.value.replace(/\D/g, ""))}
-            autoComplete="off"
-          />
-          {!accountLooksValid && <small style={{ color: "var(--danger, #b3261e)" }}>Enter 4-17 digits.</small>}
-        </div>
-        <div className="field">
-          <label htmlFor="bank-account-number-confirm">Confirm account number</label>
-          <input
-            id="bank-account-number-confirm"
-            inputMode="numeric"
-            required
-            maxLength={17}
-            value={accountNumberConfirm}
-            onChange={(event) => setAccountNumberConfirm(event.target.value.replace(/\D/g, ""))}
-            autoComplete="off"
-          />
-          {!confirmMatches && <small style={{ color: "var(--danger, #b3261e)" }}>Account numbers don&apos;t match.</small>}
-        </div>
-      </div>
-
-      {errorMessage && (
-        <p className="field-error" role="alert">
-          {errorMessage}
-        </p>
+      {sessionAction.isChallengeOpen && (
+        <StepUpChallenge
+          action="connect_bank_account"
+          actionDescription="connect this bank account"
+          onVerified={sessionAction.resolveChallenge}
+          onCancel={sessionAction.cancelChallenge}
+        />
       )}
-
-      <button type="submit" className="button button--primary" disabled={stage === "submitting" || !canSubmit}>
-        {stage === "submitting" ? "Connecting…" : "Connect bank account"}
-      </button>
-    </form>
-
-    {/* SPRINT_20_ClosedBetaReadiness: rendered as a sibling, not a form descendant — StepUpChallenge's own <dialog> contains a <form>, and nested <form> elements are invalid HTML (React would warn/hydration-mismatch). */}
-    {connectAction.isChallengeOpen && (
-      <StepUpChallenge
-        action="connect_bank_account"
-        actionDescription="connect this bank account"
-        onVerified={connectAction.resolveChallenge}
-        onCancel={connectAction.cancelChallenge}
-      />
-    )}
     </>
   );
 }
