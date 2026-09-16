@@ -3,6 +3,7 @@ import { AuditService, type AuditEventRecord, type AuditEventRepository } from "
 import { ConfigurationError } from "@/lib/errors";
 import type { LedgerService } from "@/lib/ledger/ledgerService";
 import type { PaymentAttemptRepository } from "@/lib/payments/paymentService";
+import type { VerificationService } from "@/lib/profiles/verificationService";
 import type { PayoutAttemptRecord, PayoutAttemptRepository } from "./payoutAttemptRepository";
 import { PayoutService } from "./payoutService";
 
@@ -90,11 +91,18 @@ class InMemoryAuditEventRepositoryForPayouts implements AuditEventRepository {
  * so every pre-existing (PHASE 3A) test that exercises real `confirmPayout` completion is unaffected —
  * mirrors this codebase's established "optional override, defaults to the pre-existing behavior"
  * convention. PHASE 3B's own tests pass `false` explicitly to prove the gate.
+ *
+ * PAID2YOU — B0-D PHASE 3C (creditor payout eligibility): `verification` defaults to a permissive
+ * stub (`isFullyVerified` always resolves `true`) for the identical reason — every pre-existing test
+ * that exercises real `confirmPayout` completion was written before this gate existed and never
+ * intended to exercise it. PHASE 3C's own tests pass a real `VerificationService` (via
+ * `createTestVerificationService()`) to prove the gate against genuine per-profile verification state.
  */
 export function createTestPayoutService(deps: {
   ledger: LedgerService;
-  payments: Pick<PaymentAttemptRepository, "markPayoutCompleted" | "clearPayoutCompleted">;
+  payments: Pick<PaymentAttemptRepository, "findById" | "markPayoutCompleted" | "clearPayoutCompleted">;
   payoutProviderIntegrationVerified?: boolean;
+  verification?: Pick<VerificationService, "isFullyVerified">;
 }) {
   const payoutAttempts = new InMemoryPayoutAttemptRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForPayouts();
@@ -103,6 +111,7 @@ export function createTestPayoutService(deps: {
     ledger: deps.ledger,
     payments: deps.payments,
     audit: new AuditService(auditRepo),
+    verification: deps.verification ?? { isFullyVerified: async () => true },
     payoutProviderIntegrationVerified: deps.payoutProviderIntegrationVerified ?? true,
   });
   return { payoutAttempts, auditRepo, payoutService };

@@ -66,6 +66,24 @@ export class ScheduleRevisionRequiredError extends ValidationError {
   }
 }
 
+/**
+ * PAID2YOU — B0-D PHASE 3C (creditor payout eligibility): thrown by `PayoutService.confirmPayout`
+ * when the payment's recipient (the creditor who would receive this payout) has not reached this
+ * codebase's FULL identity-verification tier (`VerificationService.isFullyVerified`) — missing,
+ * pending, rejected, or a verification belonging to a different profile than the actual creditor all
+ * fail this check the same way, since `isFullyVerified` is always looked up against the payment's own
+ * authoritative `recipientProfileKind`/`recipientProfileId`, never caller-supplied identifiers.
+ * Deliberately distinct from `ProviderNotAvailableError` (whether ANY live payout-provider integration
+ * exists at all) — internal FULL verification is not Adyen KYC approval, and satisfying one gate never
+ * substitutes for the other; both are independently enforced.
+ */
+export class CreditorNotVerifiedError extends ValidationError {
+  constructor(message = "This payout cannot be confirmed until the creditor has completed full identity verification.") {
+    super(message, undefined, "CREDITOR_NOT_VERIFIED");
+    this.name = "CreditorNotVerifiedError";
+  }
+}
+
 /** Missing/invalid/expired/revoked session, or failed login credentials. */
 export class AuthenticationError extends AppError {
   constructor(message = "Authentication required.") {

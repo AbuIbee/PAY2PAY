@@ -4,6 +4,7 @@ import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getLedgerService } from "@/lib/ledger/getLedgerService";
 import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAttemptRepository";
+import { getVerificationService } from "@/lib/profiles/getVerificationService";
 import { DrizzleAtomicPayoutConfirmer } from "./atomicPayoutConfirmer";
 import { DrizzleAtomicPayoutReturner } from "./atomicPayoutReturner";
 import { DrizzlePayoutAttemptRepository } from "./drizzlePayoutAttemptRepository";
@@ -26,6 +27,11 @@ let cached: PayoutService | null = null;
  * `returnPayout` call always goes through the atomic, transaction-bound, row-lock-protected path.
  * The non-atomic sequential fallback in `PayoutService` is reachable only through direct construction
  * bypassing this factory — which nothing in this codebase does.
+ *
+ * PAID2YOU — B0-D PHASE 3C (creditor payout eligibility): `verification` is always wired to the real
+ * `getVerificationService()` — the same service Sprint 6 (signing) and Sprints 9–12 (payments) already
+ * depend on, never a payout-specific reimplementation. This is INTERNAL eligibility only; it is
+ * independent of, and does not substitute for, `payoutProviderIntegrationVerified` above.
  */
 export function getPayoutService(): PayoutService {
   if (!cached) {
@@ -35,6 +41,7 @@ export function getPayoutService(): PayoutService {
       ledger: getLedgerService(),
       payments: new DrizzlePaymentAttemptRepository(),
       audit: new AuditService(new DrizzleAuditEventRepository()),
+      verification: getVerificationService(),
       payoutProviderIntegrationVerified: env.PAYOUT_PROVIDER_INTEGRATION_VERIFIED,
       atomicConfirmer: new DrizzleAtomicPayoutConfirmer(),
       atomicReturner: new DrizzleAtomicPayoutReturner(),

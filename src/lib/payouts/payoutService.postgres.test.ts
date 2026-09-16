@@ -6,11 +6,13 @@ import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { DrizzleAgreementRepository } from "@/lib/agreements/drizzleAgreementRepository";
 import { eq } from "drizzle-orm";
-import { ValidationError } from "@/lib/errors";
+import { CreditorNotVerifiedError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import { DrizzleLedgerAccountRepository } from "@/lib/ledger/drizzleLedgerAccountRepository";
 import { DrizzleLedgerJournalEntryRepository } from "@/lib/ledger/drizzleLedgerJournalEntryRepository";
 import { LedgerService } from "@/lib/ledger/ledgerService";
 import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAttemptRepository";
+import { getVerificationService } from "@/lib/profiles/getVerificationService";
+import { DrizzleIdentityVerificationRecordRepository } from "@/lib/profiles/drizzleIdentityVerificationRecordRepository";
 import { seedPersonalUser } from "../../../test/postgres/seedHelpers";
 import { createIsolatedDb } from "../../../test/postgres/testDb";
 import { DrizzleAtomicPayoutConfirmer } from "./atomicPayoutConfirmer";
@@ -60,9 +62,35 @@ async function seedAgreement(creditorProfileId: string, debtorProfileId: string,
   return created.id;
 }
 
+/**
+ * Seeds a real, DB-backed FULL/verified identity-verification record for a profile — mirrors this
+ * codebase's own established test convention (`records.insert` + `records.updateDecision`, bypassing
+ * the role-gated `recordManualVerificationDecision` API surface, exactly like
+ * `src/lib/signatures/testFakes.ts`/`evidence/testFakes.ts`/`b2b/testFakes.ts` already do for their own
+ * in-memory fakes). Standalone — constructs its own repository instance, so it can seed a profile
+ * before or independent of `buildContext()`. `reviewer_user_id` has a real FK to `user_account` (real
+ * Postgres enforces this; the in-memory fake does not), so this seeds a genuine reviewer user rather
+ * than a bare random id.
+ */
+async function seedFullyVerified(profileKind: "personal" | "business", profileId: string) {
+  const records = new DrizzleIdentityVerificationRecordRepository();
+  const reviewer = await seedPersonalUser("b0d-3c-reviewer");
+  const record = await records.insert({ profileKind, profileId, tier: "full" });
+  await records.updateDecision(record.id, { status: "verified", reviewerUserId: reviewer.userId, reason: null });
+}
+
+/**
+ * PAID2YOU — B0-D PHASE 3C (creditor payout eligibility): the creditor is seeded FULL-verified by
+ * default — every pre-existing test in this suite (successful/concurrent confirmation, rollback,
+ * return) is about G2/G3's atomicity/return-accounting concerns, not eligibility, and `buildContext`'s
+ * `PayoutService` now uses the REAL `VerificationService` (never a permissive stub, see below) — so
+ * without this, every one of those tests would need its own explicit seeding just to keep passing.
+ * The dedicated eligibility tests further below seed a DELIBERATELY unverified creditor instead.
+ */
 async function seedTwoParties(principalMinorUnits = 10_000) {
   const creditor = await seedPersonalUser("b0d-3b-creditor");
   const debtor = await seedPersonalUser("b0d-3b-debtor");
+  await seedFullyVerified("personal", creditor.profileId);
   const agreementId = await seedAgreement(creditor.profileId, debtor.profileId, creditor.userId, principalMinorUnits);
   return { creditor, debtor, agreementId };
 }
@@ -80,6 +108,12 @@ function buildContext() {
       ledger,
       payments,
       audit: new AuditService(new DrizzleAuditEventRepository()),
+      // PAID2YOU — B0-D PHASE 3C (creditor payout eligibility): the REAL, real-Postgres-backed
+      // production factory — every seeded creditor in this file is fully verified explicitly (see
+      // `seedTwoParties`/the dedicated eligibility tests below), never a permissive stub, so this
+      // suite's own successful-confirmation/concurrency/rollback tests keep exercising the genuine
+      // gate rather than bypassing it.
+      verification: getVerificationService(),
       payoutProviderIntegrationVerified: true,
       atomicConfirmer: new DrizzleAtomicPayoutConfirmer(),
       atomicReturner: new DrizzleAtomicPayoutReturner(),
@@ -333,5 +367,73 @@ describe("PayoutService atomic confirm/return (PAID2YOU — B0-D PHASE 3B, real 
     await expect(payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "psp_no_clear" })).rejects.toThrow(ValidationError);
     const reloadedAttempt = await ctx.payoutAttempts.findByPaymentAttemptId(payment.id);
     expect(reloadedAttempt?.status).toBe("pending");
+  });
+});
+
+describe("PayoutService creditor payout eligibility (PAID2YOU — B0-D PHASE 3C, real Postgres)", () => {
+  it("recordPayoutOwed is unaffected by creditor verification — liability and pending obligation are established for a genuinely UNVERIFIED creditor against real Postgres", async () => {
+    const debtor = await seedPersonalUser("b0d-3c-debtor");
+    const unverifiedCreditor = await seedPersonalUser("b0d-3c-unverified-creditor"); // deliberately never seeded as verified.
+    const agreementId = await seedAgreement(unverifiedCreditor.profileId, debtor.profileId, unverifiedCreditor.userId, 10_000);
+    const ctx = buildContext();
+    const payment = await seedClearedPaymentWithPendingPayout(ctx, { agreementId, amountMinorUnits: 3_000, payerProfileId: debtor.profileId, recipientProfileId: unverifiedCreditor.profileId });
+
+    expect(await creditorLiability(ctx, payment.id)).toBe(3_000); // seedClearedPaymentWithPendingPayout already posted payment_cleared.
+    const attempt = await ctx.payoutAttempts.findByPaymentAttemptId(payment.id);
+    expect(attempt?.status).toBe("pending");
+  });
+
+  it("confirmPayout fails closed with CreditorNotVerifiedError against real Postgres when the creditor has no verification record at all — no premature payout, ledger mutation, or completed status", async () => {
+    const debtor = await seedPersonalUser("b0d-3c-debtor-2");
+    const unverifiedCreditor = await seedPersonalUser("b0d-3c-unverified-creditor-2");
+    const agreementId = await seedAgreement(unverifiedCreditor.profileId, debtor.profileId, unverifiedCreditor.userId, 10_000);
+    const ctx = buildContext();
+    const payment = await seedClearedPaymentWithPendingPayout(ctx, { agreementId, amountMinorUnits: 2_000, payerProfileId: debtor.profileId, recipientProfileId: unverifiedCreditor.profileId });
+    const payoutService = ctx.buildPayoutService();
+
+    await expect(
+      payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "psp_unverified" }),
+    ).rejects.toThrow(CreditorNotVerifiedError);
+
+    const reloadedAttempt = await ctx.payoutAttempts.findByPaymentAttemptId(payment.id);
+    expect(reloadedAttempt?.status).toBe("pending");
+    const reloadedPayment = await ctx.payments.findById(payment.id);
+    expect(reloadedPayment?.payoutCompletedAt).toBeNull();
+    const payoutEntries = (await ctx.ledger.listEntriesForPaymentAttempt(payment.id)).filter((e) => e.entryType === "payout");
+    expect(payoutEntries).toHaveLength(0);
+    expect(await creditorLiability(ctx, payment.id)).toBe(2_000);
+  });
+
+  it("confirmPayout fails closed when FULL verification exists only for a DIFFERENT profile — another user's real, DB-verified record never satisfies THIS creditor's eligibility", async () => {
+    const debtor = await seedPersonalUser("b0d-3c-debtor-3");
+    const unverifiedCreditor = await seedPersonalUser("b0d-3c-unverified-creditor-3");
+    const someoneElse = await seedPersonalUser("b0d-3c-someone-else");
+    await seedFullyVerified("personal", someoneElse.profileId); // verified, but NOT the creditor for this payment.
+    const agreementId = await seedAgreement(unverifiedCreditor.profileId, debtor.profileId, unverifiedCreditor.userId, 10_000);
+    const ctx = buildContext();
+    const payment = await seedClearedPaymentWithPendingPayout(ctx, { agreementId, amountMinorUnits: 1_000, payerProfileId: debtor.profileId, recipientProfileId: unverifiedCreditor.profileId });
+    const payoutService = ctx.buildPayoutService();
+
+    await expect(
+      payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "psp_wrong_user" }),
+    ).rejects.toThrow(CreditorNotVerifiedError);
+    expect(await creditorLiability(ctx, payment.id)).toBe(1_000);
+  });
+
+  it("approved FULL verification satisfies ONLY internal eligibility against real Postgres — confirmPayout still fails closed with ProviderNotAvailableError when no live payout provider is verified", async () => {
+    const { creditor, debtor, agreementId } = await seedTwoParties(); // creditor is already FULL-verified by seedTwoParties.
+    const ctx = buildContext();
+    const payment = await seedClearedPaymentWithPendingPayout(ctx, { agreementId, amountMinorUnits: 4_000, payerProfileId: debtor.profileId, recipientProfileId: creditor.profileId });
+    const payoutService = ctx.buildPayoutService({ payoutProviderIntegrationVerified: false }); // missing provider — independent of creditor verification.
+
+    await expect(
+      payoutService.confirmPayout({ paymentAttemptId: payment.id, providerName: "adyen", providerPayoutReference: "psp_no_provider" }),
+    ).rejects.toThrow(ProviderNotAvailableError);
+
+    const reloadedPayment = await ctx.payments.findById(payment.id);
+    expect(reloadedPayment?.payoutCompletedAt).toBeNull();
+    const payoutEntries = (await ctx.ledger.listEntriesForPaymentAttempt(payment.id)).filter((e) => e.entryType === "payout");
+    expect(payoutEntries).toHaveLength(0);
+    expect(await creditorLiability(ctx, payment.id)).toBe(4_000);
   });
 });
