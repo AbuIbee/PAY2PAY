@@ -36,7 +36,8 @@ export type LedgerEntryType =
   | "payout"
   | "dispute_adjustment"
   | "admin_adjustment"
-  | "refund_correction";
+  | "refund_correction"
+  | "payout_returned";
 export type LedgerPostingDirection = "debit" | "credit";
 /** Automatic entry types, each posted at most once per payment attempt via idempotent get-or-post. */
 export type AutomaticReversalEntryType = "refund" | "reversal" | "dispute_adjustment";
@@ -300,6 +301,48 @@ export class LedgerService {
       postings,
     });
     await this.recordAudit(entry, "ledger_refund_correction", null, "ledger_system");
+    return entry;
+  }
+
+  /**
+   * PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts). Reinstates the creditor's liability after
+   * a previously-CONFIRMED payout (see `payout_attempt`'s own doc comment) is later returned by the
+   * receiving bank. Driven exclusively by `PayoutService.returnPayout` — never by a bare webhook event
+   * — after that service has already verified the payout_attempt was genuinely `"confirmed"`.
+   *
+   * Posted by flipping the EXISTING `payout` entry's own postings — the exact same mechanism
+   * `correctRefund` above uses for `refund`/`refund_correction`, for the identical reason: the
+   * original `payout` entry already correctly encoded the amount actually paid out, so flipping it
+   * back is the exact, general inverse. Idempotent per payment attempt
+   * (`(paymentAttemptId, "payout_returned")` get-or-post). Throws (retryable `ValidationError`) if no
+   * `payout` entry exists yet — a payout can only ever be returned after it was actually posted.
+   */
+  async postPayoutReturn(input: { paymentAttemptId: string; reason: string | null }): Promise<LedgerJournalEntryRecord> {
+    const existing = await this.deps.entries.findByPaymentAndType(input.paymentAttemptId, "payout_returned");
+    if (existing) return existing;
+
+    const payoutEntry = await this.deps.entries.findByPaymentAndType(input.paymentAttemptId, "payout");
+    if (!payoutEntry) {
+      throw new ValidationError("Cannot return a payout that has not been posted.");
+    }
+
+    const postings: LedgerPostingInput[] = payoutEntry.postings.map((p) => ({
+      accountId: p.accountId,
+      accountType: p.accountType,
+      direction: p.direction === "debit" ? "credit" : "debit",
+      amountMinorUnits: p.amountMinorUnits,
+    }));
+    this.assertBalanced(postings);
+
+    const entry = await this.insertIdempotently({
+      entryType: "payout_returned",
+      agreementId: payoutEntry.agreementId,
+      paymentAttemptId: input.paymentAttemptId,
+      currency: payoutEntry.currency,
+      reason: input.reason,
+      postings,
+    });
+    await this.recordAudit(entry, "ledger_payout_returned", null, "ledger_system");
     return entry;
   }
 

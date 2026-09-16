@@ -5,6 +5,7 @@ import { FinancialIntegrityError, type LedgerService } from "@/lib/ledger/ledger
 import { logger } from "@/lib/logger";
 import type { NotificationEventType } from "@/lib/notify/eventTypes";
 import type { NotificationService } from "@/lib/notify/notificationService";
+import type { PayoutService } from "@/lib/payouts/payoutService";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { RiskEventService } from "@/lib/risk/riskEventService";
 import type { PaymentProvider } from "./paymentProvider";
@@ -536,6 +537,14 @@ export class PaymentWebhookService {
        * comment for exactly when/why this is called.
        */
       partialPaymentApplication?: PartialPaymentApplication;
+      /**
+       * PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts). Optional so every pre-existing test
+       * context that never wires this is unaffected (mirrors `partialPaymentApplication`'s identical
+       * optionality) — every real production wiring (`getPaymentWebhookService.ts`) supplies it. See
+       * `recordPayoutOwedRequired`'s own doc comment for exactly when/why this is called — NEVER used
+       * to complete or confirm a payout, only to durably record that one is now owed.
+       */
+      payouts?: Pick<PayoutService, "recordPayoutOwed">;
     },
   ) {
     this.platformFeePolicy = deps.platformFeePolicy ?? new DefaultPlatformFeePolicy();
@@ -680,7 +689,15 @@ export class PaymentWebhookService {
     const data = claimed.payload as Record<string, unknown>;
     const providerEventId = claimed.providerEventId;
 
-    const isRecognizedEventType = eventType === "payout.paid" || eventType in EVENT_TYPE_TO_STATUS;
+    // PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts): "payout.paid" was previously
+    // special-cased here and dispatched to a since-REMOVED `applyPayoutRequired` method that marked a
+    // payout complete from the bare arrival of this one event type — with no live payout provider
+    // ever having been called, no transfer reference, no verifiable evidence of any kind (see
+    // `PayoutService`'s own doc comment). No production `PaymentProvider.parseWebhookEvent`
+    // implementation has ever mapped any real event to `"payout.paid"` — see `mapAdyenEventCode`'s own
+    // exhaustive switch. It is now handled exactly like any other genuinely unrecognized event type:
+    // a safe no-op, never a completion.
+    const isRecognizedEventType = eventType in EVENT_TYPE_TO_STATUS;
     if (!isRecognizedEventType) return; // genuinely unsupported/unrecognized event type — safe no-op.
 
     const providerPaymentId = typeof data.providerPaymentId === "string" ? data.providerPaymentId : null;
@@ -712,14 +729,8 @@ export class PaymentWebhookService {
       return;
     }
 
-    if (eventType === "payout.paid") {
-      await this.applyPayoutRequired(payment, providerEventId);
-      return;
-    }
-
-    // `isRecognizedEventType` above already proved `eventType` is a key of `EVENT_TYPE_TO_STATUS`
-    // (the `eventType === "payout.paid"` branch already returned) — asserted non-null here once
-    // rather than re-narrowing at every use below.
+    // `isRecognizedEventType` above already proved `eventType` is a key of `EVENT_TYPE_TO_STATUS` —
+    // asserted non-null here once rather than re-narrowing at every use below.
     const newStatus = EVENT_TYPE_TO_STATUS[eventType]!;
     const failureCategory =
       newStatus === "failed" && typeof data.failureCategory === "string" ? data.failureCategory : undefined;
@@ -814,6 +825,7 @@ export class PaymentWebhookService {
     // comment.
     if (eventType === "payment.succeeded") {
       await this.applyPartialPaymentRequired(current);
+      await this.recordPayoutOwedRequired(current);
     }
 
     // PAID2YOU — PACKAGE B (Stage 6 final historical-effect closure). `runFailedPaymentWorkflowRequired`
@@ -1502,43 +1514,23 @@ export class PaymentWebhookService {
   }
 
   /**
-   * R09: REQUIRED — see this class's own doc comment. `markPayoutCompleted`'s own idempotency check
-   * avoids re-stamping the completion timestamp on a retry.
-   *
-   * PACKAGE B — remaining Codex blockers (Section 5 — payout audit): the previous version returned
-   * early whenever `payoutCompletedAt` was already set, which — exactly like the transition-audit gap
-   * this mirrors — meant "financial effect timestamp committed, but its audit failed" left the
-   * required audit permanently missing on every later retry. `payoutCompletedAt` alone only proves
-   * the FINANCIAL effect applied; it says nothing about whether the audit effect did. The audit
-   * record is now (re)ensured unconditionally — idempotent per `(providerEventId, action)`, so a
-   * replay never duplicates it.
+   * PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts). Called immediately after
+   * `applyPartialPaymentRequired` for a `"payment.succeeded"` event — i.e., only once this event's own
+   * `payment_cleared` entry (and thus the creditor's `creditor_proceeds_payable` liability) is durably
+   * known to exist. Records ONLY that a payout is now OWED (`PayoutService.recordPayoutOwed`, which
+   * always creates the row in `"pending"` status) — NEVER completes, confirms, or marks anything paid.
+   * This is the sole replacement for the removed `applyPayoutRequired`/`"payout.paid"` mechanism: that
+   * method used to synchronously call `LedgerService.postPayout` + `markPayoutCompleted` from the bare
+   * arrival of one webhook event, with no live provider ever consulted — see `PayoutService`'s own doc
+   * comment for the full corrected lifecycle and exactly why completion now requires an explicit,
+   * separately-gated `confirmPayout` call this class never makes. A no-op when `payouts` isn't wired
+   * (pre-existing test contexts, and any environment where payouts aren't yet tracked) — REQUIRED
+   * (not caught) once wired, matching `applyPartialPaymentRequired`'s identical required-effect shape,
+   * so a transient failure here keeps this event retryable rather than silently dropping the record.
    */
-  private async applyPayoutRequired(payment: PaymentAttemptRecord, providerEventId: string): Promise<void> {
-    if (!payment.agreementId) {
-      // Same rationale as postLedgerEntryRequired above — see its own doc comment.
-      throw new ConfigurationError("payment_webhook_ledger_blocked_no_agreement");
-    }
-    await this.deps.ledger.postPayout({ paymentAttemptId: payment.id });
-    const updated = payment.payoutCompletedAt ? payment : await this.deps.payments.markPayoutCompleted(payment.id, new Date());
-    await this.deps.audit.record({
-      actorUserId: null,
-      actorRole: "payment_provider",
-      profileKind: updated.payerProfileKind,
-      profileId: updated.payerProfileId,
-      agreementId: updated.agreementId,
-      action: "payment_webhook_payout.paid",
-      occurredAt: new Date().toISOString(),
-      ipAddress: null,
-      deviceInfo: null,
-      previousValue: null,
-      newValue: updated.payoutCompletedAt,
-      reason: null,
-      authStrength: null,
-      relatedDocumentId: null,
-      relatedCaseId: null,
-      targetResourceType: "payment_attempt",
-      targetResourceId: updated.id,
-      providerEventId,
-    });
+  private async recordPayoutOwedRequired(payment: PaymentAttemptRecord): Promise<void> {
+    if (!this.deps.payouts) return;
+    if (!payment.agreementId) return; // postLedgerEntryRequired already required this to be non-null to reach this point at all — defensive, never reachable in practice.
+    await this.deps.payouts.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: payment.agreementId });
   }
 }

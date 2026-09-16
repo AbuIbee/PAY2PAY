@@ -280,6 +280,8 @@ export interface PaymentAttemptRepository {
   findByProviderPaymentId(providerPaymentId: string): Promise<PaymentAttemptRecord | null>;
   /** Sprint 10: recorded once, when LedgerService.postPayout succeeds — never any other way. */
   markPayoutCompleted(id: string, payoutCompletedAt: Date): Promise<PaymentAttemptRecord>;
+  /** PAID2YOU — B0-D PHASE 3B (G3 correction): the inverse of markPayoutCompleted — called only by PayoutService.returnPayout, once a previously-confirmed payout is reversed, so this field never falsely indicates an active, completed payout after the fact. */
+  clearPayoutCompleted(id: string): Promise<PaymentAttemptRecord>;
   /** Sprint 11: recorded once payout is initiated, before it settles. */
   markPayoutInitiated(id: string, payoutInitiatedAt: Date): Promise<PaymentAttemptRecord>;
   /**
