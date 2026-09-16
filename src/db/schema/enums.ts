@@ -369,6 +369,13 @@ export const ledgerEntryTypeEnum = pgEnum("ledger_entry_type", [
   // `LedgerService.correctRefund`) — never a second `payment_cleared`/`refund`, and idempotent
   // per-payment like every other automatic entry type.
   "refund_correction",
+  // PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts): reverses an existing "payout" entry once
+  // a CONFIRMED payout is later returned by the receiving bank — mirrors "refund_correction"'s own
+  // exact shape/rationale (flip the existing entry's own postings, insert as a new row, never edit or
+  // delete). Posted by `LedgerService.postPayoutReturn`, driven exclusively by `PayoutService
+  // .returnPayout` — never by a bare webhook event. See `payout_attempt`'s own doc comment
+  // (src/db/schema/payoutAttempt.ts) for the full provider-independent payout lifecycle this closes.
+  "payout_returned",
 ]);
 
 export const ledgerPostingDirectionEnum = pgEnum("ledger_posting_direction", ["debit", "credit"]);
@@ -819,3 +826,24 @@ export const cardTransactionEventTypeEnum = pgEnum("card_transaction_event_type"
   "decline",
   "reversal",
 ]);
+
+/**
+ * PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts). The minimum provider-independent lifecycle
+ * needed to distinguish a creditor payout's real state from a bare internal ledger posting — see
+ * `payout_attempt`'s own doc comment (src/db/schema/payoutAttempt.ts) for the full design.
+ *
+ * `pending`: a payment cleared and a creditor is owed a payout — nothing has been provider-confirmed
+ * yet. This is the ONLY state `PaymentWebhookService` itself ever creates.
+ * `confirmed`: `PayoutService.confirmPayout` was called with non-empty, caller-supplied
+ * `providerName`/`providerPayoutReference` evidence — never merely because a webhook event of some
+ * eventType arrived. No code path in this phase ever calls `confirmPayout` — it exists as
+ * provider-independent infrastructure a future live-provider integration wires into, never invented
+ * here (no Adyen event mapping is assumed).
+ * `failed`: the payout could not be completed — the creditor's own `creditor_proceeds_payable`
+ * liability is left completely untouched (this is the concrete mechanism behind "failed payout
+ * preserves creditor liability").
+ * `returned`: a previously-`confirmed` payout was later reversed by the receiving bank —
+ * `LedgerService.postPayoutReturn` reinstates the liability by flipping the original `payout` entry's
+ * own postings, mirroring `refund_correction`'s identical precedent.
+ */
+export const payoutAttemptStatusEnum = pgEnum("payout_attempt_status", ["pending", "confirmed", "failed", "returned"]);

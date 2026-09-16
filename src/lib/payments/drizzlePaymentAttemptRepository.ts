@@ -153,6 +153,17 @@ export class DrizzlePaymentAttemptRepository implements PaymentAttemptRepository
     return toRecord(row);
   }
 
+  async clearPayoutCompleted(id: string): Promise<PaymentAttemptRecord> {
+    const db = this.db;
+    const [row] = await db
+      .update(paymentAttempt)
+      .set({ payoutCompletedAt: null, updatedAt: new Date() })
+      .where(eq(paymentAttempt.id, id))
+      .returning();
+    if (!row) throw new ConfigurationError("payment_attempt clearPayoutCompleted found no row");
+    return toRecord(row);
+  }
+
   async markPayoutInitiated(id: string, payoutInitiatedAt: Date): Promise<PaymentAttemptRecord> {
     const db = this.db;
     const [row] = await db

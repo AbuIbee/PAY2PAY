@@ -1435,60 +1435,13 @@ describe("R06 + R09: payment/webhook recovery integrity (real Postgres)", () => 
     expect(await findClearEntry(ctx.ledger, payment.id)).not.toBeNull();
   });
 
-  it("R-B51 — payout financial effect commits, its audit fails, retry restores exactly one payout audit with no duplicate payout accounting", async () => {
-    // PACKAGE B — remaining Codex blockers (Section 5 — payout audit). `applyPayoutRequired` used to
-    // return early once `payoutCompletedAt` was already set, permanently skipping its audit on retry —
-    // mirrors the R-B36/B29 transition-audit gap but for the payout event, which never touches the
-    // transition coordinator at all (payout.paid does not change payment status).
-    const { creditor, debtor, agreementId } = await seedTwoParties();
-    const ctx = buildContext();
-    const providerPaymentId = `sandbox_pay_${randomUUID()}`;
-    const payment = await seedPendingPayment(ctx.payments, {
-      agreementId,
-      amountMinorUnits: 1_000,
-      payerProfileId: debtor.profileId,
-      recipientProfileId: creditor.profileId,
-      providerPaymentId,
-    });
-
-    // Get the payment to succeeded + ledger-cleared first — postPayout requires a payment_cleared entry.
-    const successWebhook = ctx.buildWebhookService();
-    const successEventId = `evt-${randomUUID()}`;
-    const successResult = await successWebhook.receiveWebhook(
-      signedWebhook(ctx.provider, {
-        providerEventId: successEventId,
-        eventType: "payment.succeeded",
-        providerPaymentId,
-        amountMinorUnits: 1_000,
-        currency: "USD",
-        processorFeeMinorUnits: 0,
-        platformFeeMinorUnits: 0,
-      }),
-    );
-    expect(successResult.status).toBe("processed");
-    expect((await ctx.payments.findById(payment.id))?.status).toBe("succeeded");
-    expect(await findClearEntry(ctx.ledger, payment.id)).not.toBeNull();
-
-    const flakyAudit = flaky(new AuditService(new DrizzleAuditEventRepository()), "record", 1, () => new Error("simulated_payout_audit_write_failure"));
-    const payoutWebhook = ctx.buildWebhookService({ audit: flakyAudit });
-    const payoutEventId = `evt-${randomUUID()}`;
-    const payoutAction = "payment_webhook_payout.paid";
-
-    const attempt1 = await payoutWebhook.receiveWebhook(
-      signedWebhook(ctx.provider, { providerEventId: payoutEventId, eventType: "payout.paid", providerPaymentId }),
-    );
-    expect(attempt1.status).toBe("accepted"); // audit effect failed -> not marked processed.
-    expect((await ctx.payments.findById(payment.id))?.payoutCompletedAt).not.toBeNull(); // financial effect already committed.
-    expect(await findAuditEventsByProviderEvent(payoutEventId, payoutAction)).toHaveLength(0);
-
-    const eventRow = (await ctx.events.findByProviderEvent(ctx.provider.providerName, payoutEventId))!;
-    const recovery = await payoutWebhook.recoverBatch(100, new Date(eventRow.nextRetryAt!.getTime() + 1));
-    expect(recovery.processed).toBeGreaterThanOrEqual(1); // this shared-database suite's batch call may also sweep up unrelated due leftovers.
-    expect(await findAuditEventsByProviderEvent(payoutEventId, payoutAction)).toHaveLength(1); // restored, exactly once.
-
-    const payoutEntries = (await ctx.ledger.listEntriesForPaymentAttempt(payment.id)).filter((e) => e.entryType === "payout");
-    expect(payoutEntries).toHaveLength(1); // no duplicate payout accounting from the retry.
-  });
+  // PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts): REMOVES this suite's own former "R-B51 —
+  // payout financial effect commits, its audit fails, retry restores exactly one payout audit with no
+  // duplicate payout accounting" test. That test exercised `applyPayoutRequired`/the `"payout.paid"`
+  // webhook mechanism, which is deleted entirely — a payout can no longer ever be completed by a bare
+  // webhook event of any kind (see `PayoutService`'s own doc comment). Its audit-retry-idempotency
+  // concern is superseded by `payoutService.test.ts`'s own focused, non-Postgres coverage of
+  // `PayoutService.confirmPayout`'s idempotency.
 
   it("B30 — concurrent replay of the same provider event's audit effect produces exactly one record; two distinct events remain distinguishable", async () => {
     // PACKAGE B — remaining Codex blockers (Section 7 — test-quality correction): genuinely

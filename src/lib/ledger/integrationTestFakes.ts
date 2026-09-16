@@ -4,6 +4,7 @@ import { KeyedMutex } from "@/lib/concurrency/keyedMutex";
 import { ValidationError } from "@/lib/errors";
 import { createTestPaymentService, createTestPaymentWebhookService } from "@/lib/payments/testFakes";
 import type { AtomicManualPaymentPoster, PaymentAttemptRecord } from "@/lib/payments/paymentService";
+import { createTestPayoutService } from "@/lib/payouts/testFakes";
 import { AgreementCompletionService } from "./agreementCompletionService";
 import { reconstructPaidAndReversed } from "./balanceService";
 import { ReconciliationService } from "./reconciliationService";
@@ -141,7 +142,12 @@ export function createFullLedgerTestContext() {
     atomicManualPayments,
   });
   atomicManualPayments.payments = paymentCtx.payments;
-  const webhookCtx = createTestPaymentWebhookService(paymentCtx, ledgerCtx, undefined, undefined, undefined, completionService);
+  // PAID2YOU — B0-D PHASE 3A (eliminate fictional payouts): wired here exactly as production wires it
+  // (getPaymentWebhookService.ts) so a "payment.succeeded" webhook's `recordPayoutOwedRequired` effect
+  // is live in this shared integration context too — see `paymentLedgerIntegration.test.ts`'s own
+  // payout-lifecycle tests.
+  const payoutCtx = createTestPayoutService({ ledger: ledgerCtx.ledgerService, payments: paymentCtx.payments });
+  const webhookCtx = createTestPaymentWebhookService(paymentCtx, ledgerCtx, undefined, undefined, undefined, completionService, payoutCtx.payoutService);
   const exceptions = new InMemoryReconciliationExceptionRepository();
   const reconciliationService = new ReconciliationService({
     payments: paymentCtx.payments,
@@ -153,5 +159,5 @@ export function createFullLedgerTestContext() {
     // idempotent lifecycle-convergence retry exactly as production wires it.
     completion: completionService,
   });
-  return { ledgerCtx, paymentCtx, webhookCtx, balanceCtx, exceptions, reconciliationService, agreementRepo, completionService };
+  return { ledgerCtx, paymentCtx, webhookCtx, balanceCtx, exceptions, reconciliationService, agreementRepo, completionService, payoutCtx };
 }

@@ -27,6 +27,7 @@ function baseEnv(overrides: Partial<ServerEnv> = {}): ServerEnv {
     TWILIO_FROM_NUMBER: undefined,
     SMS_DELIVERY_ENABLED: true,
     ADYEN_ACH_TOKENIZATION_VERIFIED: false,
+    PAYOUT_PROVIDER_INTEGRATION_VERIFIED: false,
     ...overrides,
   };
 }

@@ -137,6 +137,21 @@ const serverEnvSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // PAID2YOU — B0-D PHASE 3B (payout integrity): a SECOND, INDEPENDENT gate — deliberately never
+  // satisfied merely by `PayoutService.confirmPayout` receiving non-empty `providerName`/
+  // `providerPayoutReference` arguments. Those two fields prove a CALLER claims a provider confirmed
+  // something; this flag is the only thing that says Paid2You has actually integrated a live,
+  // authenticated payout-confirmation signal from a real provider at all (today: none — no Adyen
+  // account, no Balance Platform/Legal Entity Management/Transfers API wiring exists). Defaults to
+  // unset (`confirmPayout` fails closed — see `PayoutService`'s own doc comment) specifically so a
+  // future route/webhook that calls `confirmPayout` with syntactically-valid-looking evidence can
+  // never complete a payout before this is deliberately flipped by an operator, after real provider
+  // integration exists. Never a proxy for "the code is ready" — the code is ready; this represents
+  // whether ANY authenticated live-provider trigger for payout confirmation exists at all.
+  PAYOUT_PROVIDER_INTEGRATION_VERIFIED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // Sprint 13 (docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md): shared secret protecting
   // POST /api/scheduler/retry-failed-payments — Vercel Cron Jobs automatically send
   // `Authorization: Bearer <CRON_SECRET>` to the route(s) configured in vercel.json when this
