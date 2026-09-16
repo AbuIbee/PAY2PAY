@@ -41,7 +41,28 @@ export interface AchMandateRepository {
   }): Promise<AchMandateRecord>;
   findActiveForAgreement(agreementId: string): Promise<AchMandateRecord | null>;
   findById(id: string): Promise<AchMandateRecord | null>;
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 2: every currently-`active` mandate referencing this exact
+   * `bankAccountRef` — plural because the SAME reusable `financial_account`/provider token can be
+   * authorized as the funding source for multiple agreements at once (Sprint 18A's reusable-account
+   * model). Used by `revokeAllForBankAccountRef` when the provider itself reports the underlying
+   * token disabled — every agreement relying on it must lose its active mandate, not just one.
+   */
+  findActiveByBankAccountRef(bankAccountRef: string): Promise<AchMandateRecord[]>;
   markRevoked(id: string, revokedAt: Date, revokedReason: string): Promise<AchMandateRecord>;
+}
+
+/**
+ * PAID2YOU — B0-D ADYEN PHASE 2 (item 5 — mandate integration): narrow read-only dependency verifying
+ * a `bankAccountRef` presented to `authorize`/`handleBankChange` is a REAL, provider-confirmed,
+ * currently-verified `financial_account` owned by the exact payer profile — never merely a
+ * client-supplied string trusted at face value (the pre-existing gap this closes: previously any
+ * string satisfying `.min(1).max(500)` was accepted, so a payment attempt against a bogus reference
+ * would only fail much later, at Adyen, instead of being refused here at authorization time). Real
+ * implementation: `DrizzleFinancialAccountOwnershipVerifier`.
+ */
+export interface FinancialAccountOwnershipVerifier {
+  isVerifiedAccountOwnedByProfile(providerAccountRef: string, profile: ProfileRef): Promise<boolean>;
 }
 
 /**
@@ -65,6 +86,12 @@ export class AchMandateService {
        */
       agreements: Pick<AgreementRepository, "findById">;
       audit: AuditService;
+      /**
+       * PAID2YOU — B0-D ADYEN PHASE 2: optional so the many pre-existing tests exercising unrelated
+       * mandate-lifecycle concerns are unaffected — production wiring (`getAchMandateService.ts`)
+       * always supplies this. See `FinancialAccountOwnershipVerifier`'s own doc comment.
+       */
+      financialAccounts?: FinancialAccountOwnershipVerifier;
     },
   ) {}
 
@@ -76,6 +103,7 @@ export class AchMandateService {
   }): Promise<AchMandateRecord> {
     await this.requireOwner(input.payer, input.actingUserId, "authorize a mandate");
     await this.requirePayerIsAgreementDebtor(input.agreementId, input.payer);
+    await this.requireVerifiedOwnedBankAccountRef(input.bankAccountRef, input.payer);
     const existing = await this.deps.mandates.findActiveForAgreement(input.agreementId);
     if (existing) {
       throw new ConflictError("An active mandate already exists for this agreement.");
@@ -129,6 +157,7 @@ export class AchMandateService {
   }): Promise<AchMandateRecord> {
     await this.requireOwner(input.payer, input.actingUserId, "change this mandate's bank account");
     await this.requirePayerIsAgreementDebtor(input.agreementId, input.payer);
+    await this.requireVerifiedOwnedBankAccountRef(input.newBankAccountRef, input.payer);
     const existing = await this.deps.mandates.findActiveForAgreement(input.agreementId);
     if (existing) {
       await this.deps.mandates.markRevoked(existing.id, new Date(), "Bank account changed.");
@@ -147,6 +176,30 @@ export class AchMandateService {
 
   async getActiveMandate(agreementId: string): Promise<AchMandateRecord | null> {
     return this.deps.mandates.findActiveForAgreement(agreementId);
+  }
+
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 2: the SYSTEM-triggered counterpart to `revoke` above — called ONLY
+   * from the Adyen token-lifecycle webhook handler when the provider itself reports a token disabled,
+   * never from a route handler with a real acting user (there is none — the provider is the
+   * authority, exactly like `LedgerService`'s own `"ledger_system"` actor precedent). Revokes EVERY
+   * currently-active mandate referencing this token, not just one — see
+   * `findActiveByBankAccountRef`'s own doc comment for why there can be more than one. This is the
+   * concrete mechanism that makes "a disabled Adyen token becomes unusable for future Paid2You
+   * payments" actually true: `PaymentService.submitToProvider` requires an active mandate before it
+   * will ever call `createPayment`, and a revoked mandate can never legally become active again
+   * (mandates are append-only — a new one requires a fresh, real authorization). Idempotent: an
+   * already-revoked mandate is simply skipped, never re-revoked or double-audited.
+   */
+  async revokeAllForBankAccountRef(bankAccountRef: string, reason: string): Promise<AchMandateRecord[]> {
+    const active = await this.deps.mandates.findActiveByBankAccountRef(bankAccountRef);
+    const revoked: AchMandateRecord[] = [];
+    for (const mandate of active) {
+      const updated = await this.deps.mandates.markRevoked(mandate.id, new Date(), reason);
+      await this.recordAudit(updated, "ach_mandate_revoked_by_provider", null, reason, "payment_provider_webhook");
+      revoked.push(updated);
+    }
+    return revoked;
   }
 
   async isActiveForAgreement(agreementId: string): Promise<boolean> {
@@ -181,10 +234,26 @@ export class AchMandateService {
     }
   }
 
-  private async recordAudit(mandate: AchMandateRecord, action: string, actorUserId: string, reason: string | null): Promise<void> {
+  /**
+   * PAID2YOU — B0-D ADYEN PHASE 2 (item 5): the exact Adyen `storedPaymentMethodId` a mandate
+   * references must be a REAL, provider-confirmed `financial_account` the payer actually owns and
+   * that has actually completed verification — never a bare client-supplied string trusted at face
+   * value (see `FinancialAccountOwnershipVerifier`'s own doc comment for the gap this closes). A
+   * no-op (skipped, never silently passes) only when this dependency isn't wired — pre-existing test
+   * contexts that never exercise bank-tokenization coupling; production wiring always supplies it.
+   */
+  private async requireVerifiedOwnedBankAccountRef(bankAccountRef: string, payer: ProfileRef): Promise<void> {
+    if (!this.deps.financialAccounts) return;
+    const owned = await this.deps.financialAccounts.isVerifiedAccountOwnedByProfile(bankAccountRef, payer);
+    if (!owned) {
+      throw new ValidationError("This bank account reference is not a verified account belonging to the payer profile.");
+    }
+  }
+
+  private async recordAudit(mandate: AchMandateRecord, action: string, actorUserId: string | null, reason: string | null, actorRole = "personal_user"): Promise<void> {
     await this.deps.audit.record({
       actorUserId,
-      actorRole: "personal_user",
+      actorRole,
       profileKind: mandate.payerProfileKind,
       profileId: mandate.payerProfileId,
       agreementId: mandate.agreementId,

@@ -8,7 +8,7 @@ import type {
   ParsedCardWebhookEvent,
   RequestCardInput,
   RequestCardResult,
-} from "./cardIssuingProvider";
+} from "@/lib/cards/cardIssuingProvider";
 
 interface StoredSandboxCard {
   status: "active" | "frozen" | "canceled" | "lost" | "stolen";
@@ -16,11 +16,16 @@ interface StoredSandboxCard {
 }
 
 /**
- * PRSprint 24's sandbox/mock card-issuing provider — NOT a real Marqeta/Stripe Issuing sandbox
- * integration (this environment has no live provider credentials). Every operation is a
+ * PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION: relocated out of src/lib/cards/ into src/test-support/ so
+ * no production route/factory can import it — src/lib/cards/getCardIssuingProvider.ts no longer
+ * references this class, and the capability registry it used to be registered in is now empty.
+ * Test-double only: see src/lib/cards/testFakes.ts's createTestCardServices(), imported exclusively by
+ * *.test.ts files.
+ *
+ * PRSprint 24's original sandbox/mock card-issuing provider — NOT a real Marqeta/Stripe Issuing
+ * sandbox integration (this environment has no live provider credentials). Every operation is a
  * deterministic, purely local simulation; nothing here ever reaches a real network, produces a real
- * spendable card, or moves real money. Mirrors `SandboxPaymentProvider`/`SandboxKycProvider`'s
- * identical "the one piece of real behavior is the webhook HMAC signing/verification" precedent.
+ * spendable card, or moves real money.
  */
 export class SandboxCardIssuingProvider implements CardIssuingProvider {
   readonly providerName = "sandbox_card_issuing_mock";

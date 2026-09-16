@@ -298,6 +298,83 @@ describe("RelationshipFinancialAccountService", () => {
     });
   });
 
+  describe("PAID2YOU — B0-D ADYEN PHASE 2: disableAccountByProviderRef (provider-triggered, system-actor disable)", () => {
+    it("disables the account matching (providerName, providerAccountRef), regardless of active assignments", async () => {
+      const { relationship, debtorUserId, debtorProfileId } = await createLinkedRelationship();
+      const account = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: debtorUserId,
+        actingParty: { kind: "personal", id: debtorProfileId },
+        accountType: "bank_account",
+        providerName: "adyen",
+        providerAccountRef: "sm_disabled_by_provider",
+        maskedLast4: "4444",
+        institutionDisplayName: "Test Bank",
+      });
+      await ctx.relationshipFinancialAccountService.applyVerificationResult(account.id, "verified");
+      await ctx.relationshipFinancialAccountService.assignAccount({
+        relationshipId: relationship.id,
+        actingUserId: debtorUserId,
+        financialAccountId: account.id,
+        usage: "funding",
+      });
+
+      const disabled = await ctx.relationshipFinancialAccountService.disableAccountByProviderRef(
+        "adyen",
+        "sm_disabled_by_provider",
+        "Disabled by the payment provider.",
+      );
+      expect(disabled?.status).toBe("disabled");
+      expect(disabled?.id).toBe(account.id);
+    });
+
+    it("returns null (not an error) when no account matches — a token this instance never tokenized", async () => {
+      const result = await ctx.relationshipFinancialAccountService.disableAccountByProviderRef("adyen", "sm_never_seen", "x");
+      expect(result).toBeNull();
+    });
+
+    it("is idempotent — disabling an already-disabled account is a safe no-op, not a duplicate audit entry", async () => {
+      const userId = randomUUID();
+      const profileId = randomUUID();
+      ctx.profileOwners.set("personal", profileId, userId);
+      const account = await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: userId,
+        actingParty: { kind: "personal", id: profileId },
+        accountType: "bank_account",
+        providerName: "adyen",
+        providerAccountRef: "sm_double_disable",
+        maskedLast4: "5555",
+        institutionDisplayName: null,
+      });
+      await ctx.relationshipFinancialAccountService.disableAccountByProviderRef("adyen", "sm_double_disable", "first");
+      const auditCountAfterFirst = ctx.auditRepo.events.filter((e) => e.action === "FINANCIAL_ACCOUNT_DISABLED_BY_PROVIDER").length;
+      const second = await ctx.relationshipFinancialAccountService.disableAccountByProviderRef("adyen", "sm_double_disable", "second");
+      expect(second?.status).toBe("disabled");
+      const auditCountAfterSecond = ctx.auditRepo.events.filter((e) => e.action === "FINANCIAL_ACCOUNT_DISABLED_BY_PROVIDER").length;
+      expect(auditCountAfterSecond).toBe(auditCountAfterFirst);
+      void account;
+    });
+
+    it("records a system-attributed audit entry, never impersonating a real user", async () => {
+      const userId = randomUUID();
+      const profileId = randomUUID();
+      ctx.profileOwners.set("personal", profileId, userId);
+      await ctx.relationshipFinancialAccountService.addAccount({
+        actingUserId: userId,
+        actingParty: { kind: "personal", id: profileId },
+        accountType: "bank_account",
+        providerName: "adyen",
+        providerAccountRef: "sm_audit_check",
+        maskedLast4: "6666",
+        institutionDisplayName: null,
+      });
+      ctx.auditRepo.events = [];
+      await ctx.relationshipFinancialAccountService.disableAccountByProviderRef("adyen", "sm_audit_check", "x");
+      expect(ctx.auditRepo.events).toHaveLength(1);
+      expect(ctx.auditRepo.events[0]?.actorUserId).toBeNull();
+      expect(ctx.auditRepo.events[0]?.actorRole).toBe("payment_provider_webhook");
+    });
+  });
+
   describe("assignAccount / role-usage enforcement (connection P2P-EZ2R-V3MM remediation)", () => {
     it("rejects a debtor assigning their own account into the payout slot", async () => {
       const { relationship, debtorUserId, debtorProfileId } = await createLinkedRelationship();

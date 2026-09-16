@@ -76,6 +76,29 @@ describe("PaymentWebhookService", () => {
     expect((await paymentCtx.payments.findById(record.id))?.status).toBe("succeeded");
   });
 
+  it("PAID2YOU — B0-D ADYEN PHASE 1A (blocker 3 — cancel/refund finality): a payment.canceled event transitions a still-pending payment to canceled — newly webhook-reachable now that PaymentService.cancelPayment no longer finalizes synchronously", async () => {
+    const record = await createPendingPayment("wh-cancel-1");
+    const { rawBody, signatureHeader } = signedWebhook({
+      providerEventId: "evt_cancel_1",
+      eventType: "payment.canceled",
+      providerPaymentId: record.providerPaymentId,
+    });
+    const result = await webhookCtx.paymentWebhookService.receiveWebhook({ rawBody, signatureHeader });
+    expect(result.status).toBe("processed");
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("canceled");
+  });
+
+  it("PAID2YOU — B0-D ADYEN PHASE 1A (blocker 3): a payment.canceled event is a safe no-op with zero side effects — no ledger entry, no notification, no lifecycle recompute — matching a cancellation's own accurate lack of financial consequence", async () => {
+    const record = await createPendingPayment("wh-cancel-2");
+    const { rawBody, signatureHeader } = signedWebhook({
+      providerEventId: "evt_cancel_2",
+      eventType: "payment.canceled",
+      providerPaymentId: record.providerPaymentId,
+    });
+    await webhookCtx.paymentWebhookService.receiveWebhook({ rawBody, signatureHeader });
+    expect(await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id)).toHaveLength(0);
+  });
+
   it("transitions succeeded -> refunded and succeeded -> disputed via their respective events", async () => {
     const record = await createPendingPayment("wh-2");
     const succeed = signedWebhook({ providerEventId: "evt_2a", eventType: "payment.succeeded", providerPaymentId: record.providerPaymentId });
@@ -136,6 +159,273 @@ describe("PaymentWebhookService", () => {
     expect(result.status).toBe("processed");
     expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refunded");
     expect(webhookCtx.auditRepo.events.filter((e) => e.action === "payment_webhook_payment.failed")).toHaveLength(0);
+  });
+
+  // PAID2YOU — B0-D ADYEN PHASE 1B (item 1 — REFUNDED_REVERSED mapping)/1C (item 2 — ledger correction): required focused tests.
+  it("REFUND -> REFUNDED_REVERSED: transitions to the distinct refund_reversed status, corrects the original refund's ledger effect exactly once, and never re-runs success effects", async () => {
+    const record = await createPendingPayment("wh-reversed-1");
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_1a", eventType: "payment.succeeded", providerPaymentId: record.providerPaymentId }),
+    );
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_1b", eventType: "payment.refunded", providerPaymentId: record.providerPaymentId }),
+    );
+    const entriesAfterRefund = await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id);
+    const clearedEntry = entriesAfterRefund.find((e) => e.entryType === "payment_cleared")!;
+    const refundEntry = entriesAfterRefund.find((e) => e.entryType === "refund")!;
+    expect(clearedEntry).toBeDefined();
+    expect(refundEntry).toBeDefined();
+
+    const result = await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_1c", eventType: "payment.refund_reversed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect(result.status).toBe("processed");
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refund_reversed");
+
+    // Exactly one new ledger entry — the correction — restoring the payment's cleared state exactly
+    // once, never a second payment_cleared/refund and never a principal/fee duplication.
+    const entriesAfterReversal = await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id);
+    expect(entriesAfterReversal).toHaveLength(entriesAfterRefund.length + 1);
+    const correctionEntries = entriesAfterReversal.filter((e) => e.entryType === "refund_correction");
+    expect(correctionEntries).toHaveLength(1);
+
+    // The correction's postings are the exact inverse of the refund's own postings — i.e. structurally
+    // identical (account/direction/amount) to the ORIGINAL payment_cleared postings, ledger restored
+    // exactly once, not merely a status flag.
+    const correction = correctionEntries[0]!;
+    const normalize = (postings: typeof correction.postings) =>
+      [...postings].sort((a, b) => a.accountId.localeCompare(b.accountId)).map((p) => ({ accountId: p.accountId, direction: p.direction, amountMinorUnits: p.amountMinorUnits }));
+    expect(normalize(correction.postings)).toEqual(normalize(clearedEntry.postings));
+
+    // No duplicate success-effect audit entries — the original "succeeded" transition was recorded
+    // exactly once, never re-triggered by the later reversal.
+    expect(webhookCtx.auditRepo.events.filter((e) => e.action === "payment_webhook_payment.succeeded")).toHaveLength(1);
+  });
+
+  it("duplicate REFUNDED_REVERSED: a second, genuinely distinct payment.refund_reversed delivery for an already-reversed payment is ignored as a permanently illegal transition, and the exact same event redelivered is a plain dedup no-op", async () => {
+    const record = await createPendingPayment("wh-reversed-2");
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_2a", eventType: "payment.succeeded", providerPaymentId: record.providerPaymentId }),
+    );
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_2b", eventType: "payment.refunded", providerPaymentId: record.providerPaymentId }),
+    );
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_2c", eventType: "payment.refund_reversed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refund_reversed");
+
+    // A second, distinct REFUNDED_REVERSED delivery (its own providerEventId, not a mere replay of the
+    // first) finds the current status already "refund_reversed" — not a legal source for
+    // "refund_reversed" (only "refunded" is, and "refund_reversed" itself has no legal outgoing
+    // transition), so it is a genuinely dead, permanently-illegal transition: rejected, never reapplied.
+    const entriesAfterFirst = await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id);
+    expect(entriesAfterFirst.filter((e) => e.entryType === "refund_correction")).toHaveLength(1);
+
+    const second = await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_2d", eventType: "payment.refund_reversed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect(second.status).toBe("processed");
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refund_reversed");
+    expect(webhookCtx.auditRepo.events.filter((e) => e.action === "payment_webhook_payment.refund_reversed")).toHaveLength(1);
+
+    // Zero duplicate financial effects: the illegal-transition dead end never reached the ledger a
+    // second time — still exactly one correction entry.
+    const entriesAfterSecond = await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id);
+    expect(entriesAfterSecond).toHaveLength(entriesAfterFirst.length);
+    expect(entriesAfterSecond.filter((e) => e.entryType === "refund_correction")).toHaveLength(1);
+
+    // The exact same event redelivered (identical providerEventId) is caught by ordinary event-level dedup.
+    const replay = await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_2c", eventType: "payment.refund_reversed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect(replay.status).toBe("duplicate");
+
+    // Belt-and-suspenders: the ledger's own idempotent get-or-post also refuses a direct second
+    // correction attempt for the same payment, independent of the transition-matrix protection above.
+    const directRetry = await webhookCtx.ledgerCtx.ledgerService.correctRefund({ paymentAttemptId: record.id, reason: null });
+    expect(directRetry.id).toBe(entriesAfterFirst.find((e) => e.entryType === "refund_correction")!.id);
+    expect(await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id)).toHaveLength(entriesAfterFirst.length);
+  });
+
+  it("out-of-order/replayed: a payment.refund_reversed arriving before any confirmed refund is durably retryable, never silently discarded or applied early — a payment that never reached refunded cannot yet be reversed", async () => {
+    const record = await createPendingPayment("wh-reversed-3");
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_3a", eventType: "payment.succeeded", providerPaymentId: record.providerPaymentId }),
+    );
+
+    const outOfOrder = await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_3b", eventType: "payment.refund_reversed", providerPaymentId: record.providerPaymentId }),
+    );
+    // "succeeded" can still legally reach "refunded" (an allowed source for "refund_reversed") later —
+    // this is a PROVISIONAL rejection, not a dead end: durably recorded/retryable ("accepted"), never a
+    // silent no-op that could later let a legitimate reversal's effects go unapplied.
+    expect(outOfOrder.status).toBe("accepted");
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("succeeded");
+    expect(webhookCtx.auditRepo.events.filter((e) => e.action === "payment_webhook_payment.refund_reversed")).toHaveLength(0);
+
+    // A real refund can still arrive afterward and finalize normally — the earlier out-of-order
+    // delivery did not corrupt or block anything.
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_reversed_3c", eventType: "payment.refunded", providerPaymentId: record.providerPaymentId }),
+    );
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refunded");
+  });
+
+  // PAID2YOU — B0-D ADYEN PHASE 1C (item 1 — REFUND_FAILED): required focused tests.
+  it("REFUND -> REFUND_FAILED: a payment.refund_failed event following a confirmed refund transitions to the distinct refund_failed status and corrects the refund's ledger effect exactly once", async () => {
+    const record = await createPendingPayment("wh-refundfailed-1");
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_1a", eventType: "payment.succeeded", providerPaymentId: record.providerPaymentId }),
+    );
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_1b", eventType: "payment.refunded", providerPaymentId: record.providerPaymentId }),
+    );
+    const entriesAfterRefund = await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id);
+    const clearedEntry = entriesAfterRefund.find((e) => e.entryType === "payment_cleared")!;
+
+    const result = await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_1c", eventType: "payment.refund_failed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect(result.status).toBe("processed");
+    // Must not remain "refunded" — the refund is now known to have failed.
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refund_failed");
+
+    const entriesAfterFailure = await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id);
+    expect(entriesAfterFailure).toHaveLength(entriesAfterRefund.length + 1);
+    const correctionEntries = entriesAfterFailure.filter((e) => e.entryType === "refund_correction");
+    expect(correctionEntries).toHaveLength(1);
+
+    // Ledger restored exactly once — the correction's postings exactly mirror the original
+    // payment_cleared postings (the money was never actually returned to the payer).
+    const normalize = (postings: (typeof correctionEntries)[number]["postings"]) =>
+      [...postings].sort((a, b) => a.accountId.localeCompare(b.accountId)).map((p) => ({ accountId: p.accountId, direction: p.direction, amountMinorUnits: p.amountMinorUnits }));
+    expect(normalize(correctionEntries[0]!.postings)).toEqual(normalize(clearedEntry.postings));
+
+    // No second payment-success effect, no duplicate lifecycle advancement.
+    expect(webhookCtx.auditRepo.events.filter((e) => e.action === "payment_webhook_payment.succeeded")).toHaveLength(1);
+  });
+
+  it("duplicate REFUND_FAILED: a second, genuinely distinct payment.refund_failed delivery for an already-corrected payment is ignored as a permanently illegal transition, and the exact same event redelivered is a plain dedup no-op — zero duplicate financial effects either way", async () => {
+    const record = await createPendingPayment("wh-refundfailed-2");
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_2a", eventType: "payment.succeeded", providerPaymentId: record.providerPaymentId }),
+    );
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_2b", eventType: "payment.refunded", providerPaymentId: record.providerPaymentId }),
+    );
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_2c", eventType: "payment.refund_failed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refund_failed");
+    const entriesAfterFirst = await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id);
+    expect(entriesAfterFirst.filter((e) => e.entryType === "refund_correction")).toHaveLength(1);
+
+    // A second, distinct REFUND_FAILED delivery (its own providerEventId) finds the current status
+    // already "refund_failed" — not a legal source for "refund_failed" (only "refunded" is, and
+    // "refund_failed" itself has no legal outgoing transition) — a permanently-illegal dead end.
+    const second = await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_2d", eventType: "payment.refund_failed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect(second.status).toBe("processed");
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refund_failed");
+    expect(webhookCtx.auditRepo.events.filter((e) => e.action === "payment_webhook_payment.refund_failed")).toHaveLength(1);
+
+    const entriesAfterSecond = await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id);
+    expect(entriesAfterSecond).toHaveLength(entriesAfterFirst.length);
+    expect(entriesAfterSecond.filter((e) => e.entryType === "refund_correction")).toHaveLength(1);
+
+    // The exact same event redelivered (identical providerEventId) is caught by ordinary event-level dedup.
+    const replay = await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_2c", eventType: "payment.refund_failed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect(replay.status).toBe("duplicate");
+  });
+
+  it("out-of-order/replayed: a payment.refund_failed arriving before its own prerequisite REFUND has been confirmed is durably retryable, never silently discarded or applied early — and a genuinely-reversed (not failed) payment is correctly immune to a stale/misrouted REFUND_FAILED too", async () => {
+    const record = await createPendingPayment("wh-refundfailed-3");
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_3a", eventType: "payment.succeeded", providerPaymentId: record.providerPaymentId }),
+    );
+
+    // REFUND_FAILED delivered before the REFUND that must logically precede it (Adyen documents
+    // REFUND_FAILED as only ever following an earlier REFUND success:true) — out-of-order redelivery.
+    const outOfOrder = await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_3b", eventType: "payment.refund_failed", providerPaymentId: record.providerPaymentId }),
+    );
+    // "succeeded" can still legally reach "refunded" (an allowed source for "refund_failed") later —
+    // PROVISIONAL, not a dead end: durably retryable ("accepted"), never applied early / never corrupts
+    // a ledger with nothing to correct yet.
+    expect(outOfOrder.status).toBe("accepted");
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("succeeded");
+    expect(webhookCtx.auditRepo.events.filter((e) => e.action === "payment_webhook_payment.refund_failed")).toHaveLength(0);
+    expect(await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id)).toHaveLength(1); // only payment_cleared.
+
+    // The real REFUND now arrives and finalizes normally — the earlier out-of-order delivery did not
+    // corrupt or block anything.
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_3c", eventType: "payment.refunded", providerPaymentId: record.providerPaymentId }),
+    );
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refunded");
+
+    // REFUNDED_REVERSED applies first (the genuine outcome for this payment)...
+    await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_3d", eventType: "payment.refund_reversed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refund_reversed");
+    const entriesAfterReversal = await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id);
+    expect(entriesAfterReversal.filter((e) => e.entryType === "refund_correction")).toHaveLength(1);
+
+    // ...and a stale/misrouted REFUND_FAILED redelivery for the SAME payment, arriving after the fact,
+    // is correctly rejected as a dead end — "refund_reversed" is not a legal source for "refund_failed"
+    // either — never reapplying a second, conflicting correction.
+    const stale = await webhookCtx.paymentWebhookService.receiveWebhook(
+      signedWebhook({ providerEventId: "evt_rf_3e", eventType: "payment.refund_failed", providerPaymentId: record.providerPaymentId }),
+    );
+    expect(stale.status).toBe("processed");
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("refund_reversed");
+    expect(await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id)).toHaveLength(entriesAfterReversal.length);
+  });
+
+  // PAID2YOU — B0-D ADYEN PHASE 1B (item 2 — unknown processor fee): required focused tests for the
+  // `postLedgerEntryRequired` `source: "provider_lookup"` evidence gate.
+  it("accepts an explicit null processorFeeMinorUnits as valid provider_lookup evidence (a disclosed known-unknown) and posts the ledger entry without fabricating a numeric fee claim", async () => {
+    const record = await createPendingPayment("wh-fee-unknown-1");
+    const result = await webhookCtx.paymentWebhookService.receiveInternalEvent({
+      provider: paymentCtx.provider.providerName,
+      providerEventId: "internal-fee-unknown-1",
+      eventType: "payment.succeeded",
+      data: {
+        providerPaymentId: record.providerPaymentId,
+        amountMinorUnits: record.amountMinorUnits,
+        currency: record.currency,
+        processorFeeMinorUnits: null,
+        platformFeeMinorUnits: 0,
+      },
+    });
+    expect(result.status).toBe("processed");
+    expect((await paymentCtx.payments.findById(record.id))?.status).toBe("succeeded");
+    expect(await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id)).not.toHaveLength(0);
+  });
+
+  it("still rejects a genuinely missing/malformed processorFeeMinorUnits (undefined) as incomplete provider_lookup evidence — null is the only accepted known-unknown spelling, never mere absence", async () => {
+    const record = await createPendingPayment("wh-fee-unknown-2");
+    const result = await webhookCtx.paymentWebhookService.receiveInternalEvent({
+      provider: paymentCtx.provider.providerName,
+      providerEventId: "internal-fee-unknown-2",
+      eventType: "payment.succeeded",
+      data: {
+        providerPaymentId: record.providerPaymentId,
+        amountMinorUnits: record.amountMinorUnits,
+        currency: record.currency,
+        platformFeeMinorUnits: 0,
+      },
+    });
+    // Durably retryable ("accepted"), never thrown to the caller (processAndFinalize) — and, critically,
+    // the required ledger entry was never posted with a fabricated fee: the evidence gate refused it
+    // outright rather than silently defaulting to $0.
+    expect(result.status).toBe("accepted");
+    expect(await webhookCtx.ledgerCtx.ledgerService.listEntriesForPaymentAttempt(record.id)).toHaveLength(0);
   });
 
   it("silently accepts (as processed) an event type it does not recognize", async () => {

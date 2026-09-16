@@ -27,6 +27,7 @@ export * from "./paymentDispute";
 export * from "./notify";
 export * from "./relationship";
 export * from "./financialAccount";
+export * from "./bankLinkAttempt";
 export * from "./adminOps";
 export * from "./rateLimit";
 export * from "./agreementInvitation";

@@ -100,6 +100,42 @@ production — `RESEND_API_KEY`/`EMAIL_FROM_ADDRESS`/`EMAIL_DELIVERY_ENABLED` ar
 console-log-only (no `TWILIO_*` variables configured). Payment/KYC/card providers remain sandbox-only,
 unchanged from PRSprint 04's description.
 
+## Update (B0-D TOTAL SANDBOX ELIMINATION, 2026-09-15)
+
+**`PAYMENT_SANDBOX_WEBHOOK_SECRET`, `KYC_SANDBOX_WEBHOOK_SECRET`, and `CARD_SANDBOX_WEBHOOK_SECRET`
+(row above and PRSprint 24 reference) are retired** — removed from `src/config/env.ts`'s schema
+entirely, alongside the sandbox provider classes they protected (`SandboxPaymentProvider`/
+`SandboxKycProvider`/`SandboxCardIssuingProvider`, relocated to `src/test-support/` as test-only
+doubles, never reachable from application runtime). Any of these three variables still set in a real
+deployment's environment is now simply ignored (Zod's schema strips unrecognized keys) — harmless, but
+should be removed from Vercel project settings as routine cleanup.
+
+**`PAYMENT_PROVIDER` / `KYC_PROVIDER` / `CARD_ISSUING_PROVIDER` (line 77 above) are no longer a
+`z.enum(["sandbox"])`** — they are now plain, optional strings, but the schema's `superRefine` rejects
+any sandbox/mock/fake/demo/dummy/stub/simulated/test-shaped value outright at environment-parse time.
+Leaving all three unset (their current, unchanged production state) is valid — `getPaymentProvider()`/
+`getKycProvider()`/`getCardIssuingProvider()` throw `ProviderNotAvailableError` (503) whenever none of
+them resolves to a registered live provider in `src/lib/providers/providerCapabilities.ts`'s capability
+registry, which is genuinely empty today. "Provider mode" (above) and Sprint 20's "payment/KYC/card
+providers remain sandbox-only" correction are both now additionally out of date in the same direction
+this update already corrects them toward: payment/KYC/card-issuing are no longer "sandbox" — they are
+**unavailable** (fails closed, never silently substitutes sandbox behavior). See
+`docs/PRODUCTION_PROVIDER_READINESS.md` §1 for the full architecture description.
+
+**Operationally significant consequence for SMS specifically, once this change is deployed:** Sprint
+20's confirmation above ("SMS remains console-log-only (no `TWILIO_*` variables configured)") means
+production currently has no live Twilio configuration. `getSmsSender()`/`ConsoleSmsSender` now fail
+closed (throw `SmsDeliveryError`, dead-lettered by `NotificationService.deliver()`, visible to admins
+via the existing email/SMS delivery-failure tooling) instead of silently logging a "sent" SMS that was
+never delivered, whenever `APP_ENV === "production"` and no live Twilio credentials are configured —
+which, per this same confirmation, describes production's actual current state. **Before this change
+reaches production, either provision live `TWILIO_*` credentials, or accept that every SMS notification
+will fail closed (not silently succeed) until they are provisioned** — this is the correct, intended
+behavior per the B0-D production gate's "no live service may silently downgrade to console-only in
+production" requirement, not a regression, but it is a real behavior change from today's silent
+console-fallback and should not surprise whoever deploys it. Email is unaffected (Resend is already
+live-configured in production, per this same Sprint 20 confirmation).
+
 ## Vercel configuration checklist (Sprint 1 acceptance)
 
 - `DATABASE_URL`, `AUDIT_HASH_SECRET`, `AUTH_PASSWORD_PEPPER` must be set as **server-only** Vercel

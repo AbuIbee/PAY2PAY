@@ -9,6 +9,7 @@ import { getNotificationService } from "@/lib/notify/getNotificationService";
 import { DrizzleProfileOwnerReader } from "@/lib/profiles/drizzleProfileOwnerReader";
 import { getVerificationService } from "@/lib/profiles/getVerificationService";
 import { DrizzleAgreementPartiesReader } from "./drizzleAgreementPartiesReader";
+import { DrizzleAchMandateProviderRefReader } from "./drizzleAchMandateProviderRefReader";
 import { DrizzleAgreementScheduleReader } from "./drizzleAgreementScheduleReader";
 import { DrizzleAtomicManualPaymentPoster } from "./drizzleAtomicManualPaymentPoster";
 import { DrizzleInstallmentAwarePaymentReserver } from "./drizzleInstallmentAwarePaymentReserver";
@@ -66,6 +67,7 @@ export function getPaymentService(): PaymentService {
       scheduleReader: new DrizzleAgreementScheduleReader(),
       settlementContext: new DrizzleSettlementContextVerifier(),
       notifications: getNotificationService(),
+      achMandateProviderRefs: new DrizzleAchMandateProviderRefReader(),
       installmentHook: {
         handlePaymentSucceeded: (payment) => getFailedPaymentWorkflowService().handlePaymentSucceeded(payment),
       },

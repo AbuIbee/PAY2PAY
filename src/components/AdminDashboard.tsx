@@ -19,10 +19,12 @@ interface EnvironmentStatus {
   nodeEnv: string;
   database: "configured" | "not_configured";
   documentStorage: "configured" | "not_configured";
-  paymentProvider: string;
-  paymentProviderEnvironment: "sandbox" | "production";
-  kycProvider: string;
-  kycProviderEnvironment: "sandbox" | "production";
+  paymentProvider: string | null;
+  paymentProviderEnvironment: "unavailable" | "production";
+  kycProvider: string | null;
+  kycProviderEnvironment: "unavailable" | "production";
+  cardIssuingProvider: string | null;
+  cardIssuingProviderEnvironment: "unavailable" | "production";
   emailDelivery: "console_log_only";
   smsDelivery: "console_log_only";
   scheduledJobs: "configured" | "not_configured";
@@ -167,12 +169,25 @@ export function AdminDashboard() {
         <p style={{ margin: 0 }}>Database: {formatStatusLabel(data.environmentStatus.database)}</p>
         <p style={{ margin: 0 }}>Document storage: {formatStatusLabel(data.environmentStatus.documentStorage)}</p>
         <p style={{ margin: 0 }}>
-          Payment provider: {formatStatusLabel(data.environmentStatus.paymentProvider)} (
-          {data.environmentStatus.paymentProviderEnvironment === "production" ? "LIVE — real money moves" : "sandbox — no real money moves"})
+          Payment provider: {data.environmentStatus.paymentProvider ? formatStatusLabel(data.environmentStatus.paymentProvider) : "none configured"} (
+          {data.environmentStatus.paymentProviderEnvironment === "production"
+            ? "LIVE — real money moves"
+            : "not available — no live provider approved (B-1 hard hold)"}
+          )
         </p>
         <p style={{ margin: 0 }}>
-          KYC/KYB provider: {formatStatusLabel(data.environmentStatus.kycProvider)} (
-          {data.environmentStatus.kycProviderEnvironment === "production" ? "LIVE — real identity verification" : "sandbox — not a real identity check"})
+          KYC/KYB provider: {data.environmentStatus.kycProvider ? formatStatusLabel(data.environmentStatus.kycProvider) : "none configured"} (
+          {data.environmentStatus.kycProviderEnvironment === "production"
+            ? "LIVE — real identity verification"
+            : "not available — no live provider approved (B-1 hard hold)"}
+          )
+        </p>
+        <p style={{ margin: 0 }}>
+          Card-issuing provider: {data.environmentStatus.cardIssuingProvider ? formatStatusLabel(data.environmentStatus.cardIssuingProvider) : "none configured"} (
+          {data.environmentStatus.cardIssuingProviderEnvironment === "production"
+            ? "LIVE — real card issuance"
+            : "not available — no live provider approved (B-1 hard hold)"}
+          )
         </p>
         <p style={{ margin: 0 }}>Email delivery: {formatStatusLabel(data.environmentStatus.emailDelivery)}</p>
         <p style={{ margin: 0 }}>SMS delivery: {formatStatusLabel(data.environmentStatus.smsDelivery)}</p>

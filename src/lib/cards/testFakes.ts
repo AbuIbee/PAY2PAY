@@ -6,7 +6,7 @@ import { CardService } from "./cardService";
 import type { IssuedCardRecord, IssuedCardRepository } from "./cardService";
 import { CardWebhookService } from "./cardWebhookService";
 import type { CardTransactionEventRecord, CardTransactionEventRepository, CardTransactionEventType, IssuedCardRefResolver } from "./cardWebhookService";
-import { SandboxCardIssuingProvider } from "./sandboxCardIssuingProvider";
+import { SandboxCardIssuingProvider } from "@/test-support/cards/sandboxCardIssuingProvider";
 
 /** Test-only in-memory doubles for CardService, mirroring src/lib/ach/testFakes.ts's pattern. */
 

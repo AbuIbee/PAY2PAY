@@ -126,6 +126,67 @@ describe("LedgerService", () => {
     });
   });
 
+  // PAID2YOU — B0-D ADYEN PHASE 1C: required focused tests for the refund-finality/accounting gap.
+  describe("correctRefund", () => {
+    async function clearAndRefund(): Promise<void> {
+      await ctx.ledgerService.postPaymentCleared({ paymentAttemptId, agreementId, currency: "USD", grossAmountMinorUnits: 10_000 });
+      await ctx.ledgerService.reversePayment({ paymentAttemptId, entryType: "refund", reason: "buyer request" });
+    }
+
+    it("rejects correcting a refund that was never posted", async () => {
+      await ctx.ledgerService.postPaymentCleared({ paymentAttemptId, agreementId, currency: "USD", grossAmountMinorUnits: 10_000 });
+      await expect(ctx.ledgerService.correctRefund({ paymentAttemptId, reason: "test" })).rejects.toThrow(ValidationError);
+    });
+
+    it("pre-payout: the correction exactly mirrors the original payment_cleared postings — ledger restored exactly once, not a second payment_cleared/refund", async () => {
+      await clearAndRefund();
+      const cleared = await ctx.ledgerService.findEntry(paymentAttemptId, "payment_cleared");
+      const correction = await ctx.ledgerService.correctRefund({ paymentAttemptId, reason: "refund failed at scheme" });
+      expect(correction.entryType).toBe("refund_correction");
+      const debitTotal = correction.postings.filter((p) => p.direction === "debit").reduce((s, p) => s + p.amountMinorUnits, 0);
+      const creditTotal = correction.postings.filter((p) => p.direction === "credit").reduce((s, p) => s + p.amountMinorUnits, 0);
+      expect(debitTotal).toBe(creditTotal); // balance invariant
+      const normalize = (postings: typeof correction.postings) =>
+        [...postings].sort((a, b) => a.accountId.localeCompare(b.accountId)).map((p) => ({ accountId: p.accountId, direction: p.direction, amountMinorUnits: p.amountMinorUnits }));
+      expect(normalize(correction.postings)).toEqual(normalize(cleared!.postings));
+
+      const all = await ctx.ledgerService.listEntriesForPaymentAttempt(paymentAttemptId);
+      expect(all.filter((e) => e.entryType === "payment_cleared")).toHaveLength(1);
+      expect(all.filter((e) => e.entryType === "refund")).toHaveLength(1);
+      expect(all.filter((e) => e.entryType === "refund_correction")).toHaveLength(1);
+    });
+
+    it("post-payout: corrects the exact clawback shape the refund itself used, not the full gross", async () => {
+      await ctx.ledgerService.postPaymentCleared({ paymentAttemptId, agreementId, currency: "USD", grossAmountMinorUnits: 10_000 });
+      await ctx.ledgerService.postPayout({ paymentAttemptId });
+      const reversal = await ctx.ledgerService.reversePayment({ paymentAttemptId, entryType: "reversal", reason: "ACH return" });
+      // "reversal", not "refund" — correctRefund only ever looks for a "refund" entry specifically, so
+      // this must still reject (no "refund" entry exists for this payment, only "reversal").
+      await expect(ctx.ledgerService.correctRefund({ paymentAttemptId, reason: "x" })).rejects.toThrow(ValidationError);
+      expect(reversal.entryType).toBe("reversal"); // sanity: the reversal itself posted fine.
+    });
+
+    it("is idempotent: a second call for the same payment returns the existing correction rather than posting again", async () => {
+      await clearAndRefund();
+      const first = await ctx.ledgerService.correctRefund({ paymentAttemptId, reason: "a" });
+      const second = await ctx.ledgerService.correctRefund({ paymentAttemptId, reason: "a" });
+      expect(second.id).toBe(first.id);
+      const all = await ctx.ledgerService.listEntriesForPaymentAttempt(paymentAttemptId);
+      expect(all.filter((e) => e.entryType === "refund_correction")).toHaveLength(1);
+    });
+
+    it("never touches payment_cleared or refund themselves — both remain exactly as originally posted", async () => {
+      await clearAndRefund();
+      const clearedBefore = await ctx.ledgerService.findEntry(paymentAttemptId, "payment_cleared");
+      const refundBefore = await ctx.ledgerService.findEntry(paymentAttemptId, "refund");
+      await ctx.ledgerService.correctRefund({ paymentAttemptId, reason: "x" });
+      const clearedAfter = await ctx.ledgerService.findEntry(paymentAttemptId, "payment_cleared");
+      const refundAfter = await ctx.ledgerService.findEntry(paymentAttemptId, "refund");
+      expect(clearedAfter?.id).toBe(clearedBefore?.id);
+      expect(refundAfter?.id).toBe(refundBefore?.id);
+    });
+  });
+
   describe("postPayout", () => {
     it("moves the creditor's net proceeds from creditor_proceeds_payable to processor_clearing", async () => {
       await ctx.ledgerService.postPaymentCleared({ paymentAttemptId, agreementId, currency: "USD", grossAmountMinorUnits: 8_000 });

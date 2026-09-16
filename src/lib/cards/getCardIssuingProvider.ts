@@ -1,25 +1,20 @@
 import "server-only";
 import { getServerEnv } from "@/config/env";
 import { ConfigurationError } from "@/lib/errors";
-import { assertProviderEnvironmentConsistency, getProviderCapabilityDescriptor } from "@/lib/providers/providerCapabilities";
-import { SandboxCardIssuingProvider } from "./sandboxCardIssuingProvider";
+import { assertProviderAvailableForRuntime } from "@/lib/providers/providerCapabilities";
 import type { CardIssuingProvider } from "./cardIssuingProvider";
 
-let cached: SandboxCardIssuingProvider | null = null;
+// See getPaymentProvider.ts's identical comment: reassigned once a real provider is registered;
+// today the function always throws first.
+// eslint-disable-next-line prefer-const
+let cached: CardIssuingProvider | null = null;
 
-/** PRSprint 24 — see getPaymentProvider.ts's identical doc comment for the runtime-switch/registry pattern this mirrors. */
+/** PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION — see getPaymentProvider.ts's identical doc comment for the fail-closed pattern this mirrors. */
 export function getCardIssuingProvider(): CardIssuingProvider {
   if (!cached) {
-    const { CARD_ISSUING_PROVIDER, CARD_SANDBOX_WEBHOOK_SECRET, APP_ENV } = getServerEnv();
-    if (CARD_ISSUING_PROVIDER === "sandbox") {
-      if (!CARD_SANDBOX_WEBHOOK_SECRET) {
-        throw new ConfigurationError("CARD_SANDBOX_WEBHOOK_SECRET is not configured.");
-      }
-      cached = new SandboxCardIssuingProvider(CARD_SANDBOX_WEBHOOK_SECRET);
-    } else {
-      throw new ConfigurationError(`No card-issuing provider factory is registered for "${CARD_ISSUING_PROVIDER}".`);
-    }
-    assertProviderEnvironmentConsistency(getProviderCapabilityDescriptor(cached.providerName), APP_ENV);
+    const { CARD_ISSUING_PROVIDER, APP_ENV } = getServerEnv();
+    const descriptor = assertProviderAvailableForRuntime("card_issuing", CARD_ISSUING_PROVIDER, APP_ENV);
+    throw new ConfigurationError(`No card-issuing provider factory is registered for "${descriptor.providerName}".`);
   }
   return cached;
 }

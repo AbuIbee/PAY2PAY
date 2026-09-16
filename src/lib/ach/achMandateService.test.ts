@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ConflictError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { AuditService } from "@/lib/audit/auditService";
+import type { ProfileRef } from "@/lib/payments/paymentProvider";
+import { AchMandateService, type FinancialAccountOwnershipVerifier } from "./achMandateService";
 import { createTestAchMandateService, seedAgreementForMandateTest } from "./testFakes";
 
 const PAYER = { profileKind: "personal" as const, profileId: "payer-1" };
@@ -276,6 +279,133 @@ describe("AchMandateService", () => {
 
       expect(ctx.mandates.byId.size).toBe(0);
       expect(ctx.auditRepo.events).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // PAID2YOU — B0-D ADYEN PHASE 2 (item 5 — mandate integration): the exact Adyen storedPaymentMethodId
+  // reaching the mandate/payment path, verified against a real financial_account, and the
+  // provider-triggered mass-revocation that makes a disabled token stop backing future payments.
+  // ---------------------------------------------------------------------------------------------
+  describe("PAID2YOU — B0-D ADYEN PHASE 2: FinancialAccountOwnershipVerifier gate", () => {
+    class FakeVerifier implements FinancialAccountOwnershipVerifier {
+      verified = new Set<string>(); // `${providerAccountRef}|${profileKind}:${profileId}`
+      async isVerifiedAccountOwnedByProfile(providerAccountRef: string, profile: ProfileRef): Promise<boolean> {
+        return this.verified.has(`${providerAccountRef}|${profile.profileKind}:${profile.profileId}`);
+      }
+    }
+
+    function buildServiceWithVerifier(ctx: ReturnType<typeof createTestAchMandateService>, verifier: FinancialAccountOwnershipVerifier) {
+      return new AchMandateService({
+        mandates: ctx.mandates,
+        profileOwners: ctx.profileOwners,
+        agreements: ctx.agreements,
+        audit: new AuditService(ctx.auditRepo),
+        financialAccounts: verifier,
+      });
+    }
+
+    it("authorize succeeds when the bankAccountRef is a verified account owned by the payer", async () => {
+      const localCtx = createTestAchMandateService();
+      localCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+      const localAgreementId = randomUUID();
+      seedAgreementForMandateTest(localCtx.agreements, localAgreementId, PAYER, CREDITOR);
+      const verifier = new FakeVerifier();
+      verifier.verified.add(`sm_real_token|${PAYER.profileKind}:${PAYER.profileId}`);
+      const service = buildServiceWithVerifier(localCtx, verifier);
+
+      const mandate = await service.authorize({ agreementId: localAgreementId, payer: PAYER, bankAccountRef: "sm_real_token", actingUserId: PAYER_USER_ID });
+      expect(mandate.bankAccountRef).toBe("sm_real_token");
+    });
+
+    it("authorize rejects a bankAccountRef that is not a verified account owned by the payer — never a bare client-supplied string trusted at face value", async () => {
+      const localCtx = createTestAchMandateService();
+      localCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+      const localAgreementId = randomUUID();
+      seedAgreementForMandateTest(localCtx.agreements, localAgreementId, PAYER, CREDITOR);
+      const service = buildServiceWithVerifier(localCtx, new FakeVerifier()); // nothing marked verified
+
+      await expect(
+        service.authorize({ agreementId: localAgreementId, payer: PAYER, bankAccountRef: "sm_made_up_token", actingUserId: PAYER_USER_ID }),
+      ).rejects.toThrow(ValidationError);
+      expect(localCtx.mandates.byId.size).toBe(0);
+    });
+
+    it("authorize rejects a bankAccountRef verified for a DIFFERENT profile (cross-user token assignment)", async () => {
+      const localCtx = createTestAchMandateService();
+      localCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+      const localAgreementId = randomUUID();
+      seedAgreementForMandateTest(localCtx.agreements, localAgreementId, PAYER, CREDITOR);
+      const verifier = new FakeVerifier();
+      const someoneElse: ProfileRef = { profileKind: "personal", profileId: "someone-else-profile" };
+      verifier.verified.add(`sm_someone_elses_token|${someoneElse.profileKind}:${someoneElse.profileId}`);
+      const service = buildServiceWithVerifier(localCtx, verifier);
+
+      await expect(
+        service.authorize({ agreementId: localAgreementId, payer: PAYER, bankAccountRef: "sm_someone_elses_token", actingUserId: PAYER_USER_ID }),
+      ).rejects.toThrow(ValidationError);
+      expect(localCtx.mandates.byId.size).toBe(0);
+    });
+
+    it("handleBankChange is gated identically to authorize", async () => {
+      const localCtx = createTestAchMandateService();
+      localCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+      const localAgreementId = randomUUID();
+      seedAgreementForMandateTest(localCtx.agreements, localAgreementId, PAYER, CREDITOR);
+      const service = buildServiceWithVerifier(localCtx, new FakeVerifier());
+
+      await expect(
+        service.handleBankChange({ agreementId: localAgreementId, payer: PAYER, newBankAccountRef: "sm_unverified", actingUserId: PAYER_USER_ID }),
+      ).rejects.toThrow(ValidationError);
+      expect(localCtx.mandates.byId.size).toBe(0);
+    });
+
+    it("is a no-op (does not block) when the financialAccounts dependency is not wired — pre-existing test contexts are unaffected", async () => {
+      // ctx (the outer describe's own harness) never wires financialAccounts — every prior test in
+      // this file already implicitly proves this, but this test makes the property explicit.
+      const mandate = await ctx.achMandateService.authorize({ agreementId, payer: PAYER, bankAccountRef: "totally_unverified_string", actingUserId: PAYER_USER_ID });
+      expect(mandate.status).toBe("active");
+    });
+  });
+
+  describe("PAID2YOU — B0-D ADYEN PHASE 2: revokeAllForBankAccountRef (provider-triggered mass revocation)", () => {
+    it("revokes every currently-active mandate across multiple agreements referencing the same bankAccountRef", async () => {
+      const agreementA = randomUUID();
+      const agreementB = randomUUID();
+      seedAgreementForMandateTest(ctx.agreements, agreementA, PAYER, CREDITOR);
+      seedAgreementForMandateTest(ctx.agreements, agreementB, PAYER, { profileKind: "business" as const, profileId: "creditor-2" });
+      const mandateA = await ctx.achMandateService.authorize({ agreementId: agreementA, payer: PAYER, bankAccountRef: "shared_token", actingUserId: PAYER_USER_ID });
+      const mandateB = await ctx.achMandateService.authorize({ agreementId: agreementB, payer: PAYER, bankAccountRef: "shared_token", actingUserId: PAYER_USER_ID });
+
+      const revoked = await ctx.achMandateService.revokeAllForBankAccountRef("shared_token", "token disabled by provider");
+      expect(revoked.map((m) => m.id).sort()).toEqual([mandateA.id, mandateB.id].sort());
+      expect((await ctx.mandates.findById(mandateA.id))?.status).toBe("revoked");
+      expect((await ctx.mandates.findById(mandateB.id))?.status).toBe("revoked");
+      expect(await ctx.achMandateService.isActiveForAgreement(agreementA)).toBe(false);
+      expect(await ctx.achMandateService.isActiveForAgreement(agreementB)).toBe(false);
+    });
+
+    it("does not touch a mandate referencing a DIFFERENT bankAccountRef", async () => {
+      const mandate = await ctx.achMandateService.authorize({ agreementId, payer: PAYER, bankAccountRef: "unrelated_token", actingUserId: PAYER_USER_ID });
+      await ctx.achMandateService.revokeAllForBankAccountRef("shared_token", "x");
+      expect((await ctx.mandates.findById(mandate.id))?.status).toBe("active");
+    });
+
+    it("is idempotent — a second call for an already-revoked bankAccountRef finds nothing left to revoke", async () => {
+      await ctx.achMandateService.authorize({ agreementId, payer: PAYER, bankAccountRef: "shared_token", actingUserId: PAYER_USER_ID });
+      const first = await ctx.achMandateService.revokeAllForBankAccountRef("shared_token", "x");
+      expect(first).toHaveLength(1);
+      const second = await ctx.achMandateService.revokeAllForBankAccountRef("shared_token", "x");
+      expect(second).toHaveLength(0);
+    });
+
+    it("records a system-attributed audit entry, never impersonating a real user", async () => {
+      await ctx.achMandateService.authorize({ agreementId, payer: PAYER, bankAccountRef: "shared_token", actingUserId: PAYER_USER_ID });
+      ctx.auditRepo.events = [];
+      await ctx.achMandateService.revokeAllForBankAccountRef("shared_token", "x");
+      expect(ctx.auditRepo.events).toHaveLength(1);
+      expect(ctx.auditRepo.events[0]?.action).toBe("ach_mandate_revoked_by_provider");
+      expect(ctx.auditRepo.events[0]?.actorUserId).toBeNull();
     });
   });
 });

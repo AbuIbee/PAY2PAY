@@ -188,8 +188,11 @@ describe("DebitCardPaymentService", () => {
     // sandbox provider's designated test hook for that (mirrors src/lib/payments/paymentService.test.ts's
     // refund test, which monkey-patches createPayment's simulateOutcome for the same reason).
     card.paymentCtx.provider.simulateSettlement(submitted.providerPaymentId!, "succeeded");
+    // PAID2YOU — B0-D ADYEN PHASE 1A (blocker 3 — cancel/refund finality): the refund REQUEST being
+    // accepted no longer finalizes the status synchronously — it stays "succeeded" until an async
+    // REFUND webhook confirms it (never sent in this test).
     const refunded = await card.paymentCtx.paymentService.refundPayment(submitted.id, RECIPIENT_USER_ID);
-    expect(refunded.status).toBe("refunded");
+    expect(refunded.status).toBe("succeeded");
   });
 
   it("card replacement: after replacing the card, a new payment schedules successfully and the old card no longer counts as active", async () => {

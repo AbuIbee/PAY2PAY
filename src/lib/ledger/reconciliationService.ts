@@ -1,5 +1,5 @@
 import "server-only";
-import { ValidationError } from "@/lib/errors";
+import { ProviderCapabilityUnsupportedError, ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import type { AgreementCompletionChecker, PaymentAttemptRecord, PaymentAttemptRepository } from "@/lib/payments/paymentService";
 import type { PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "@/lib/payments/paymentWebhookService";
@@ -236,12 +236,26 @@ export class ReconciliationService {
       try {
         const retrieved = await this.deps.provider.retrievePayment(payment.providerPaymentId);
         providerStatus = retrieved.status;
-      } catch {
-        found.push(
-          await this.recordException("unmatched_provider_transaction", payment.id, null, {
-            providerPaymentId: payment.providerPaymentId,
-          }),
-        );
+      } catch (error) {
+        // PAID2YOU — B0-D ADYEN PHASE 1A (blocker 2 — retry/reconciliation): a provider that
+        // structurally cannot support this lookup at all (Adyen: no GET-by-reference endpoint — see
+        // `AdyenPaymentProvider`'s own module doc comment) is NOT evidence that the provider fails to
+        // recognize THIS specific payment — every payment would throw the same way, which would
+        // flood this table with false-positive exceptions. Skip the check entirely for that case
+        // (logged, not recorded as a data exception); a provider that genuinely doesn't recognize a
+        // real reference (any other error) is still recorded exactly as before.
+        if (error instanceof ProviderCapabilityUnsupportedError) {
+          logger.info("reconciliation_provider_retrieval_unsupported", {
+            paymentAttemptId: payment.id,
+            providerName: payment.providerName,
+          });
+        } else {
+          found.push(
+            await this.recordException("unmatched_provider_transaction", payment.id, null, {
+              providerPaymentId: payment.providerPaymentId,
+            }),
+          );
+        }
       }
       // status_mismatch: only meaningful for the three statuses the provider's own (simplified) status vocabulary can represent.
       if (providerStatus && ["pending", "succeeded", "failed"].includes(payment.status) && providerStatus !== payment.status) {

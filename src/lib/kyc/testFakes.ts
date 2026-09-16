@@ -3,7 +3,7 @@ import { createTestVerificationService } from "@/lib/profiles/testFakes";
 import { KycVerificationService } from "./kycVerificationService";
 import { KycWebhookService } from "./kycWebhookService";
 import type { KycWebhookEventRecord, KycWebhookEventRepository } from "./kycWebhookService";
-import { SandboxKycProvider } from "./sandboxKycProvider";
+import { SandboxKycProvider } from "@/test-support/kyc/sandboxKycProvider";
 
 /** Test-only in-memory doubles for the KYC/KYB services, mirroring src/lib/payments/testFakes.ts's pattern. */
 
