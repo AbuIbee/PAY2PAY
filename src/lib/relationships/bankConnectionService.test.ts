@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DependencyError, ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
-import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 import { grantStepUp } from "@/lib/staff/testFakes";
 import { BankConnectionService } from "./bankConnectionService";
 import { createTestRelationshipServices } from "./testFakes";

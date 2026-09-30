@@ -255,6 +255,26 @@ export const paymentAttemptStatusEnum = pgEnum("payment_attempt_status", [
   // return"). The `payment.returned` webhook event (Sprint 10) now sets this instead of the
   // mislabeled "reversed".
   "returned",
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): a previously-
+  // finalized refund ("refunded") that the provider later reverses (e.g. the refunded ACH credit
+  // itself bounced/returned). Deliberately its OWN distinct terminal value, never a reuse of
+  // "succeeded" — reusing "succeeded" would re-enter `PaymentWebhookService`'s success-effect/
+  // supersession machinery a SECOND time for the same payment, risking duplicate
+  // installment-paid/notification/lifecycle effects — exactly what this value exists to avoid.
+  // Reachable ONLY from "refunded" and wired to NO status-transition side effect in
+  // `PaymentWebhookService` beyond the transition itself. The ORIGINAL refund's own ledger entry is
+  // reversed/corrected exactly once — see `LedgerService.correctRefund`'s own doc comment.
+  "refund_reversed",
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): a previously-
+  // finalized refund ("refunded") that the provider later reports as having failed at the
+  // processor/bank level (occurring only after an earlier refund success — an immediate/synchronous
+  // refund rejection never reaches "refunded" in the first place). Deliberately its own distinct
+  // terminal value — NOT a reuse of "succeeded" (same rationale as "refund_reversed" above) and not
+  // merged with "refund_reversed" either, despite both undoing the same underlying `refund` ledger
+  // entry via the same `LedgerService.correctRefund` — they are attributable to different real-world
+  // causes worth keeping separately visible/auditable. Reachable ONLY from "refunded"; has no legal
+  // outgoing transition (matches "refund_reversed"'s own identical terminal shape).
+  "refund_failed",
 ]);
 
 /**
@@ -332,6 +352,18 @@ export const ledgerEntryTypeEnum = pgEnum("ledger_entry_type", [
   "payout",
   "dispute_adjustment",
   "admin_adjustment",
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): reinstates a
+  // payment's cleared state after its own "refund" entry is invalidated — either the refund failed at
+  // the processor/bank level after initially succeeding, or a previously-confirmed refund was later
+  // reversed. Posted by flipping the existing "refund" entry's own postings (see
+  // `LedgerService.correctRefund`) — never a second `payment_cleared`/`refund`, and idempotent
+  // per-payment like every other automatic entry type.
+  "refund_correction",
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-05/06): reverses an
+  // existing "payout" entry once a CONFIRMED payout is later returned by the receiving bank — mirrors
+  // "refund_correction"'s own exact shape/rationale. Posted by `LedgerService.postPayoutReturn`,
+  // driven exclusively by `PayoutService.returnPayout` — never by a bare webhook event.
+  "payout_returned",
 ]);
 
 export const ledgerPostingDirectionEnum = pgEnum("ledger_posting_direction", ["debit", "credit"]);
@@ -755,3 +787,25 @@ export const cardTransactionEventTypeEnum = pgEnum("card_transaction_event_type"
   "decline",
   "reversal",
 ]);
+
+/**
+ * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-05/06/07). The minimum
+ * provider-independent lifecycle needed to distinguish a creditor payout's real state from a bare
+ * internal ledger posting — see `payout_attempt`'s own doc comment (src/db/schema/payoutAttempt.ts)
+ * for the full design.
+ *
+ * `pending`: a payment cleared and a creditor is owed a payout — nothing has been provider-confirmed
+ * yet. This is the ONLY state `PaymentWebhookService` itself ever creates.
+ * `confirmed`: `PayoutService.confirmPayout` was called with non-empty, caller-supplied
+ * `providerName`/`providerPayoutReference` evidence — never merely because a webhook event of some
+ * eventType arrived. No code path in this architecture ever calls `confirmPayout` yet — it exists as
+ * provider-independent infrastructure a future live-provider integration wires into, never invented
+ * here (no specific bank/provider event mapping is assumed).
+ * `failed`: the payout could not be completed — the creditor's own `creditor_proceeds_payable`
+ * liability is left completely untouched (this is the concrete mechanism behind "failed payout
+ * preserves creditor liability").
+ * `returned`: a previously-`confirmed` payout was later reversed by the receiving bank —
+ * `LedgerService.postPayoutReturn` reinstates the liability by flipping the original `payout` entry's
+ * own postings, mirroring `refund_correction`'s identical precedent.
+ */
+export const payoutAttemptStatusEnum = pgEnum("payout_attempt_status", ["pending", "confirmed", "failed", "returned"]);

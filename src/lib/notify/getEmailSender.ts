@@ -23,7 +23,7 @@ export function getEmailSender(): EmailSender {
     cached =
       env.RESEND_API_KEY && env.EMAIL_FROM_ADDRESS && env.EMAIL_DELIVERY_ENABLED
         ? new ResendEmailSender({ apiKey: env.RESEND_API_KEY, fromAddress: env.EMAIL_FROM_ADDRESS, fromName: env.EMAIL_FROM_NAME })
-        : new ConsoleEmailSender();
+        : new ConsoleEmailSender({ failClosed: env.APP_ENV === "production" });
   }
   return cached;
 }

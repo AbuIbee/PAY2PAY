@@ -178,7 +178,7 @@ describe("DebitCardPaymentService", () => {
     expect(await card.paymentCtx.payments.findById(submitted.id)).not.toBeNull();
   });
 
-  it("refund: a succeeded card payment can be refunded through PaymentService's existing generic path", async () => {
+  it("refund-finality protection: a succeeded card payment's refund request is accepted through PaymentService's existing generic path, but stays 'succeeded' until an async refund webhook confirms it", async () => {
     const { submitted } = await scheduleAndSubmit("k-refund");
     await webhookCtx.paymentWebhookService.receiveWebhook(
       signedWebhook({ providerEventId: "evt-refund-a", eventType: "payment.succeeded", providerPaymentId: submitted.providerPaymentId }),
@@ -189,7 +189,8 @@ describe("DebitCardPaymentService", () => {
     // refund test, which monkey-patches createPayment's simulateOutcome for the same reason).
     card.paymentCtx.provider.simulateSettlement(submitted.providerPaymentId!, "succeeded");
     const refunded = await card.paymentCtx.paymentService.refundPayment(submitted.id, RECIPIENT_USER_ID);
-    expect(refunded.status).toBe("refunded");
+    // Not "refunded" — the provider only ACCEPTED the request; finality is webhook-driven.
+    expect(refunded.status).toBe("succeeded");
   });
 
   it("card replacement: after replacing the card, a new payment schedules successfully and the old card no longer counts as active", async () => {

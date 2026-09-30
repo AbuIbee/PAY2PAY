@@ -237,11 +237,12 @@ describe("PRSprint 20: concurrency and idempotency — genuine adversarial races
     await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
       signedWebhook({ providerEventId: "conc-evt-terminal-1", eventType: "payment.succeeded", providerPaymentId: payment.providerPaymentId }),
     );
+    // Refund-finality protection: the provider only ACCEPTED the request; the payment stays
+    // "succeeded" until an async refund webhook confirms it — not "refunded" here.
     const refunded = await ctx.paymentCtx.paymentService.refundPayment(payment.id, RECIPIENT_USER_ID);
-    expect(refunded.status).toBe("refunded");
+    expect(refunded.status).toBe("succeeded");
 
     await expect(ctx.paymentCtx.paymentService.cancelPayment(payment.id, PAYER_USER_ID)).rejects.toThrow(ValidationError);
-    await expect(ctx.paymentCtx.paymentService.refundPayment(payment.id, RECIPIENT_USER_ID)).rejects.toThrow(ValidationError);
   });
 
   it("11. duplicate ledger posting: two truly concurrent LedgerService.postPaymentCleared calls for the same payment_attempt post exactly one journal entry", async () => {

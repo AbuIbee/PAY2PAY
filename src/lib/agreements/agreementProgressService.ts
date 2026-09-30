@@ -98,7 +98,7 @@ export interface AgreementBalanceReader {
   getAgreementBalance(agreementId: string): Promise<{
     remainingBalanceMinorUnits: number;
     currency: string;
-    settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid";
+    settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid" | "settled_in_full";
   }>;
 }
 

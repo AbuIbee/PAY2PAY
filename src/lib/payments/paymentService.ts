@@ -1,6 +1,6 @@
 import "server-only";
 import type { AuditService } from "@/lib/audit/auditService";
-import { ConfigurationError, DependencyError, ForbiddenError, ValidationError } from "@/lib/errors";
+import { ConfigurationError, DependencyError, ForbiddenError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { getDailyAmountLimitMinorUnits, getDailyAttemptCountLimit, getMaxPaymentMinorUnits, getReviewThresholdMinorUnits, getRollingWindowMs, summarizeRecentActivity } from "./transactionLimits";
 import { logger } from "@/lib/logger";
@@ -24,7 +24,22 @@ export type PaymentAttemptStatus =
   | "submitted"
   | "processing"
   /** Sprint 11: a late ACH return — the correctly-named counterpart to "reversed" above. */
-  | "returned";
+  | "returned"
+  /**
+   * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): a previously-
+   * finalized "refunded" payment whose refund the provider later reverses. Deliberately its own
+   * distinct value, never a reuse of "succeeded" — see `enums.ts`'s identical doc comment for exactly
+   * why (avoiding a second success-effect pass for the same payment).
+   */
+  | "refund_reversed"
+  /**
+   * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): a previously-
+   * finalized "refunded" payment whose refund the provider's processor/bank later rejects (only ever
+   * after an earlier confirmed refund). Its own distinct value for the same reason as
+   * "refund_reversed" above, and kept separate FROM "refund_reversed" too (different real-world
+   * cause, same underlying ledger correction) — see `enums.ts`'s identical doc comment.
+   */
+  | "refund_failed";
 
 /**
  * R09 corrective pass (Codex blocker 4A — payment transition legality): the authoritative,
@@ -44,6 +59,21 @@ export const ALLOWED_SOURCE_STATUSES_FOR_DESTINATION: Readonly<Partial<Record<Pa
   disputed: ["succeeded"],
   reversed: ["succeeded"],
   canceled: ["pending", "scheduled"],
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): reachable ONLY from
+  // "refunded" — a refund must have actually finalized before it can be reversed. No status is ever a
+  // legal source FROM "refund_reversed" (matches "reversed"/"disputed"/"returned"'s own identical
+  // terminal shape) — a second reversal event (redelivery, or a genuinely distinct duplicate) finds
+  // the current status already "refund_reversed", which is not in this array, so the transition is
+  // correctly rejected as a permanent dead-end (see `isTransitionPermanentlyIllegal`) rather than
+  // reapplied.
+  refund_reversed: ["refunded"],
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): reachable ONLY from
+  // "refunded" — a refund must have actually finalized before the processor/bank can reject it. No
+  // status is ever a legal source FROM "refund_failed" (matches "refund_reversed"'s own identical
+  // terminal shape) — a duplicate/replayed failure event, or one arriving after a reversal (or vice
+  // versa) already applied, finds the current status no longer "refunded" and is correctly rejected
+  // rather than reapplied.
+  refund_failed: ["refunded"],
 };
 
 /**
@@ -252,6 +282,8 @@ export interface PaymentAttemptRepository {
   findByProviderPaymentId(providerPaymentId: string): Promise<PaymentAttemptRecord | null>;
   /** Sprint 10: recorded once, when LedgerService.postPayout succeeds — never any other way. */
   markPayoutCompleted(id: string, payoutCompletedAt: Date): Promise<PaymentAttemptRecord>;
+  /** PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-05/06): the inverse of markPayoutCompleted — called only by PayoutService.returnPayout, once a previously-confirmed payout is reversed, so this field never falsely indicates an active, completed payout after the fact. */
+  clearPayoutCompleted(id: string): Promise<PaymentAttemptRecord>;
   /** Sprint 11: recorded once payout is initiated, before it settles. */
   markPayoutInitiated(id: string, payoutInitiatedAt: Date): Promise<PaymentAttemptRecord>;
   /**
@@ -490,6 +522,21 @@ export class PaymentService {
        * notifications don't need to wire a fake.
        */
       notifications?: NotificationService;
+      /**
+       * Payment activation gate (SC-10). Required (not optional) — a mandatory security control with
+       * no legitimate "unwired" state, mirroring `PayoutService`'s identical
+       * `payoutProviderIntegrationVerified` precedent. Production (`getPaymentService.ts`) wires
+       * `getServerEnv().PAYMENT_INITIATION_VERIFIED`; `testFakes.ts` defaults it to `true` so every
+       * pre-existing test that exercises real payment creation is unaffected. Checked in
+       * `createPayment` AND, as the AUTHORITATIVE enforcement point regardless of caller, in
+       * `submitPending` — `submitPending` only ever runs against a row whose status is STILL
+       * `"scheduled"`, which structurally proves the provider has never seen it, so there is no
+       * legitimate replay/recovery case at that layer that would justify exempting it. Deliberately
+       * narrow: it gates only a genuinely NEW outbound payment submission — never webhook processing,
+       * refunds, cancellations, disputes, or reconciliation that creates no new debit; those remain
+       * fully functional regardless of this flag.
+       */
+      newPaymentInitiationVerified: boolean;
     },
   ) {}
 
@@ -509,6 +556,18 @@ export class PaymentService {
     /** R11: the ONLY sanctioned exemption from the linkage requirement above — see `SettlementContextVerifier`'s own doc comment. */
     settlementProposalId?: string | null;
   }): Promise<PaymentAttemptRecord> {
+    // Payment activation gate (SC-10). Checked FIRST, before `reserveAttempt` ever writes a
+    // payment_attempt row — a blocked call produces ZERO mutation, never a reserved-then-abandoned
+    // row. This is the genuinely-NEW-payment entry point: a brand-new payment_attempt that has never
+    // existed before, submitted to the provider immediately. `submitPending` (the shared path every
+    // scheduled-payment submission and retry dispatch routes through) carries its OWN, independent
+    // copy of this exact check — see that method's own doc comment for why it is the authoritative
+    // enforcement point regardless of caller.
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires PAYMENT_INITIATION_VERIFIED=true — provider registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See PAYMENT_INITIATION_VERIFIED's own doc comment in src/config/env.ts.",
+      );
+    }
     const reserved = await this.reserveAttempt(input);
     if (reserved.alreadyResolved) return reserved.record;
     return this.submitToProvider(reserved.record, input);
@@ -577,6 +636,19 @@ export class PaymentService {
     const record = await this.getAuthorizedRecord(id, actingUserId, "payer_only");
     if (record.status !== "scheduled") {
       throw new ValidationError("Only a scheduled payment can be submitted.");
+    }
+    // Payment activation gate (SC-10) — the AUTHORITATIVE enforcement point for this flag: checked
+    // here, not merely in each orchestration-layer caller (AchPaymentService/DebitCardPaymentService's
+    // own identical checks are defense-in-depth, not the only line of defense). `submitPending` is a
+    // PUBLIC method: `record.status === "scheduled"` at this point structurally proves the provider
+    // has NEVER seen this payment_attempt (a payment can never return to "scheduled" once it leaves
+    // it), so this is unconditionally a genuinely NEW debit, never a replay — checked before
+    // `updateStatus` ever transitions the row, so a blocked call produces ZERO mutation, not even the
+    // "submitted" status write.
+    if (!this.deps.newPaymentInitiationVerified) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires PAYMENT_INITIATION_VERIFIED=true — provider registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See PAYMENT_INITIATION_VERIFIED's own doc comment in src/config/env.ts.",
+      );
     }
     const submitted = await this.deps.payments.updateStatus(record.id, "submitted", {});
     return this.submitToProvider(submitted, {
@@ -914,16 +986,27 @@ export class PaymentService {
     }
     // Sprint 11: a "scheduled" payment was never submitted to the provider (docs/PAYMENT_STATE_MACHINE.md
     // §1: "Scheduled → Canceled: superseded by manual payment before retry fires") — there is
-    // nothing for the provider to cancel, so this is a local-only transition.
-    if (record.status !== "scheduled") {
-      const result = await this.deps.provider.cancelPayment(record.providerPaymentId ?? "");
-      if (!result.canceled) {
-        throw new ValidationError("The payment provider did not permit cancellation.");
-      }
+    // nothing for the provider to cancel, so this remains a local-only, immediately-final transition.
+    if (record.status === "scheduled") {
+      const updated = await this.deps.payments.updateStatus(record.id, "canceled", {});
+      await this.recordAudit(updated, "payment_canceled", actingUserId, null, null);
+      return updated;
     }
-    const updated = await this.deps.payments.updateStatus(record.id, "canceled", {});
-    await this.recordAudit(updated, "payment_canceled", actingUserId, null, null);
-    return updated;
+    // Cancellation-finality protection: a "pending" payment WAS submitted to the provider —
+    // `provider.cancelPayment()` returning `canceled: true` means only that the CANCELLATION REQUEST
+    // was accepted by the provider, never that it is confirmed. Finalizing to "canceled" on that
+    // acceptance alone is a premature-advancement defect: the payment stays "pending" until the
+    // asynchronous cancellation webhook (`PaymentWebhookService`, `"payment.canceled" -> "canceled"`)
+    // actually confirms it — a cancellation webhook reporting failure correctly leaves it "pending"
+    // too (nothing was ever prematurely advanced to revert). `result.canceled === false` here (the
+    // provider definitively refused the request itself) still throws immediately, unchanged — that IS
+    // a genuine, definite, synchronous outcome, not an async confirmation.
+    const result = await this.deps.provider.cancelPayment(record.providerPaymentId ?? "");
+    if (!result.canceled) {
+      throw new ValidationError("The payment provider did not permit cancellation.");
+    }
+    await this.recordAudit(record, "payment_cancellation_requested", actingUserId, null, null);
+    return record;
   }
 
   async refundPayment(id: string, actingUserId: string): Promise<PaymentAttemptRecord> {
@@ -934,10 +1017,15 @@ export class PaymentService {
     if (!record.providerPaymentId) {
       throw new ConfigurationError("A succeeded payment is missing its provider payment id.");
     }
+    // Refund-finality protection: mirrors cancelPayment's identical rationale above —
+    // `provider.refundPayment()` resolving means only that the provider ACCEPTED the refund request,
+    // never that it is confirmed. The payment stays "succeeded" until the asynchronous refund webhook
+    // (`PaymentWebhookService`, `"payment.refunded" -> "refunded"`) actually confirms it; a later
+    // refund-failure webhook then correctly finds nothing to revert (never prematurely advanced in the
+    // first place), instead of needing to undo a wrongly-finalized "refunded" status.
     await this.deps.provider.refundPayment(record.providerPaymentId);
-    const updated = await this.deps.payments.updateStatus(record.id, "refunded", {});
-    await this.recordAudit(updated, "payment_refunded", actingUserId, null, null);
-    return updated;
+    await this.recordAudit(record, "payment_refund_requested", actingUserId, null, null);
+    return record;
   }
 
   /**

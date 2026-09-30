@@ -29,6 +29,8 @@ function baseEnv(overrides: Partial<ServerEnv> = {}): ServerEnv {
     TWILIO_MESSAGING_SERVICE_SID: undefined,
     TWILIO_FROM_NUMBER: undefined,
     SMS_DELIVERY_ENABLED: true,
+    PAYMENT_INITIATION_VERIFIED: true,
+    PAYOUT_PROVIDER_INTEGRATION_VERIFIED: true,
     ...overrides,
   };
 }
@@ -77,24 +79,29 @@ describe("computeEnvironmentStatus", () => {
     expect(computeEnvironmentStatus(baseEnv({ CRON_SECRET: "c".repeat(20) })).scheduledJobs).toBe("configured");
   });
 
-  it("always reports payment/KYC providers as sandbox, regardless of APP_ENV — this codebase has no live adapter for either of them yet", () => {
+  it("always reports payment/KYC/card-issuing providers as unavailable, regardless of APP_ENV — the live capability registry is empty until a real adapter is approved (SC-01)", () => {
     for (const appEnv of ["development", "test", "staging", "production"] as const) {
-      const status = computeEnvironmentStatus(baseEnv({ APP_ENV: appEnv }));
-      expect(status.paymentProvider).toBe("sandbox_mock");
-      expect(status.paymentProviderEnvironment).toBe("sandbox");
-      expect(status.kycProvider).toBe("sandbox_kyc_mock");
-      expect(status.kycProviderEnvironment).toBe("sandbox");
+      const status = computeEnvironmentStatus(baseEnv({ APP_ENV: appEnv, PAYMENT_PROVIDER: "sandbox", KYC_PROVIDER: "sandbox", CARD_ISSUING_PROVIDER: "sandbox" }));
+      expect(status.paymentProviderEnvironment).toBe("unavailable");
+      expect(status.kycProviderEnvironment).toBe("unavailable");
+      expect(status.cardIssuingProviderEnvironment).toBe("unavailable");
     }
   });
 
   it(
-    "PRSprint 21 (docs/prsprints/PRSPRINT_21_PRODUCTION_FINANCIAL_PROVIDER_ARCHITECTURE.md): reads the " +
-      "selected provider from PAYMENT_PROVIDER/KYC_PROVIDER, the same input the real factories read — " +
-      "this view can never silently drift from what getPaymentProvider()/getKycProvider() actually do",
+    "reads the selected provider name verbatim from PAYMENT_PROVIDER/KYC_PROVIDER/CARD_ISSUING_PROVIDER, the same " +
+      "input the real factories read — this view can never silently drift from what getPaymentProvider()/getKycProvider()/" +
+      "getCardIssuingProvider() actually do, and never fabricates a provider name that isn't actually configured",
     () => {
-      const status = computeEnvironmentStatus(baseEnv({ PAYMENT_PROVIDER: "sandbox", KYC_PROVIDER: "sandbox" }));
-      expect(status.paymentProvider).toBe("sandbox_mock");
-      expect(status.kycProvider).toBe("sandbox_kyc_mock");
+      const status = computeEnvironmentStatus(
+        baseEnv({ PAYMENT_PROVIDER: "some_future_provider", KYC_PROVIDER: "some_future_provider", CARD_ISSUING_PROVIDER: undefined }),
+      );
+      expect(status.paymentProvider).toBe("some_future_provider");
+      expect(status.kycProvider).toBe("some_future_provider");
+      expect(status.cardIssuingProvider).toBeNull();
+      // An unregistered name still resolves to "unavailable" — never assumed live just because it's non-empty.
+      expect(status.paymentProviderEnvironment).toBe("unavailable");
+      expect(status.kycProviderEnvironment).toBe("unavailable");
     },
   );
 

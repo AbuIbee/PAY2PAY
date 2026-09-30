@@ -4,7 +4,7 @@ This is an independent greenfield project.
 
 Authorized project root:
 
-C:\Users\solod\Desktop\PAY2PAY
+C:\Development\PAY2PAY-bank-v3
 
 The canonical product specification is:
 
@@ -27,7 +27,7 @@ For every task:
 
 Claude may only access paths underneath:
 
-C:\Users\solod\Desktop\PAY2PAY
+C:\Development\PAY2PAY-bank-v3
 
 Claude must not read, inspect, list, stat, search, compare, modify, or reference files outside that directory, even for diagnostics, dependency investigation, Git checks, package-manager warnings, environment discovery, or security verification.
 

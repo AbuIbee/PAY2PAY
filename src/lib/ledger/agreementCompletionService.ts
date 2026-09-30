@@ -20,7 +20,7 @@ import { computeAgreementCompletionEvidenceWithinTx } from "./agreementCompletio
 export interface AgreementBalanceComputer {
   getAgreementBalance(
     agreementId: string,
-  ): Promise<{ settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid"; amountPaidMinorUnits: number }>;
+  ): Promise<{ settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid" | "settled_in_full"; amountPaidMinorUnits: number }>;
 }
 
 /**
@@ -180,7 +180,7 @@ export class AgreementCompletionService {
       return;
     }
 
-    let balance: { settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid"; amountPaidMinorUnits: number };
+    let balance: { settlementState: "unpaid" | "partially_paid" | "paid_in_full" | "overpaid" | "settled_in_full"; amountPaidMinorUnits: number };
     try {
       balance = await this.deps.balances.getAgreementBalance(agreementId);
     } catch (error) {

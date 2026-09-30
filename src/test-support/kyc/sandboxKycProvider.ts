@@ -10,7 +10,7 @@ import type {
   SubmitBusinessVerificationInput,
   SubmitIndividualVerificationInput,
   SubmitVerificationResult,
-} from "./kycProvider";
+} from "@/lib/kyc/kycProvider";
 
 /**
  * Sprint 9's sandbox/mock KYC/KYB provider — NOT a real Persona/Onfido/Stripe-Identity sandbox

@@ -146,7 +146,15 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
     expect(reversalEntry).not.toBeNull();
   });
 
-  it("posts a payout entry and marks payoutCompletedAt on payout.paid", async () => {
+  // REM-013 correction: this test previously asserted that a bare "payout.paid" webhook event alone
+  // completes a payout (marks payoutCompletedAt, posts a ledger "payout" entry) with no live payout
+  // provider ever having been called and no transfer reference of any kind — exactly the "fictional
+  // payout" defect the payout-lifecycle rewrite (PayoutService/payout_attempt) eliminated. No real
+  // PaymentProvider.parseWebhookEvent implementation has ever mapped any real event to "payout.paid";
+  // it is now handled exactly like any other unrecognized event type — a safe no-op, never a
+  // completion. Real payout completion is exclusively PayoutService.confirmPayout's concern (see that
+  // class's own test suite) and is never reachable from PaymentWebhookService at all.
+  it("treats a bare payout.paid webhook event as a safe no-op — never fabricates payout completion from webhook arrival alone", async () => {
     const agreementId = "agreement-6";
     const payment = await createPayment("k6", agreementId, 4_000);
     await ctx.webhookCtx.paymentWebhookService.receiveWebhook(
@@ -157,9 +165,9 @@ describe("Payment webhook -> ledger integration (Sprint 10)", () => {
     );
 
     const updated = await ctx.paymentCtx.payments.findById(payment.id);
-    expect(updated?.payoutCompletedAt).not.toBeNull();
+    expect(updated?.payoutCompletedAt).toBeNull();
     const payoutEntry = await ctx.ledgerCtx.ledgerService.findEntry(payment.id, "payout");
-    expect(payoutEntry).not.toBeNull();
+    expect(payoutEntry).toBeNull();
   });
 
   // PACKAGE B — FINAL NARROW CORRECTION (Codex blocker A): a provider-routed payment can no longer be

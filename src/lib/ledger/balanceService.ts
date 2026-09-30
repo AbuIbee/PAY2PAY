@@ -2,7 +2,7 @@ import "server-only";
 import { ValidationError } from "@/lib/errors";
 import type { LedgerJournalEntryRecord, LedgerService } from "./ledgerService";
 
-export type SettlementState = "unpaid" | "partially_paid" | "paid_in_full" | "overpaid";
+export type SettlementState = "unpaid" | "partially_paid" | "paid_in_full" | "overpaid" | "settled_in_full";
 
 export interface AgreementBalance {
   agreementId: string;
@@ -10,6 +10,7 @@ export interface AgreementBalance {
   originalPrincipalMinorUnits: number;
   amountPaidMinorUnits: number;
   reversedMinorUnits: number;
+  effectiveForgivenMinorUnits: number;
   remainingBalanceMinorUnits: number;
   settlementState: SettlementState;
 }
@@ -24,6 +25,42 @@ export interface AgreementTermsReader {
 }
 
 /**
+ * Stage 4 (docs/remediation/ — settlement-balance defect remediation, corrected pass): the exact
+ * binding consequence a settlement has on an agreement's remaining obligation. `BalanceService`
+ * always establishes economically effective paid/reversed amount from the ledger FIRST, then applies
+ * exactly one of these — never both, never neither when one legitimately applies:
+ *
+ * - `"none"` — no settlement exists, or the only settlement(s) are still `proposed`/`awaiting_payment`/
+ *   `rejected` (SET-FINAL-04), or a `failure_consequence_applied` settlement whose own persisted
+ *   consequence is `restore_original`/`prior_agreement_controls` (both already correct from the
+ *   ordinary ledger-only calculation — see the reader's own implementation for the proof).
+ * - `"forgiveness"` — either a `completed` settlement's own `forgivenAmountMinorUnits` (SET-FINAL-01),
+ *   or a `failure_consequence_applied` settlement whose persisted `resolvedConsequence` is
+ *   `forgive_permanently`, using its own `resolvedForgivenAmountMinorUnits` (SET-FINAL-02). Reduces
+ *   `remainingBalanceMinorUnits`; never increases `amountPaidMinorUnits` (forgiveness is not a
+ *   payment).
+ * - `"restoredBalance"` — a `failure_consequence_applied` settlement whose persisted
+ *   `resolvedConsequence` is `restore_stated`, using its own `resolvedRestoredBalanceMinorUnits`
+ *   directly as the authoritative remaining obligation (SET-FINAL-03) — an override, not an
+ *   arithmetic adjustment, since that stated figure need not decompose as principal-minus-anything.
+ */
+export type SettlementBalanceResolution =
+  | { kind: "none" }
+  | { kind: "forgiveness"; effectiveForgivenMinorUnits: number }
+  | { kind: "restoredBalance"; restoredRemainingBalanceMinorUnits: number };
+
+/**
+ * The ONE authoritative source `BalanceService` consults for a settlement's binding effect on an
+ * agreement's obligation — never a second, duplicated settlement-outcome figure. Real implementation
+ * (`DrizzleSettlementBalanceReader`) reads directly from the same `settlement_proposal` table
+ * `DrizzleSettlementRepository` already writes; see that class's own doc comment for the exact
+ * precedence it applies among an agreement's settlement proposals.
+ */
+export interface SettlementBalanceReader {
+  getSettlementBalanceResolution(agreementId: string): Promise<SettlementBalanceResolution>;
+}
+
+/**
  * Sprint 10 (docs/sprints/SPRINT_10_InternalFinancialLedger.md) requirement #15: deterministic
  * balance reconstruction, entirely from Sprint 5's read-only principal plus `LedgerService`'s
  * journal history — never from a mutable cached balance field (none exists anywhere in this
@@ -31,7 +68,9 @@ export interface AgreementTermsReader {
  * `reconstruct`'s doc comment.
  */
 export class BalanceService {
-  constructor(private readonly deps: { ledger: LedgerService; terms: AgreementTermsReader }) {}
+  constructor(
+    private readonly deps: { ledger: LedgerService; terms: AgreementTermsReader; settlementBalance?: SettlementBalanceReader },
+  ) {}
 
   async getAgreementBalance(agreementId: string): Promise<AgreementBalance> {
     const termsInfo = await this.deps.terms.getPrincipal(agreementId);
@@ -41,13 +80,37 @@ export class BalanceService {
 
     const entries = await this.deps.ledger.listEntriesForAgreement(agreementId);
     const { amountPaidMinorUnits, reversedMinorUnits } = this.reconstruct(entries);
-    const remainingBalanceMinorUnits = termsInfo.principalMinorUnits - amountPaidMinorUnits;
+    // Ledger-derived paid/reversed amounts are established FIRST, unconditionally — the settlement
+    // resolution below only ever adjusts (forgiveness) or overrides (restoredBalance) the REMAINING
+    // figure computed from them; `amountPaidMinorUnits` itself is never touched by any settlement
+    // outcome (real cash paid only — see `SettlementBalanceResolution`'s own doc comment).
+    const resolution: SettlementBalanceResolution = (await this.deps.settlementBalance?.getSettlementBalanceResolution(agreementId)) ?? { kind: "none" };
 
+    let effectiveForgivenMinorUnits = 0;
+    let remainingBalanceMinorUnits: number;
     let settlementState: SettlementState;
-    if (amountPaidMinorUnits <= 0) settlementState = "unpaid";
-    else if (amountPaidMinorUnits < termsInfo.principalMinorUnits) settlementState = "partially_paid";
-    else if (amountPaidMinorUnits === termsInfo.principalMinorUnits) settlementState = "paid_in_full";
-    else settlementState = "overpaid";
+
+    if (resolution.kind === "restoredBalance") {
+      // An authoritative override, not an arithmetic adjustment — SET-FINAL-03's own requirement.
+      const restored = resolution.restoredRemainingBalanceMinorUnits;
+      remainingBalanceMinorUnits = Math.max(0, restored);
+      settlementState = restored > 0 ? (amountPaidMinorUnits <= 0 ? "unpaid" : "partially_paid") : "paid_in_full";
+    } else {
+      effectiveForgivenMinorUnits = resolution.kind === "forgiveness" ? resolution.effectiveForgivenMinorUnits : 0;
+      // Stage 4: forgiveness is a distinct, non-negative reduction of the obligation, never a payment.
+      // Only when forgiveness actually applies (effectiveForgivenMinorUnits > 0) is the remaining
+      // balance floored at zero: an ordinary non-settlement agreement's remaining balance is left
+      // exactly as before (still able to go negative to represent an overpayment — see
+      // balanceService.test.ts's "'overpaid'" case), so this cannot regress any pre-existing,
+      // non-settlement balance calculation.
+      const rawRemainingBalanceMinorUnits = termsInfo.principalMinorUnits - amountPaidMinorUnits - effectiveForgivenMinorUnits;
+      remainingBalanceMinorUnits = effectiveForgivenMinorUnits > 0 ? Math.max(0, rawRemainingBalanceMinorUnits) : rawRemainingBalanceMinorUnits;
+
+      if (rawRemainingBalanceMinorUnits > 0) settlementState = amountPaidMinorUnits <= 0 ? "unpaid" : "partially_paid";
+      else if (effectiveForgivenMinorUnits > 0) settlementState = "settled_in_full";
+      else if (amountPaidMinorUnits === termsInfo.principalMinorUnits) settlementState = "paid_in_full";
+      else settlementState = "overpaid";
+    }
 
     return {
       agreementId,
@@ -55,6 +118,7 @@ export class BalanceService {
       originalPrincipalMinorUnits: termsInfo.principalMinorUnits,
       amountPaidMinorUnits,
       reversedMinorUnits,
+      effectiveForgivenMinorUnits,
       remainingBalanceMinorUnits,
       settlementState,
     };
@@ -119,9 +183,17 @@ export function classifyPaymentAttempts(
     if (!clearEntry) continue;
     const grossLeg = clearEntry.postings.find((p) => p.accountType === "processor_clearing" && p.direction === "debit");
     if (!grossLeg) continue;
-    const wasReversed = paymentEntries.some(
-      (e) => e.entryType === "refund" || e.entryType === "reversal" || e.entryType === "dispute_adjustment",
-    );
+    // Stage 4 (FI-01/FI-04 remediation): `LedgerService.correctRefund` posts `refund_correction`
+    // ONLY to undo an existing `refund` entry (it targets `findByPaymentAndType(..., "refund")`
+    // specifically — never `reversal`/`dispute_adjustment`) — see that method's own doc comment. So a
+    // `refund` paired with its own `refund_correction` means the refund was economically undone: the
+    // payment is once again "paid", not "reversed". `reversal`/`dispute_adjustment` are always full
+    // reversals regardless of any `refund_correction` presence, since current ledger semantics never
+    // link a correction to either of them. Neither the original `refund` row nor the
+    // `refund_correction` row is erased or reinterpreted here — both remain in ledger history exactly
+    // as posted; only this economic classification changes.
+    const hasUncorrectedRefund = paymentEntries.some((e) => e.entryType === "refund") && !paymentEntries.some((e) => e.entryType === "refund_correction");
+    const wasReversed = hasUncorrectedRefund || paymentEntries.some((e) => e.entryType === "reversal" || e.entryType === "dispute_adjustment");
     result.set(paymentAttemptId, { outcome: wasReversed ? "reversed" : "paid", grossAmountMinorUnits: grossLeg.amountMinorUnits });
   }
   return result;

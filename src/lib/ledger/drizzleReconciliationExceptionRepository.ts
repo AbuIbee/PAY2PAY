@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { getDb, type Database } from "@/db/client";
 import { reconciliationException } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
@@ -139,6 +139,41 @@ export class DrizzleReconciliationExceptionRepository implements ReconciliationE
         .returning();
       await hooks.afterInsertBeforeCommit!();
       return rows[0] ? toRecord(rows[0]) : null;
+    });
+  }
+
+  /**
+   * Stage 4 financial-accounting remediation — see `ReconciliationExceptionRepository.
+   * recordExceptionAtomically`'s own doc comment for why this exists (the partial unique index
+   * `ensureOpenException` relies on cannot protect a null-containing identity, and REC-02
+   * (`reconciliationDrift.postgres.test.ts`) demonstrated two genuinely concurrent
+   * `ReconciliationService.reconcilePaymentAttempt` calls for the same drift previously produced two
+   * open exceptions). `pg_advisory_xact_lock(hashtext($1), hashtext($2))` — the exact same primitive
+   * `test/postgres/lockBarrier.ts`'s `acquireAdvisoryLockBarrier` and the audit hash-chain's own
+   * serializing lock already use elsewhere in this codebase — makes the check-then-insert sequence
+   * below atomic across any number of concurrent callers, entirely at the application level, with no
+   * schema change. Released automatically when the transaction commits or rolls back.
+   */
+  async recordExceptionAtomically(input: {
+    exceptionType: ReconciliationExceptionType;
+    paymentAttemptId: string | null;
+    providerEventId: string | null;
+    details: unknown;
+  }): Promise<ReconciliationExceptionRecord> {
+    const db = this.injectedDb;
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.exceptionType}), hashtext(${`${input.paymentAttemptId ?? ""}|${input.providerEventId ?? ""}`}))`);
+      const identityMatch: SQL = and(
+        eq(reconciliationException.exceptionType, input.exceptionType),
+        eq(reconciliationException.status, "open"),
+        input.paymentAttemptId ? eq(reconciliationException.paymentAttemptId, input.paymentAttemptId) : isNull(reconciliationException.paymentAttemptId),
+        input.providerEventId ? eq(reconciliationException.providerEventId, input.providerEventId) : isNull(reconciliationException.providerEventId),
+      )!;
+      const existingRows = await tx.select().from(reconciliationException).where(identityMatch).limit(1);
+      if (existingRows[0]) return toRecord(existingRows[0]);
+      const [row] = await tx.insert(reconciliationException).values(input).returning();
+      if (!row) throw new ConfigurationError("reconciliation_exception insert returned no row");
+      return toRecord(row);
     });
   }
 

@@ -39,7 +39,7 @@ import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAt
 import { DrizzlePaymentWebhookEventRepository } from "@/lib/payments/drizzlePaymentWebhookEventRepository";
 import { DrizzlePaymentInitiationEligibilityService } from "@/lib/payments/paymentInitiationEligibilityService";
 import { DrizzleSettlementContextVerifier } from "@/lib/payments/drizzleSettlementContextVerifier";
-import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 import { DrizzlePaymentTransitionCoordinator } from "@/lib/payments/paymentTransitionCoordinator";
 import { PaymentService, type ManualPaymentInstallmentHook, type PaymentAttemptRecord } from "@/lib/payments/paymentService";
 import { PaymentWebhookService } from "@/lib/payments/paymentWebhookService";
@@ -172,6 +172,7 @@ function buildContextForLinkageTests(overrides?: {
     scheduleReader: new DrizzleAgreementScheduleReader(),
     settlementContext: new DrizzleSettlementContextVerifier(),
     installmentHook: overrides?.installmentHook,
+    newPaymentInitiationVerified: true,
   });
   return { verificationCtx, paymentService, payments, ledger };
 }
@@ -187,7 +188,7 @@ function buildContextForLinkageTests(overrides?: {
  * .handlePaymentSucceeded`'s own body) — stubbed-and-throwing here, never expected to actually run.
  */
 function buildRealInstallmentHook(): ManualPaymentInstallmentHook {
-  const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator();
+  const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, true);
   const unusedDep = new Proxy(
     {},
     {
@@ -235,6 +236,7 @@ function buildAchPaymentServiceForTest(paymentService: PaymentService): AchPayme
     mandates: mandateStub,
     payments: paymentService,
     paymentAttempts: new DrizzlePaymentAttemptRepository(),
+    newPaymentInitiationVerified: true,
   });
 }
 
@@ -1090,7 +1092,7 @@ describe("R11 TARGETED PROVIDER-RESERVATION CORRECTION — R18-R28 (real Postgre
     });
     await ctx.payments.updateStatus(original.id, "failed", {});
 
-    const coordinator = new DrizzleFailedPaymentRetryCoordinator();
+    const coordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, true);
     const failure = await coordinator.coordinateFailure({ installmentScheduleItemId, payment: await ctx.payments.findById(original.id).then((p) => p!) });
     if (failure.outcome !== "retry_scheduled") throw new Error("expected a retry to be scheduled");
 
@@ -1545,7 +1547,7 @@ describe("R11 TARGETED PROVIDER-RESERVATION CORRECTION — R18-R28 (real Postgre
       });
       await seedVerifiedParties(ctxManual, debtor.profileId, debtor.userId, creditor.profileId, creditor.userId);
 
-      const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(isolatedCoordinator.db);
+      const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(isolatedCoordinator.db, undefined, undefined, undefined, undefined, undefined, true);
 
       const manualPromise = ctxManual.paymentService
         .recordManualOffPlatformPayment({
@@ -1637,7 +1639,7 @@ describe("R11 TARGETED PROVIDER-RESERVATION CORRECTION — R18-R28 (real Postgre
       await seedVerifiedParty(ctxProvider.verificationCtx, "personal", debtor.profileId, debtor.userId);
       await seedVerifiedParty(ctxProvider.verificationCtx, "personal", creditor.profileId, creditor.userId);
 
-      const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(isolatedCoordinator.db);
+      const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(isolatedCoordinator.db, undefined, undefined, undefined, undefined, undefined, true);
 
       const providerPromise = ctxProvider.paymentService
         .createPayment({
@@ -2169,7 +2171,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
     });
     const db = getDb();
     await db.update(paymentAttempt).set({ status: "failed" }).where(eq(paymentAttempt.id, failing.id));
-    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator();
+    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, true);
     const failure = await retryCoordinator.coordinateFailure({ installmentScheduleItemId, payment: await ctx.payments.findById(failing.id).then((p) => p!) });
     if (failure.outcome !== "retry_scheduled") throw new Error("expected a retry to be scheduled");
 
@@ -2282,7 +2284,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
     });
     await payments.updateStatus(original.id, "failed", {});
 
-    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator();
+    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, true);
     const result = await retryCoordinator.coordinateFailure({ installmentScheduleItemId, payment: await payments.findById(original.id).then((p) => p!) });
     expect(result.outcome).toBe("already_settled"); // never "retry_scheduled" — a failure has no basis to reopen "paid".
 
@@ -2317,7 +2319,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
     });
     await payments.updateStatus(original.id, "failed", {});
 
-    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator();
+    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, true);
     const result = await retryCoordinator.coordinateFailure({ installmentScheduleItemId, payment: await payments.findById(original.id).then((p) => p!) });
     expect(result.outcome).toBe("already_settled");
 
@@ -2351,7 +2353,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
     });
     await payments.updateStatus(original.id, "failed", {});
 
-    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator();
+    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, true);
     const result = await retryCoordinator.coordinateFailure({ installmentScheduleItemId, payment: await payments.findById(original.id).then((p) => p!) });
     expect(result.outcome).toBe("retry_scheduled");
     if (result.outcome !== "retry_scheduled") throw new Error("unreachable — asserted above");
@@ -2384,7 +2386,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
     // A REAL reduction: the cleared payment is genuinely reversed.
     await ctx.ledger.reversePayment({ paymentAttemptId: paid.id, entryType: "reversal", reason: "b1f9 test reversal" });
 
-    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator();
+    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, true);
     const supersession = await retryCoordinator.coordinateSupersession({
       installmentScheduleItemId,
       payment: await ctx.payments.findById(paid.id).then((p) => p!),
@@ -2418,7 +2420,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
       paymentMethod: "ach",
     });
     await payments.updateStatus(original.id, "failed", {});
-    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator();
+    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, undefined, true);
     const failure = await retryCoordinator.coordinateFailure({ installmentScheduleItemId, payment: await payments.findById(original.id).then((p) => p!) });
     if (failure.outcome !== "retry_scheduled") throw new Error("expected a retry to be scheduled");
 
@@ -2574,6 +2576,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
       installmentReserver: new DrizzleInstallmentAwarePaymentReserver(),
       scheduleReader: new DrizzleAgreementScheduleReader(),
       settlementContext: new DrizzleSettlementContextVerifier(),
+      newPaymentInitiationVerified: true,
     });
     const achPaymentService = buildAchPaymentServiceForTest(paymentService);
 
@@ -2583,7 +2586,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
     // R11 PASS B1 — FINAL LIFECYCLE CLOSURE (Defect 1B): wired here (not left default/undefined) so
     // this SAME context's own real retry coordination exercises the legacy-lineage repair path for
     // real — see `DrizzleFailedPaymentRetryCoordinator.repairLegacyLineageAndApply`'s own doc comment.
-    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, autoApplication);
+    const retryCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, autoApplication, true);
     // `handlePaymentFailed`/`handlePaymentSucceeded` never touch `installments`/`retries` once a
     // coordinator is wired (see FailedPaymentWorkflowService's own doc comment) — stubbed-and-throwing,
     // never expected to actually run. `notifyBothParties` (reached from `handlePaymentFailed` even
@@ -2630,7 +2633,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
       });
     }
 
-    const eligibility = new DrizzlePaymentInitiationEligibilityService({ verification: verificationCtx.verificationService, payments });
+    const eligibility = new DrizzlePaymentInitiationEligibilityService({ verification: verificationCtx.verificationService, payments, newPaymentInitiationVerified: true });
 
     function buildRetryService(overrides: Partial<ConstructorParameters<typeof PaymentRetryService>[0]> = {}) {
       return new PaymentRetryService({
@@ -3120,7 +3123,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
         const reloaded = await ctx.partialPaymentService.getPartialPaymentRequest(accepted.id, debtor.userId);
         appliedDuringWindow = reloaded.status;
       },
-    });
+    }, undefined, undefined, true);
     const retryService = ctx.buildRetryService({ retryCoordinator: earlyWebhookCoordinator });
     const fireResult = await retryService.fireDueRetries(new Date());
     expect(fireResult.fired).toBe(1);
@@ -4279,7 +4282,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
         return ctx.autoApplication.applyClearedPayment(paymentAttemptId);
       },
     };
-    const flakyCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, flakyAutoApp);
+    const flakyCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, flakyAutoApp, true);
 
     const firstPass = await flakyCoordinator.repairLegacyRetryLineage();
     expect(firstPass.scanned).toBeGreaterThanOrEqual(1);
@@ -4857,7 +4860,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
         return ctx.autoApplication.applyClearedPayment(paymentAttemptId);
       },
     };
-    const flakyCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, flakyAutoApp);
+    const flakyCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, flakyAutoApp, true);
     const flakyReconciliation = new ReconciliationService({
       payments: ctx.payments,
       webhookEvents: ctx.events,
@@ -4939,7 +4942,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
       return new Error("simulated required-audit-write failure");
     });
     const flakyAutoApp = new PartialPaymentAutoApplicationService({ requests: ctx.requests, payments: ctx.payments, retries: ctx.retries, ledger: ctx.ledger, audit: flakyAudit });
-    const flakyCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, flakyAutoApp);
+    const flakyCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, flakyAutoApp, true);
 
     const firstPass = await flakyCoordinator.repairLegacyRetryLineage();
     expect(firstPass.scanned).toBeGreaterThanOrEqual(1);
@@ -5003,8 +5006,8 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
     const isolatedA = createIsolatedDb(DATABASE_URL);
     const isolatedB = createIsolatedDb(DATABASE_URL);
     try {
-      const coordinatorA = new DrizzleFailedPaymentRetryCoordinator(isolatedA.db, undefined, undefined, undefined, undefined, ctx.autoApplication);
-      const coordinatorB = new DrizzleFailedPaymentRetryCoordinator(isolatedB.db, undefined, undefined, undefined, undefined, ctx.autoApplication);
+      const coordinatorA = new DrizzleFailedPaymentRetryCoordinator(isolatedA.db, undefined, undefined, undefined, undefined, ctx.autoApplication, true);
+      const coordinatorB = new DrizzleFailedPaymentRetryCoordinator(isolatedB.db, undefined, undefined, undefined, undefined, ctx.autoApplication, true);
 
       const [resultA, resultB] = await Promise.all([coordinatorA.repairLegacyRetryLineage(), coordinatorB.repairLegacyRetryLineage()]);
       expect(resultA.scanned).toBeGreaterThanOrEqual(1);
@@ -5263,7 +5266,7 @@ describe("R11 PASS B1 — payment flow integration (real Postgres)", () => {
         throw new Error("simulated transient legacy repair failure");
       },
     };
-    const flakyCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, flakyAutoApp);
+    const flakyCoordinator = new DrizzleFailedPaymentRetryCoordinator(undefined, undefined, undefined, undefined, undefined, flakyAutoApp, true);
     await flakyCoordinator.repairLegacyRetryLineage();
 
     const afterFailure = await ctx.retries.findById(retryRow!.id);

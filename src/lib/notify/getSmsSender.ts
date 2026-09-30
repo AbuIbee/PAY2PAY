@@ -29,7 +29,7 @@ export function getSmsSender(): SmsSender {
             fromNumber: env.TWILIO_FROM_NUMBER ?? null,
             statusCallbackUrl: `${env.APP_URL}/api/webhooks/sms/twilio/status`,
           })
-        : new ConsoleSmsSender();
+        : new ConsoleSmsSender({ failClosed: env.APP_ENV === "production" });
   }
   return cached;
 }

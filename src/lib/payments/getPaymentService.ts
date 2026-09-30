@@ -1,4 +1,5 @@
 import "server-only";
+import { getServerEnv } from "@/config/env";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getFailedPaymentWorkflowService } from "@/lib/failedPayments/getFailedPaymentWorkflowService";
@@ -51,8 +52,14 @@ let cached: PaymentService | null = null;
  */
 export function getPaymentService(): PaymentService {
   if (!cached) {
+    const env = getServerEnv();
     cached = new PaymentService({
-      provider: getPaymentProvider(),
+      get provider() {
+  return getPaymentProvider()},
+      // Payment activation gate (SC-10): see PaymentService.createPayment's own doc comment for
+      // exactly what this gates (new payment initiation only) and what it deliberately does not
+      // (submitPending/submitToProvider, shared with retry/manual-payment recovery).
+      newPaymentInitiationVerified: env.PAYMENT_INITIATION_VERIFIED,
       verification: getVerificationService(),
       profileOwners: new DrizzleProfileOwnerReader(),
       payments: new DrizzlePaymentAttemptRepository(),

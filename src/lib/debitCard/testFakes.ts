@@ -149,6 +149,8 @@ export function createTestDebitCardServices() {
     payments: paymentCtx.paymentService,
     paymentAttempts: paymentCtx.payments,
     feeAllocation,
+    // Payment activation gate (SC-10): defaults to true so every pre-existing test exercising real submission is unaffected — mirrors PaymentService's own testFakes.ts precedent.
+    newPaymentInitiationVerified: true,
   });
   return { paymentCtx, cards, agreements, feeAllocation, auditRepo, debitCardMethodService, debitCardPaymentService };
 }

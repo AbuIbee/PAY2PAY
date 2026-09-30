@@ -1,25 +1,24 @@
 import "server-only";
 import { getServerEnv } from "@/config/env";
 import { ConfigurationError } from "@/lib/errors";
-import { assertProviderEnvironmentConsistency, getProviderCapabilityDescriptor } from "@/lib/providers/providerCapabilities";
-import { SandboxCardIssuingProvider } from "./sandboxCardIssuingProvider";
+import { assertProviderAvailableForRuntime } from "@/lib/providers/providerCapabilities";
 import type { CardIssuingProvider } from "./cardIssuingProvider";
 
-let cached: SandboxCardIssuingProvider | null = null;
+// `const`, not `let` — genuinely never reassigned today: the body below always throws before reaching
+// a point that would assign it (see this function's own doc comment).
+const cached: CardIssuingProvider | null = null;
 
-/** PRSprint 24 — see getPaymentProvider.ts's identical doc comment for the runtime-switch/registry pattern this mirrors. */
+/**
+ * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-01) — see
+ * getPaymentProvider.ts's identical doc comment for the fail-closed runtime-switch/registry pattern
+ * this mirrors. `PROVIDER_CAPABILITY_REGISTRY` has no card-issuing entry — no vendor has been
+ * selected — so this always throws `ProviderNotAvailableError` today.
+ */
 export function getCardIssuingProvider(): CardIssuingProvider {
   if (!cached) {
-    const { CARD_ISSUING_PROVIDER, CARD_SANDBOX_WEBHOOK_SECRET, APP_ENV } = getServerEnv();
-    if (CARD_ISSUING_PROVIDER === "sandbox") {
-      if (!CARD_SANDBOX_WEBHOOK_SECRET) {
-        throw new ConfigurationError("CARD_SANDBOX_WEBHOOK_SECRET is not configured.");
-      }
-      cached = new SandboxCardIssuingProvider(CARD_SANDBOX_WEBHOOK_SECRET);
-    } else {
-      throw new ConfigurationError(`No card-issuing provider factory is registered for "${CARD_ISSUING_PROVIDER}".`);
-    }
-    assertProviderEnvironmentConsistency(getProviderCapabilityDescriptor(cached.providerName), APP_ENV);
+    const env = getServerEnv();
+    const descriptor = assertProviderAvailableForRuntime("card_issuing", env.CARD_ISSUING_PROVIDER, env.APP_ENV);
+    throw new ConfigurationError(`No card-issuing provider factory is registered for "${descriptor.providerName}".`);
   }
   return cached;
 }

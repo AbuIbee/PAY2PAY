@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
-import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 import { BankConnectionService } from "@/lib/relationships/bankConnectionService";
 import { createTestRelationshipServices } from "@/lib/relationships/testFakes";
 import { grantStepUp } from "@/lib/staff/testFakes";

@@ -16,11 +16,22 @@
 // has nothing left to get the ordering wrong: it just awaits that one call before anything else here
 // runs.
 import { verifyHarnessOwnership } from "./test/postgres/verifyHarnessOwnership.mjs";
+import { clearNotificationCredentials, installDefaultDenyOutboundGuard } from "./test/postgres/outboundTransportGuard.mjs";
 
 await verifyHarnessOwnership({
   databaseUrl: process.env.DATABASE_URL,
   runToken: process.env.POSTGRES_TEST_RUN_TOKEN,
 });
+
+// STAGE 2 CRITICAL REMEDIATION — FIX 02: default-deny outbound network traffic for the entire
+// PostgreSQL integration-test process. Installed once, for the whole single-fork worker this suite's
+// own `vitest.postgres.config.ts` runs as — see outboundTransportGuard.mjs's own doc comment for the
+// full transport inventory this is based on, and for why `net`/`tls` (the actual local Postgres wire
+// protocol transport) are deliberately never touched. Credentials are cleared BEFORE this guard is
+// installed and before any test module below can import a real sender factory, so neither a leaked
+// credential nor a leaked module-level cached client can matter even in principle.
+clearNotificationCredentials();
+installDefaultDenyOutboundGuard();
 
 process.env.AUDIT_HASH_SECRET ??= "test-only-audit-hash-secret-value";
 process.env.AUTH_PASSWORD_PEPPER ??= "test-only-auth-password-pepper-value";

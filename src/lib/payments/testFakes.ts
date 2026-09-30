@@ -22,7 +22,7 @@ import type { ProfileRef } from "./paymentProvider";
 import type { PaymentTransitionCoordinator, TransitionApplyResult } from "./paymentTransitionCoordinator";
 import { PaymentWebhookService } from "./paymentWebhookService";
 import type { ClaimOutcome, FailedPaymentWorkflow, PaymentWebhookEventRecord, PaymentWebhookEventRepository } from "./paymentWebhookService";
-import { SandboxPaymentProvider } from "./sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 
 /** Test-only in-memory doubles for PaymentService, mirroring src/lib/csvImport/testFakes.ts's pattern. */
 
@@ -130,6 +130,14 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     const record = this.byId.get(id);
     if (!record) throw new Error("payment_attempt not found");
     record.payoutCompletedAt = payoutCompletedAt;
+    record.updatedAt = new Date();
+    return record;
+  }
+
+  async clearPayoutCompleted(id: string): Promise<PaymentAttemptRecord> {
+    const record = this.byId.get(id);
+    if (!record) throw new Error("payment_attempt not found");
+    record.payoutCompletedAt = null;
     record.updatedAt = new Date();
     return record;
   }
@@ -284,6 +292,8 @@ export function createTestPaymentService(options?: {
   atomicManualPayments?: AtomicManualPaymentPoster;
   /** Restore agreement payment functionality: optional, so every pre-existing call site is unaffected — see PaymentService's own doc comment on this dependency. */
   notifications?: NotificationService;
+  /** Payment activation gate (SC-10): defaults to `true` so every pre-existing test that exercises real `createPayment` completion is unaffected — override to `false` to prove the gate. */
+  newPaymentInitiationVerified?: boolean;
 }) {
   const verificationCtx = createTestVerificationService();
   const provider = new SandboxPaymentProvider(TEST_WEBHOOK_SECRET);
@@ -304,6 +314,7 @@ export function createTestPaymentService(options?: {
     installmentHook: options?.installmentHook,
     atomicManualPayments: options?.atomicManualPayments,
     notifications: options?.notifications,
+    newPaymentInitiationVerified: options?.newPaymentInitiationVerified ?? true,
   });
 
   return { verificationCtx, provider, payments, auditRepo, agreements, paymentService };

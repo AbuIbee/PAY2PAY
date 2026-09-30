@@ -8,7 +8,7 @@ import type {
   ParsedCardWebhookEvent,
   RequestCardInput,
   RequestCardResult,
-} from "./cardIssuingProvider";
+} from "@/lib/cards/cardIssuingProvider";
 
 interface StoredSandboxCard {
   status: "active" | "frozen" | "canceled" | "lost" | "stolen";

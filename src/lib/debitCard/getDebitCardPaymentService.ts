@@ -1,4 +1,5 @@
 import "server-only";
+import { getServerEnv } from "@/config/env";
 import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAttemptRepository";
 import { getPaymentService } from "@/lib/payments/getPaymentService";
 import { DebitCardPaymentService } from "./debitCardPaymentService";
@@ -14,6 +15,8 @@ export function getDebitCardPaymentService(): DebitCardPaymentService {
       payments: getPaymentService(),
       paymentAttempts: new DrizzlePaymentAttemptRepository(),
       feeAllocation: new DrizzleAgreementFeeAllocationReader(),
+      // Payment activation gate (SC-10): see DebitCardPaymentService.submitScheduledPayment's own doc comment.
+      newPaymentInitiationVerified: getServerEnv().PAYMENT_INITIATION_VERIFIED,
     });
   }
   return cached;

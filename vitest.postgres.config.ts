@@ -17,6 +17,13 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // STAGE 2 REPORTER-ONLY CORRECTION (docs/remediation/STAGE_02_REPORTER_ONLY_CONFIGURATION_CHANGE.md):
+    // no reporter was previously configured (Vitest's own unnamed default), which only shows an
+    // aggregate pass/fail summary per file, not each named test. The built-in "verbose" reporter
+    // (supported by the installed vitest@^3.2.6) prints every individual test's own name and
+    // pass/fail status — needed to see TEST 008-C/F/F-BLOCKED/G/H-I/I and R-B51 individually in the
+    // suite's own output, not merely the file-level aggregate.
+    reporters: ["verbose"],
     setupFiles: ["./vitest.postgres.setup.ts"],
     include: ["src/**/*.postgres.test.ts"],
     css: false,

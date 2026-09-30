@@ -8,7 +8,7 @@ import { agreement, agreementVersion, auditEvent, installmentScheduleItem, ledge
 import { AuditService } from "@/lib/audit/auditService";
 import { appendAuditEventTxBound, DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { computeAuditEventHash, type AuditEventPayload } from "@/lib/audit/hash";
-import { ConfigurationError, ValidationError } from "@/lib/errors";
+import { ConfigurationError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import type { AgreementTerms } from "@/lib/agreements/agreementService";
 import { isPastDate } from "@/lib/agreements/schedule";
 import { reconstructPaidAndReversed } from "@/lib/ledger/balanceService";
@@ -703,7 +703,15 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
     private readonly db: Database = getDb(),
     private readonly delayBusinessDays: number = DEFAULT_RETRY_DELAY_BUSINESS_DAYS,
     private readonly audit: AuditService = new AuditService(new DrizzleAuditEventRepository()),
-    private readonly hooks?: InstallmentLockTestHooks,
+    // SV-006 correction: required positional argument (no `?`), typed to explicitly permit `undefined`
+    // — this is NOT the same as being optional. Every existing EXECUTABLE call site already passes
+    // exactly 7 arguments (recounted under CONTROL ORDER 004-B: 57 executable constructor expressions
+    // across the codebase, plus 4 deliberately non-executing compile-time-only contract checks in
+    // failedPaymentRetryCoordinatorActivationGate.test.ts's own CT-001..004 — 61 total), so this changes
+    // no call site's own required behavior; it exists so
+    // parameter 7 (below) can be a genuinely non-optional `boolean`, which TypeScript's "a required
+    // parameter cannot follow an optional parameter" rule would otherwise forbid if this stayed `?`.
+    private readonly hooks: InstallmentLockTestHooks | undefined,
     // PAID2YOU — PACKAGE B (R06+R09 architectural review remediation, Item 2 — CENTRALIZE PAID2YOU
     // PLATFORM-FEE AUTHORITY): this retry/ambiguity subsystem must NEVER define Paid2You pricing
     // policy itself — `resolveAmbiguousRetry` obtains `platformFeeMinorUnits` exclusively from this
@@ -716,8 +724,65 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
     // optional so every pre-existing test/production call site that never wires this is unaffected.
     // Used ONLY by the "already resolved" adoption branches (`dispatchProviderCallForAnchor`,
     // `resolveNotFoundOutcome`) — see `repairLegacyLineageAndApply`'s own doc comment.
-    private readonly partialPaymentApplication?: PartialPaymentApplicationForRepair,
+    // Identical SV-006 rationale to `hooks` above — required, explicitly `| undefined`, so it never
+    // needs to be marked `?` (which would again block parameter 7 from being non-optional).
+    private readonly partialPaymentApplication: PartialPaymentApplicationForRepair | undefined,
+    /**
+     * Payment activation gate (SC-10). SV-006 correction: genuinely REQUIRED — no `?`, no default
+     * value, no union with `undefined`. TypeScript itself now rejects any construction that omits this
+     * argument or passes `undefined` for it (CT-001/CT-002 in
+     * `failedPaymentRetryCoordinatorActivationGate.test.ts` assert exactly this, enforced by the
+     * repository's own `tsc --noEmit`) — a silent, compile-time-invisible omission is no longer
+     * possible for a real TypeScript caller. This was previously `newPaymentInitiationVerified?:
+     * boolean` (syntactically optional only to satisfy "a required parameter cannot follow an optional
+     * parameter" against `hooks`/`partialPaymentApplication`, which themselves used `?`) — converting
+     * THOSE two to required-with-explicit-`| undefined` types instead (see their own doc comments)
+     * removes that constraint, letting this parameter be a bare, non-optional `boolean`. Every one of
+     * this constructor's 57 executable call sites already supplies exactly 7 arguments (plus 4
+     * deliberately non-executing compile-time-only contract checks — see the doc comment on the `hooks`
+     * parameter above), so none needed to change. Do not reintroduce a default value, a `?` marker, or a
+     * union with `undefined` here.
+     *
+     * This gate protects BOTH `provider.createPayment` call sites in this class, not just one:
+     * `dispatchProviderCallForAnchor` (reached from the public `claimAndExecuteRetry` — the PRIMARY
+     * new-retry-attempt dispatch) previously relied ENTIRELY on its only real production caller,
+     * `PaymentRetryService.fireDueRetries`, having already called
+     * `DrizzlePaymentInitiationEligibilityService.assertPreLockEligible` first — meaning a direct call
+     * to `claimAndExecuteRetry` (bypassing that caller) reached the provider with NO gate check inside
+     * this class at all, regardless of this flag's value. That is no longer true: the guard is now
+     * invoked inside `dispatchProviderCallForAnchor` itself, immediately before its own
+     * `provider.createPayment` call, so this class is fail-closed on its own terms, never merely by
+     * caller convention. `resolveNotFoundOutcome`'s own redispatch (reached only from
+     * `resolveAmbiguousRetry`'s resumption loop, which `fireDueRetries` deliberately never runs
+     * eligibility checks before) carries the identical guard for the SAME reason it always did.
+     *
+     * Both call sites treat a blocked dispatch identically to a provider-ambiguous response: the
+     * provider is NEVER called, and the existing, already-committed `"submitted"`/`"claimed"` state is
+     * left completely untouched — never finalized as `"failed"`, never counted as `"fired"` — so it
+     * remains safely discoverable for a later, authorized resolution attempt. The real production call
+     * site (`getFailedPaymentRetryCoordinator.ts`) explicitly wires
+     * `getServerEnv().PAYMENT_INITIATION_VERIFIED`.
+     */
+    private readonly newPaymentInitiationVerified: boolean,
   ) {}
+
+  /**
+   * Payment activation gate (SC-10) — the single internal assertion both `provider.createPayment`
+   * dispatch sites in this class route through immediately before calling the provider. Throws
+   * `ProviderNotAvailableError` (the same error class `getPaymentProvider()`/`PaymentService`/
+   * `AchPaymentService`/`DebitCardPaymentService`/`DrizzlePaymentInitiationEligibilityService` all use
+   * for this exact condition) unless `newPaymentInitiationVerified` is the literal boolean `true` —
+   * `false` and any other value fail closed identically. Pure: no DB access, no provider call, no
+   * financial side effect of any kind — callers are responsible for catching this and mapping it to a
+   * safe, recoverable local outcome (never propagating it as an uncaught rejection of the whole retry).
+   */
+  private assertNewPaymentInitiationAuthorized(): void {
+    if (this.newPaymentInitiationVerified !== true) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires PAYMENT_INITIATION_VERIFIED=true — provider registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See PAYMENT_INITIATION_VERIFIED's own doc comment in src/config/env.ts.",
+      );
+    }
+  }
 
   /**
    * R11 PASS B1 — FINAL LIFECYCLE CLOSURE (Defect 1A/1B). Called ONLY from an "already resolved"
@@ -1682,6 +1747,24 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
     provider: PaymentProvider;
     effectApplier: ProviderOutcomeEffectApplier;
   }): Promise<ExecuteRetryResult> {
+    // Payment activation gate (SC-10) — REM-008: the PRIMARY dispatch boundary, checked BEFORE this
+    // method ever opens its own transaction (zero DB engagement either way) — never relying on
+    // `PaymentRetryService.fireDueRetries` (this method's only real production caller) having already
+    // consulted `DrizzlePaymentInitiationEligibilityService` first, since a direct call to
+    // `claimAndExecuteRetry` must be fail-closed on its own terms too. Phase A
+    // (`establishDurableDispatchIntent`, this method's own caller) has ALREADY durably committed the
+    // claim/anchor row by the time this method runs — that two-phase commit is unavoidable given the
+    // existing "durable dispatch intent must exist before the provider call" architecture (see that
+    // method's own doc comment) — so a blocked dispatch here treats the situation identically to an
+    // `AmbiguousProviderResponseError` below: the provider is NEVER called, and the anchor/retry stay
+    // exactly "submitted"/"claimed", fully recoverable later, never `"failed"` (which would cancel the
+    // retry over a temporary configuration state, not a genuine provider rejection).
+    try {
+      this.assertNewPaymentInitiationAuthorized();
+    } catch {
+      return { outcome: "ambiguous", paymentAttemptId: input.paymentAttemptId };
+    }
+
     type DispatchOutcome =
       | { kind: "not_claimable" }
       | { kind: "failed"; reason: string }
@@ -1755,6 +1838,17 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
           .set({ status: "canceled", canceledAt: new Date(), canceledReason: `Firing failed: ${reason}` })
           .where(eq(paymentRetry.id, input.retryId));
         return { kind: "failed", reason };
+      }
+
+      // Payment activation gate (SC-10) — REM-008: a SECOND, redundant check of the SAME guard,
+      // immediately adjacent to the actual `provider.createPayment` call itself (defense-in-depth on
+      // top of the earlier, pre-transaction check above — this method's real fail-closed boundary does
+      // not depend on this one alone, but "immediately before provider.createPayment" is checked
+      // literally too). Identical blocked handling: provider never called, anchor/retry left untouched.
+      try {
+        this.assertNewPaymentInitiationAuthorized();
+      } catch {
+        return { kind: "ambiguous" };
       }
 
       // PAID2YOU — PACKAGE B (Stage 9 remediation, Root Corrections 1 & 2): the try/catch is
@@ -2068,6 +2162,17 @@ export class DrizzleFailedPaymentRetryCoordinator implements FailedPaymentRetryC
     provider: PaymentProvider,
     effectApplier: ProviderOutcomeEffectApplier,
   ): Promise<ResolveAmbiguousResult> {
+    // Payment activation gate (SC-10) — REM-008: the SECONDARY dispatch boundary. This entire method
+    // exists to redispatch (a genuine outbound new payment submission, same idempotency key) — see
+    // `assertNewPaymentInitiationAuthorized`'s own doc comment for exactly why this call needs its own
+    // check (never reached by `PaymentRetryService.fireDueRetries`'s eligibility pre-check). Checked
+    // BEFORE the installment lock is even acquired — no DB access, no mutation — and a block is
+    // indistinguishable from an inconclusive provider lookup, never a definite rejection.
+    try {
+      this.assertNewPaymentInitiationAuthorized();
+    } catch {
+      return { outcome: "still_ambiguous" };
+    }
     type Outcome =
       | { kind: "already_resolved"; anchor: typeof paymentAttempt.$inferSelect }
       | { kind: "closed" }

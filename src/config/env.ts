@@ -90,20 +90,59 @@ const serverEnvSchema = z.object({
   // when a payment or KYC operation is actually attempted without one.
   PAYMENT_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
   KYC_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
-  // PRSprint 21 (docs/prsprints/PRSPRINT_21_PRODUCTION_FINANCIAL_PROVIDER_ARCHITECTURE.md): which
-  // registered provider implementation getPaymentProvider()/getKycProvider() construct — see
-  // src/lib/providers/providerCapabilities.ts for the full registry. Only "sandbox" is registered
-  // today; adding a real adapter later means adding its name to this enum, not changing any
-  // consuming code (PaymentService/KycVerificationService depend only on the interface). Rejecting
-  // an unregistered value at the schema level (rather than accepting any string) is deliberate —
-  // a typo or a not-yet-implemented provider name must fail loudly at startup, never silently fall
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-01/SC-02): which
+  // registered provider implementation getPaymentProvider()/getKycProvider()/getCardIssuingProvider()
+  // construct — see src/lib/providers/providerCapabilities.ts for the full registry, currently empty
+  // (no live provider selected/approved yet). Unset, or any unregistered value, resolves to
+  // `ProviderNotAvailableError` at the factory. Deliberately a plain string, not a `z.enum([...])` of
+  // one sandbox literal (Sprint 9/PRSprint 21's prior shape): there is no longer any accepted
+  // "sandbox" enum member for a value to validly equal. The superRefine below additionally rejects the
+  // literal sandbox/mock/fake/demo/test/dummy/stub/simulated family of values outright, so a deployed
+  // environment that is accidentally (or maliciously) handed one of these fails CLOSED at
+  // startup/environment-parse time — not merely "unregistered, so unavailable" — never silently falls
   // through to sandbox behavior while claiming something else was selected.
-  PAYMENT_PROVIDER: z.enum(["sandbox"]).default("sandbox"),
-  KYC_PROVIDER: z.enum(["sandbox"]).default("sandbox"),
-  // PRSprint 24 (docs/prsprints/PRSPRINT_24_DEBIT_CARD_ISSUANCE_CARD_LIFECYCLE.md): mirrors
-  // PAYMENT_PROVIDER/KYC_PROVIDER exactly — see providerCapabilities.ts's registry.
-  CARD_ISSUING_PROVIDER: z.enum(["sandbox"]).default("sandbox"),
+  PAYMENT_PROVIDER: z.string().min(1).optional(),
+  KYC_PROVIDER: z.string().min(1).optional(),
+  CARD_ISSUING_PROVIDER: z.string().min(1).optional(),
   CARD_SANDBOX_WEBHOOK_SECRET: z.string().min(16).optional(),
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-10 — payment activation
+  // gate). A provider being REGISTERED in src/lib/providers/providerCapabilities.ts is a statement
+  // that this codebase's adapter for it exists and is code-complete — it is NOT a statement that a
+  // real account, contract, or approval exists. Even with real provider credentials configured, this
+  // flag must ALSO be explicitly set to "true" before ANY genuinely new outbound payment request
+  // reaches a live provider — `PaymentService.createPayment`/`.submitPending` (the single
+  // authoritative enforcement point every scheduled-payment/manual-payment/retry submission
+  // ultimately routes through), and the atomic automatic-retry-coordinator path
+  // (`DrizzlePaymentInitiationEligibilityService.assertPreLockEligible` and
+  // `DrizzleFailedPaymentRetryCoordinator`'s own two ambiguity-resolution redispatch points) all check
+  // it — mirroring `PAYOUT_PROVIDER_INTEGRATION_VERIFIED`'s identical "registration/credentials alone
+  // are never sufficient" precedent. Deliberately narrow: it gates only a genuinely NEW outbound POST
+  // /payments — never webhook processing, refunds, cancellations, disputes, reconciliation that
+  // creates no new debit, or true idempotent replay of an attempt with persisted evidence of prior
+  // provider submission — those remain fully functional regardless of this flag. Never a proxy for
+  // "the code is ready"; this represents an operator's explicit confirmation that the selected
+  // provider has actually approved this merchant/account for live payments, which this codebase
+  // cannot verify or assume for itself.
+  PAYMENT_INITIATION_VERIFIED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-05/06/07 — payout
+  // integrity): a SECOND, INDEPENDENT gate — deliberately never satisfied merely by
+  // `PayoutService.confirmPayout` receiving non-empty `providerName`/`providerPayoutReference`
+  // arguments. Those two fields prove a CALLER claims a provider confirmed something; this flag is
+  // the only thing that says Paid2You has actually integrated a live, authenticated
+  // payout-confirmation signal from a real provider at all (today: none — no live payout provider
+  // integration exists). Defaults to unset (`confirmPayout` fails closed — see `PayoutService`'s own
+  // doc comment) specifically so a future route/webhook that calls `confirmPayout` with
+  // syntactically-valid-looking evidence can never complete a payout before this is deliberately
+  // flipped by an operator, after real provider integration exists. Never a proxy for "the code is
+  // ready" — the code is ready; this represents whether ANY authenticated live-provider trigger for
+  // payout confirmation exists at all.
+  PAYOUT_PROVIDER_INTEGRATION_VERIFIED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // Sprint 13 (docs/sprints/SPRINT_13_FailedPayments_RetryWorkflow.md): shared secret protecting
   // POST /api/scheduler/retry-failed-payments — Vercel Cron Jobs automatically send
   // `Authorization: Bearer <CRON_SECRET>` to the route(s) configured in vercel.json when this
@@ -162,6 +201,24 @@ const serverEnvSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
 }).superRefine((data, ctx) => {
+  // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-02): "if one of these
+  // values is supplied to any deployed/runtime environment, startup or provider initialization must
+  // fail closed" — this is the startup-time half of that (assertProviderAvailableForRuntime, invoked
+  // lazily by the provider factories, is the runtime half). Case-insensitive substring match, not
+  // exact-equality, so a value like "sandbox_v2" or "stripe-test-mode" is caught too, not just the
+  // bare literal.
+  const FORBIDDEN_PROVIDER_VALUE_PATTERN = /sandbox|mock|fake|demo|dummy|stub|simulat|test/i;
+  for (const field of ["PAYMENT_PROVIDER", "KYC_PROVIDER", "CARD_ISSUING_PROVIDER"] as const) {
+    const value = data[field];
+    if (value && FORBIDDEN_PROVIDER_VALUE_PATTERN.test(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field}="${value}" names a sandbox/mock/fake/demo/dummy/stub/simulated/test provider — these are never valid runtime values. Only a real, approved, live provider name registered in src/lib/providers/providerCapabilities.ts may be used.`,
+      });
+    }
+  }
+
   let hostname = "";
   try {
     hostname = new URL(data.APP_URL).hostname;

@@ -5,6 +5,7 @@ import { FinancialIntegrityError, type LedgerService } from "@/lib/ledger/ledger
 import { logger } from "@/lib/logger";
 import type { NotificationEventType } from "@/lib/notify/eventTypes";
 import type { NotificationService } from "@/lib/notify/notificationService";
+import type { PayoutService } from "@/lib/payouts/payoutService";
 import type { ProfileOwnerReader } from "@/lib/profiles/verificationService";
 import type { RiskEventService } from "@/lib/risk/riskEventService";
 import type { PaymentProvider } from "./paymentProvider";
@@ -280,6 +281,52 @@ const EVENT_TYPE_TO_STATUS: Record<string, PaymentAttemptStatus> = {
   "payment.disputed": "disputed",
   "payment.returned": "returned",
   "payment.reversed": "reversed",
+  /**
+   * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): newly
+   * webhook-reachable. "canceled" (`PaymentAttemptStatus`) and its
+   * `ALLOWED_SOURCE_STATUSES_FOR_DESTINATION` entry (`["pending", "scheduled"]`) already existed —
+   * only this event-type mapping was missing, because cancellation was previously a
+   * synchronous-only local write (`PaymentService.cancelPayment`). Verified safe: every downstream
+   * consumer below (`postLedgerEntryRequired` via `EVENT_TYPE_TO_REVERSAL_ENTRY`,
+   * `checkCompletionRequired`, `notifyPaymentStatus`, `runFailedPaymentWorkflowRequired`,
+   * `runSupersessionCompensationRequired`, `checkSupersessionCompletionRequired`) is explicitly gated
+   * on "succeeded"/"failed" or the refund/dispute/return/reversal statuses and correctly no-ops for
+   * "canceled" — a payment that never reached "succeeded" has no ledger entry to reverse, no
+   * installment/agreement-completion consequence, and no supersession to compensate.
+   */
+  "payment.canceled": "canceled",
+  /**
+   * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): a previously-
+   * finalized refund that the provider later reverses. Deliberately maps to the DISTINCT
+   * "refund_reversed" status, never "succeeded" — reusing "succeeded" would re-enter every
+   * "payment.succeeded"-specific branch below (`evaluateSuccessEffectDisposition`,
+   * `applyPartialPaymentRequired`, `runFailedPaymentWorkflowRequired`'s succeeded case) a SECOND time
+   * for the same payment, risking duplicate installment-paid/notification/lifecycle effects — exactly
+   * what a distinct value avoids. Verified safe like "payment.canceled" above:
+   * `checkCompletionRequired`/`notifyPaymentStatus`/`runFailedPaymentWorkflowRequired`/
+   * `runSupersessionCompensationRequired`/`checkSupersessionCompletionRequired` are all gated on other
+   * specific statuses and correctly no-op for "refund_reversed" — no installment/agreement-lifecycle
+   * consequence, no supersession compensation, ever runs for this eventType. `postLedgerEntryRequired`
+   * DOES now post a correction (`EVENT_TYPE_TO_REVERSAL_ENTRY` still has no entry for this eventType;
+   * the correction is dispatched separately, via `LedgerService.correctRefund`, exactly once per
+   * payment) — the ORIGINAL refund's own ledger entry is now reversed/corrected, never merely the
+   * status.
+   */
+  "payment.refund_reversed": "refund_reversed",
+  /**
+   * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): a previously-
+   * finalized refund that the provider's processor/bank later rejects — this only ever occurs after
+   * an earlier confirmed refund; an immediate/synchronous refund rejection is instead a refund event
+   * with a failure flag (already mapped to no transition — nothing to revert, since the payment never
+   * reached "refunded"). Maps to the DISTINCT "refund_failed" status — same rationale as
+   * "refund_reversed" immediately above (never "succeeded", to avoid a second
+   * "payment.succeeded"-shaped effect pass), kept separate from "refund_reversed" itself despite both
+   * driving the identical `LedgerService.correctRefund` ledger correction, since they are
+   * attributable to different real-world causes worth keeping distinctly auditable. Same verified-safe
+   * shape as "refund_reversed": every installment/agreement-lifecycle/supersession/notification gate
+   * below is keyed on other specific statuses and correctly no-ops for "refund_failed".
+   */
+  "payment.refund_failed": "refund_failed",
 };
 
 /**
@@ -490,6 +537,14 @@ export class PaymentWebhookService {
        * comment for exactly when/why this is called.
        */
       partialPaymentApplication?: PartialPaymentApplication;
+      /**
+       * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-05 — eliminate
+       * fictional payouts). Optional so every pre-existing test context that never wires this is
+       * unaffected — every real production wiring (`getPaymentWebhookService.ts`) supplies it. See
+       * `recordPayoutOwedRequired`'s own doc comment for exactly when/why this is called — NEVER used
+       * to confirm/complete a payout, only to record that one is now owed.
+       */
+      payouts?: Pick<PayoutService, "recordPayoutOwed">;
     },
   ) {
     this.platformFeePolicy = deps.platformFeePolicy ?? new DefaultPlatformFeePolicy();
@@ -634,7 +689,15 @@ export class PaymentWebhookService {
     const data = claimed.payload as Record<string, unknown>;
     const providerEventId = claimed.providerEventId;
 
-    const isRecognizedEventType = eventType === "payout.paid" || eventType in EVENT_TYPE_TO_STATUS;
+    // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-05 — eliminate
+    // fictional payouts): "payout.paid" was previously special-cased here and dispatched to a
+    // since-REMOVED `applyPayoutRequired` method that marked a payout complete from the bare arrival
+    // of this one event type — with no live payout provider ever having been called, no transfer
+    // reference, no verifiable evidence of any kind (see `PayoutService`'s own doc comment). No
+    // production `PaymentProvider.parseWebhookEvent` implementation ever maps any real event to
+    // `"payout.paid"`. It is now handled exactly like any other genuinely unrecognized event type: a
+    // safe no-op, never a completion.
+    const isRecognizedEventType = eventType in EVENT_TYPE_TO_STATUS;
     if (!isRecognizedEventType) return; // genuinely unsupported/unrecognized event type — safe no-op.
 
     const providerPaymentId = typeof data.providerPaymentId === "string" ? data.providerPaymentId : null;
@@ -666,14 +729,8 @@ export class PaymentWebhookService {
       return;
     }
 
-    if (eventType === "payout.paid") {
-      await this.applyPayoutRequired(payment, providerEventId);
-      return;
-    }
-
-    // `isRecognizedEventType` above already proved `eventType` is a key of `EVENT_TYPE_TO_STATUS`
-    // (the `eventType === "payout.paid"` branch already returned) — asserted non-null here once
-    // rather than re-narrowing at every use below.
+    // `isRecognizedEventType` above already proved `eventType` is a key of `EVENT_TYPE_TO_STATUS` —
+    // asserted non-null here once rather than re-narrowing at every use below.
     const newStatus = EVENT_TYPE_TO_STATUS[eventType]!;
     const failureCategory =
       newStatus === "failed" && typeof data.failureCategory === "string" ? data.failureCategory : undefined;
@@ -768,6 +825,7 @@ export class PaymentWebhookService {
     // comment.
     if (eventType === "payment.succeeded") {
       await this.applyPartialPaymentRequired(current);
+      await this.recordPayoutOwedRequired(current);
     }
 
     // PAID2YOU — PACKAGE B (Stage 6 final historical-effect closure). `runFailedPaymentWorkflowRequired`
@@ -1388,6 +1446,19 @@ export class PaymentWebhookService {
       });
       return;
     }
+    // PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11): both event types
+    // mean an earlier `refund` entry's own effect never actually completed / no longer holds — a
+    // processor/bank-level rejection reported AFTER an earlier confirmed refund
+    // ("payment.refund_failed"), or a previously-confirmed refund later reversed
+    // ("payment.refund_reversed"). Neither is a fresh "payment.succeeded"-shaped event (this branch
+    // is only reached once eventType !== "payment.succeeded", above), so this never re-enters the
+    // success-posting branch above or any success-gated effect elsewhere in this class — see
+    // `LedgerService.correctRefund`'s own doc comment for the exact, idempotent correction posted.
+    if (eventType === "payment.refund_failed" || eventType === "payment.refund_reversed") {
+      const reason = typeof data.reason === "string" ? data.reason : null;
+      await this.deps.ledger.correctRefund({ paymentAttemptId: payment.id, reason });
+      return;
+    }
     const reversalEntryType = EVENT_TYPE_TO_REVERSAL_ENTRY[eventType];
     if (reversalEntryType) {
       const reason = typeof data.reason === "string" ? data.reason : null;
@@ -1426,43 +1497,24 @@ export class PaymentWebhookService {
   }
 
   /**
-   * R09: REQUIRED — see this class's own doc comment. `markPayoutCompleted`'s own idempotency check
-   * avoids re-stamping the completion timestamp on a retry.
-   *
-   * PACKAGE B — remaining Codex blockers (Section 5 — payout audit): the previous version returned
-   * early whenever `payoutCompletedAt` was already set, which — exactly like the transition-audit gap
-   * this mirrors — meant "financial effect timestamp committed, but its audit failed" left the
-   * required audit permanently missing on every later retry. `payoutCompletedAt` alone only proves
-   * the FINANCIAL effect applied; it says nothing about whether the audit effect did. The audit
-   * record is now (re)ensured unconditionally — idempotent per `(providerEventId, action)`, so a
-   * replay never duplicates it.
+   * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-05 — eliminate fictional
+   * payouts). Called immediately after `applyPartialPaymentRequired` for a `"payment.succeeded"`
+   * event — i.e., only once this event's own `payment_cleared` entry (and thus the creditor's
+   * `creditor_proceeds_payable` liability) is durably known to exist. Records ONLY that a payout is
+   * now OWED (`PayoutService.recordPayoutOwed`, which always creates the row in `"pending"` status) —
+   * NEVER completes, confirms, or marks anything paid. This is the sole replacement for the removed
+   * `applyPayoutRequired`/`"payout.paid"` mechanism: that method used to synchronously call
+   * `LedgerService.postPayout` + `markPayoutCompleted` from the bare arrival of one webhook event,
+   * with no live provider ever consulted — see `PayoutService`'s own doc comment for the full
+   * corrected lifecycle and exactly why completion now requires an explicit, separately-gated
+   * `confirmPayout` call this class never makes. A no-op when `payouts` isn't wired (pre-existing test
+   * contexts, and any environment where payouts aren't yet tracked) — REQUIRED (not caught) once
+   * wired, matching `applyPartialPaymentRequired`'s identical required-effect shape, so a transient
+   * failure here keeps this event retryable rather than silently dropping the record.
    */
-  private async applyPayoutRequired(payment: PaymentAttemptRecord, providerEventId: string): Promise<void> {
-    if (!payment.agreementId) {
-      // Same rationale as postLedgerEntryRequired above — see its own doc comment.
-      throw new ConfigurationError("payment_webhook_ledger_blocked_no_agreement");
-    }
-    await this.deps.ledger.postPayout({ paymentAttemptId: payment.id });
-    const updated = payment.payoutCompletedAt ? payment : await this.deps.payments.markPayoutCompleted(payment.id, new Date());
-    await this.deps.audit.record({
-      actorUserId: null,
-      actorRole: "payment_provider",
-      profileKind: updated.payerProfileKind,
-      profileId: updated.payerProfileId,
-      agreementId: updated.agreementId,
-      action: "payment_webhook_payout.paid",
-      occurredAt: new Date().toISOString(),
-      ipAddress: null,
-      deviceInfo: null,
-      previousValue: null,
-      newValue: updated.payoutCompletedAt,
-      reason: null,
-      authStrength: null,
-      relatedDocumentId: null,
-      relatedCaseId: null,
-      targetResourceType: "payment_attempt",
-      targetResourceId: updated.id,
-      providerEventId,
-    });
+  private async recordPayoutOwedRequired(payment: PaymentAttemptRecord): Promise<void> {
+    if (!this.deps.payouts) return;
+    if (!payment.agreementId) return; // postLedgerEntryRequired already required this to be non-null to reach this point at all — defensive, never reachable in practice.
+    await this.deps.payouts.recordPayoutOwed({ paymentAttemptId: payment.id, agreementId: payment.agreementId });
   }
 }

@@ -19,7 +19,7 @@ import type {
   RetrievePaymentResult,
   TokenizeBankAccountInput,
   TokenizeBankAccountResult,
-} from "./paymentProvider";
+} from "@/lib/payments/paymentProvider";
 
 interface StoredSandboxPayment {
   status: PaymentProviderPaymentStatus;

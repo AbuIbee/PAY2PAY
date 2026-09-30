@@ -251,4 +251,72 @@ describe("PAID2YOU — PACKAGE B (R06+R09 architectural review remediation, Item
     expect(classifyProcessingFailure(new ConfigurationError("config"))).toEqual({ retryable: true, code: "repairable_configuration_defect" });
     expect(classifyProcessingFailure(new Error("transient"))).toEqual({ retryable: true, code: "transient_processing_error" });
   });
+
+  describe("REM-009 — historical event processing is preserved when new payment initiation is disabled", () => {
+    it("a webhook confirming an already-dispatched payment still transitions status and posts the ledger entry, even though this exact context's PaymentService has newPaymentInitiationVerified: false", async () => {
+      const unverifiedCtx = createTestPaymentService({ newPaymentInitiationVerified: false });
+      unverifiedCtx.verificationCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+      unverifiedCtx.verificationCtx.profileOwners.set(RECIPIENT.profileKind, RECIPIENT.profileId, RECIPIENT_USER_ID);
+
+      // Represents a payment that was already submitted to the provider (before this operator disabled
+      // new initiation, or via a path this gate never covers) — seeded directly against the repository,
+      // never through the gated PaymentService.createPayment/submitPending, exactly mirroring how a
+      // real "submitted" row got there in production.
+      const seeded = await unverifiedCtx.payments.insertPending({
+        idempotencyKey: "hist-1",
+        payerProfileKind: PAYER.profileKind,
+        payerProfileId: PAYER.profileId,
+        recipientProfileKind: RECIPIENT.profileKind,
+        recipientProfileId: RECIPIENT.profileId,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        agreementId: "test-agreement-default",
+        providerName: "sandbox_mock",
+        initialStatus: "submitted",
+      });
+      await unverifiedCtx.payments.updateStatus(seeded.id, "submitted", { providerPaymentId: "hist-evt-ref-1" });
+
+      const unverifiedWebhookCtx = createTestPaymentWebhookService(unverifiedCtx);
+      const rawBody = JSON.stringify({ providerEventId: "evt-hist-1", eventType: "payment.succeeded", providerPaymentId: "hist-evt-ref-1" });
+      const signatureHeader = unverifiedCtx.provider.signWebhookPayload(rawBody);
+      await unverifiedWebhookCtx.paymentWebhookService.receiveWebhook({ rawBody, signatureHeader });
+
+      const updated = await unverifiedCtx.payments.findById(seeded.id);
+      expect(updated?.status).toBe("succeeded");
+      const ledgerEntry = await unverifiedWebhookCtx.ledgerCtx.ledgerService.findEntry(seeded.id, "payment_cleared");
+      expect(ledgerEntry).not.toBeNull();
+      // A disabled payment-activation gate blocks NEW payment submission only (PaymentService.createPayment/
+      // submitPending) — it must never reach, or be consulted by, authenticated webhook processing of an
+      // event for a payment that already exists. PaymentWebhookService takes no `newPaymentInitiationVerified`
+      // dependency at all — this proves that structural separation holds in practice, not merely in shape.
+    });
+
+    it("a refund-confirmation webhook still finalizes an already-requested refund while the gate is disabled — reconciliation of an existing obligation is never blocked by new-initiation being off", async () => {
+      const unverifiedCtx = createTestPaymentService({ newPaymentInitiationVerified: false });
+      unverifiedCtx.verificationCtx.profileOwners.set(PAYER.profileKind, PAYER.profileId, PAYER_USER_ID);
+      unverifiedCtx.verificationCtx.profileOwners.set(RECIPIENT.profileKind, RECIPIENT.profileId, RECIPIENT_USER_ID);
+
+      const seeded = await unverifiedCtx.payments.insertPending({
+        idempotencyKey: "hist-2",
+        payerProfileKind: PAYER.profileKind,
+        payerProfileId: PAYER.profileId,
+        recipientProfileKind: RECIPIENT.profileKind,
+        recipientProfileId: RECIPIENT.profileId,
+        amountMinorUnits: 5_000,
+        currency: "USD",
+        agreementId: "test-agreement-default",
+        providerName: "sandbox_mock",
+        initialStatus: "succeeded",
+      });
+      await unverifiedCtx.payments.updateStatus(seeded.id, "succeeded", { providerPaymentId: "hist-evt-ref-2" });
+
+      const unverifiedWebhookCtx = createTestPaymentWebhookService(unverifiedCtx);
+      const rawBody = JSON.stringify({ providerEventId: "evt-hist-2", eventType: "payment.refunded", providerPaymentId: "hist-evt-ref-2" });
+      const signatureHeader = unverifiedCtx.provider.signWebhookPayload(rawBody);
+      await unverifiedWebhookCtx.paymentWebhookService.receiveWebhook({ rawBody, signatureHeader });
+
+      const updated = await unverifiedCtx.payments.findById(seeded.id);
+      expect(updated?.status).toBe("refunded");
+    });
+  });
 });

@@ -5,6 +5,7 @@ import { withErrorHandling } from "@/lib/api-handler";
 import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService } from "@/lib/auth/testFakes";
 import { createTestPaymentService } from "@/lib/payments/testFakes";
 import type { ProfileKind } from "@/lib/payments/paymentProvider";
+import { FakePayoutStatusReader } from "@/lib/payouts/testFakes";
 import { createPaymentDetailHandler } from "./route";
 
 /**
@@ -21,6 +22,7 @@ function getWithCookie(paymentId: string | null, token?: string) {
 describe("GET /api/payments/detail", () => {
   let authCtx: ReturnType<typeof createTestAuthService>;
   let paymentCtx: ReturnType<typeof createTestPaymentService>;
+  let payoutCtx: FakePayoutStatusReader;
   let paymentId: string;
   let payerToken: string;
   let recipientToken: string;
@@ -81,10 +83,11 @@ describe("GET /api/payments/detail", () => {
       providerName: "sandbox_mock",
     });
     paymentId = record.id;
+    payoutCtx = new FakePayoutStatusReader();
   });
 
   function handlerFor() {
-    return withErrorHandling("payment_detail", createPaymentDetailHandler(authCtx.authService, paymentCtx.paymentService));
+    return withErrorHandling("payment_detail", createPaymentDetailHandler(authCtx.authService, paymentCtx.paymentService, payoutCtx));
   }
 
   it("lets the payer fetch the payment", async () => {
@@ -97,6 +100,32 @@ describe("GET /api/payments/detail", () => {
   it("lets the recipient fetch the payment", async () => {
     const response = await handlerFor()(getWithCookie(paymentId, recipientToken));
     expect(response.status).toBe(200);
+  });
+
+  describe("accurate creditor payout reporting (SC-08)", () => {
+    it("reports payoutStatus: null when no payout_attempt has been recorded", async () => {
+      const response = await handlerFor()(getWithCookie(paymentId, recipientToken));
+      const body = (await response.json()) as { payoutStatus: string | null };
+      expect(body.payoutStatus).toBeNull();
+    });
+
+    it.each(["pending", "confirmed", "failed", "returned"] as const)(
+      "reports the authoritative payoutStatus %s exactly as payout_attempt records it, to the recipient",
+      async (payoutStatus) => {
+        payoutCtx.seed(paymentId, payoutStatus);
+        const response = await handlerFor()(getWithCookie(paymentId, recipientToken));
+        const body = (await response.json()) as { payoutStatus: string | null };
+        expect(body.payoutStatus).toBe(payoutStatus);
+      },
+    );
+
+    it("never exposes providerPayoutReference — only the payoutStatus enum", async () => {
+      payoutCtx.seed(paymentId, "confirmed");
+      const response = await handlerFor()(getWithCookie(paymentId, recipientToken));
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body).not.toHaveProperty("providerPayoutReference");
+      expect(body).not.toHaveProperty("payoutProviderName");
+    });
   });
 
   it("rejects a cross-tenant IDOR attempt: an authenticated stranger cannot fetch someone else's payment by id", async () => {

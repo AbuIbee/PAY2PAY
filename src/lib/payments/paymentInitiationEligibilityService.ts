@@ -1,5 +1,5 @@
 import "server-only";
-import { DependencyError, ValidationError } from "@/lib/errors";
+import { DependencyError, ProviderNotAvailableError, ValidationError } from "@/lib/errors";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { getDailyAmountLimitMinorUnits, getDailyAttemptCountLimit, getMaxPaymentMinorUnits, getRollingWindowMs, summarizeRecentActivity } from "./transactionLimits";
 import type { VerificationService } from "@/lib/profiles/verificationService";
@@ -54,12 +54,13 @@ export interface PaymentInitiationEligibilityService {
   /**
    * Mirrors `PaymentService.reserveAttempt`'s own exact checks, in the same order, for the same
    * reasons (see that method's own doc comments): the platform payment-initiation kill switch, the
-   * configured per-payment maximum, the rolling-window daily amount/attempt-count limits, and current
-   * full-verification status for both parties. Deliberately omits `reserveAttempt`'s payer-ownership
-   * and agreement-parties cross-checks — both are tautological for a system-initiated retry (its
-   * `actingUserId` is always derived FROM the original payment's own payer, and the agreement/parties
-   * were already validated when the ORIGINAL payment was created). Throws exactly as `reserveAttempt`
-   * would (`DependencyError`/`ValidationError`).
+   * payment activation gate (`newPaymentInitiationVerified`), the configured per-payment maximum, the
+   * rolling-window daily amount/attempt-count limits, and current full-verification status for both
+   * parties. Deliberately omits `reserveAttempt`'s payer-ownership and agreement-parties cross-checks
+   * — both are tautological for a system-initiated retry (its `actingUserId` is always derived FROM
+   * the original payment's own payer, and the agreement/parties were already validated when the
+   * ORIGINAL payment was created). Throws exactly as `reserveAttempt` would
+   * (`DependencyError`/`ValidationError`/`ProviderNotAvailableError`).
    */
   assertPreLockEligible(input: { payer: ProfileRef; recipient: ProfileRef; amountMinorUnits: number }): Promise<void>;
   /** See this interface's own doc comment, section B. Delegates to `assertNotOverpaying` above. */
@@ -72,12 +73,39 @@ export class DrizzlePaymentInitiationEligibilityService implements PaymentInitia
       verification: VerificationService;
       payments: PaymentAttemptRepository;
       balances?: AgreementBalanceReader;
+      /**
+       * Payment activation gate (SC-10). This is the ONLY pre-lock control
+       * `PaymentRetryService.fireDueRetries`'s atomic-coordinator branch runs before
+       * `FailedPaymentRetryCoordinator.claimAndExecuteRetry` dispatches a genuinely NEW retry attempt
+       * to the provider (see that method's own doc comment: every OTHER eligibility control is the
+       * caller's responsibility to check BEFORE ever calling this method) — closing this gate here is
+       * what actually blocks a brand-new automatic retry when no live provider is operator-verified.
+       *
+       * REM-008 correction: required (not optional) — an earlier version of this field was optional,
+       * defaulting to "verified" when omitted. A configuration flag whose absence is silently treated
+       * as "effective" is not an effective gate: any future call site that forgot to wire it would
+       * fail OPEN rather than closed. Now every call site (including every pre-existing postgres
+       * integration test) must make an explicit choice — mirrors `PaymentService`/`AchPaymentService`/
+       * `DebitCardPaymentService`'s own identical required-field precedent for this exact flag. The
+       * real production call site (`getPaymentRetryService.ts`) wires
+       * `getServerEnv().PAYMENT_INITIATION_VERIFIED`. Never checked on `assertOverpaymentSafe`'s
+       * resolution/resumption path (`resolveAmbiguousRetry` never calls this interface at all) —
+       * resuming an already-possibly-dispatched, ambiguous attempt is recovery, never a new debit.
+       */
+      newPaymentInitiationVerified: boolean;
     },
   ) {}
 
   async assertPreLockEligible(input: { payer: ProfileRef; recipient: ProfileRef; amountMinorUnits: number }): Promise<void> {
     if (!isFeatureEnabled("paymentInitiationEnabled")) {
       throw new DependencyError("New payment initiation is temporarily disabled. Please try again shortly.");
+    }
+    // REM-008: fails closed on anything other than an explicit `true` — `false` AND an accidentally
+    // omitted/undefined value are both treated as NOT verified, never merely `=== false`.
+    if (this.deps.newPaymentInitiationVerified !== true) {
+      throw new ProviderNotAvailableError(
+        "New payment initiation requires PAYMENT_INITIATION_VERIFIED=true — provider registration and valid credentials alone do not constitute operator-confirmed approval to initiate live payments. See PAYMENT_INITIATION_VERIFIED's own doc comment in src/config/env.ts.",
+      );
     }
     if (!Number.isSafeInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
       throw new ValidationError("amountMinorUnits must be a positive integer.");

@@ -8,6 +8,8 @@ import { requireSession } from "@/lib/auth/requireSession";
 import { ValidationError } from "@/lib/errors";
 import type { PaymentService } from "@/lib/payments/paymentService";
 import { getPaymentService } from "@/lib/payments/getPaymentService";
+import type { PayoutService } from "@/lib/payouts/payoutService";
+import { getPayoutService } from "@/lib/payouts/getPayoutService";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,11 +21,21 @@ export const dynamic = "force-dynamic";
  * checked via AgreementService.getAgreement (same authorization every other
  * agreement-scoped route already relies on) before any payment_attempt row
  * is returned.
+ *
+ * Accurate creditor payout reporting (SC-08): this response previously serialized the FULL,
+ * unfiltered `PaymentAttemptRecord` for every payment — including `providerPaymentId` (the real
+ * payment provider's own transaction reference), `idempotencyKey`, `recordedByUserId`,
+ * `bankConnectionId`, and the raw `payoutCompletedAt`/`payoutInitiatedAt` timestamps (which are NOT
+ * the authoritative source of "was this creditor actually paid" — `payout_attempt.status` is). Now an
+ * explicit whitelist, mirroring `/api/payments/detail`'s already-established pattern, and each payment
+ * carries its own authoritative `payoutStatus` (the `payout_attempt.status` enum only — never
+ * `providerName`/`providerPayoutReference`) instead.
  */
 export function createPaymentsByAgreementHandler(
   authService: AuthService,
   agreementService: AgreementService,
   paymentService: PaymentService,
+  payoutService: Pick<PayoutService, "getPayoutStatus">,
 ) {
   return async function handleList(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
@@ -32,12 +44,29 @@ export function createPaymentsByAgreementHandler(
 
     await agreementService.getAgreement(agreementId, userId);
     const payments = await paymentService.listByAgreementId(agreementId);
-    return NextResponse.json({ payments }, { status: 200 });
+    const withPayoutStatus = await Promise.all(
+      payments.map(async (payment) => ({
+        id: payment.id,
+        status: payment.status,
+        amountMinorUnits: payment.amountMinorUnits,
+        currency: payment.currency,
+        agreementId: payment.agreementId,
+        payerProfileKind: payment.payerProfileKind,
+        payerProfileId: payment.payerProfileId,
+        recipientProfileKind: payment.recipientProfileKind,
+        recipientProfileId: payment.recipientProfileId,
+        installmentScheduleItemId: payment.installmentScheduleItemId,
+        paymentMethod: payment.paymentMethod,
+        createdAt: payment.createdAt,
+        payoutStatus: (await payoutService.getPayoutStatus(payment.id))?.status ?? null,
+      })),
+    );
+    return NextResponse.json({ payments: withPayoutStatus }, { status: 200 });
   };
 }
 
 async function handleList(request: NextRequest): Promise<Response> {
-  return createPaymentsByAgreementHandler(getAuthService(), getAgreementService(), getPaymentService())(request);
+  return createPaymentsByAgreementHandler(getAuthService(), getAgreementService(), getPaymentService(), getPayoutService())(request);
 }
 
 export const GET = withErrorHandling("payments_by_agreement", handleList);

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { ApiError, apiFetch } from "@/lib/ui/apiFetch";
 import { formatMoney } from "@/lib/ui/money";
 import { formatDate } from "@/lib/ui/date";
-import { paymentAttemptStatusLabel } from "@/lib/ui/statusLabels";
+import { creditorPayoutStatusLabel, paymentAttemptStatusLabel } from "@/lib/ui/statusLabels";
 
 interface ActiveProfile {
   kind: "personal" | "business";
@@ -35,6 +35,8 @@ interface PaymentAttempt {
   installmentScheduleItemId: string | null;
   paymentMethod: "ach" | "debit_card" | null;
   createdAt: string;
+  /** Accurate creditor payout reporting (SC-08): the authoritative payout_attempt status — null when no payout obligation has been recorded yet. Never derived from `status` alone. */
+  payoutStatus: "pending" | "confirmed" | "failed" | "returned" | null;
 }
 
 type LoadStatus = "loading" | "ready" | "unauthorized" | "error";
@@ -143,8 +145,12 @@ export function PaymentsList() {
         <tbody>
           {payments.map((payment) => {
             const isPayer = payment.payerProfileId === activeId;
-            const direction = isPayer ? "You paid" : "You received";
             const { label, tone } = paymentAttemptStatusLabel(payment.status as never);
+            // Accurate creditor payout reporting (SC-08): the recipient side NEVER says "You
+            // received" merely because this payment cleared — a cleared payment moves the payer's
+            // funds into Paid2You's own processing, not into the creditor's hands. The payout_attempt
+            // status (via creditorPayoutStatusLabel) is the only thing that may ever say "Paid."
+            const payoutLabel = isPayer ? null : creditorPayoutStatusLabel(payment.status, payment.payoutStatus);
             return (
               <tr key={payment.id}>
                 <td data-label="Date">
@@ -152,7 +158,13 @@ export function PaymentsList() {
                     {formatDate(payment.createdAt)}
                   </Link>
                 </td>
-                <td data-label="Direction">{direction}</td>
+                <td data-label="Direction">
+                  {isPayer ? (
+                    "You paid"
+                  ) : (
+                    <span className={`chip chip--${payoutLabel!.tone}`}>{payoutLabel!.label}</span>
+                  )}
+                </td>
                 <td data-label="Amount">{formatMoney(payment.amountMinorUnits, payment.currency)}</td>
                 <td data-label="Method">{payment.paymentMethod === "ach" ? "Bank account" : payment.paymentMethod === "debit_card" ? "Debit card" : "—"}</td>
                 <td data-label="Status">

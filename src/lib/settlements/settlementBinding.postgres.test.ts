@@ -16,7 +16,7 @@ import { DrizzleAgreementScheduleReader } from "@/lib/payments/drizzleAgreementS
 import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAttemptRepository";
 import { DrizzleSettlementContextVerifier } from "@/lib/payments/drizzleSettlementContextVerifier";
 import { PaymentService } from "@/lib/payments/paymentService";
-import { SandboxPaymentProvider } from "@/lib/payments/sandboxPaymentProvider";
+import { SandboxPaymentProvider } from "@/test-support/payments/sandboxPaymentProvider";
 import { DrizzleLedgerAccountRepository } from "@/lib/ledger/drizzleLedgerAccountRepository";
 import { DrizzleLedgerJournalEntryRepository } from "@/lib/ledger/drizzleLedgerJournalEntryRepository";
 import { LedgerService } from "@/lib/ledger/ledgerService";
@@ -121,6 +121,7 @@ function buildContext(overrides?: { settlementPaymentsHooks?: SettlementPaymentT
     ledger,
     scheduleReader: new DrizzleAgreementScheduleReader(),
     settlementContext: new DrizzleSettlementContextVerifier(),
+    newPaymentInitiationVerified: true,
   });
   const settlementService = new SettlementService({
     agreementService,
@@ -646,7 +647,7 @@ describe("R11 PASS B2 — settlement payment binding, agreement/party identity, 
         status: "active",
       }),
     } as unknown as ConstructorParameters<typeof AchPaymentService>[0]["mandates"];
-    const achPaymentService = new AchPaymentService({ mandates: mandateStub, payments: ctx.paymentService, paymentAttempts: ctx.payments });
+    const achPaymentService = new AchPaymentService({ mandates: mandateStub, payments: ctx.paymentService, paymentAttempts: ctx.payments, newPaymentInitiationVerified: true });
 
     const proposed = await partialPaymentService.proposePartialPayment({
       agreementId,

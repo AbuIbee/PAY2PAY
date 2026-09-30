@@ -1,6 +1,6 @@
 import "server-only";
 import { getServerEnv, type ServerEnv } from "@/config/env";
-import { getProviderCapabilityDescriptor, type ProviderEnvironment } from "@/lib/providers/providerCapabilities";
+import { findProviderCapabilityDescriptor, type ProviderEnvironment } from "@/lib/providers/providerCapabilities";
 
 /**
  * PRSprint 04 (docs/prsprints/PRSPRINT_04_SECRETS_ENVIRONMENT_PRODUCTION_SEPARATION.md): an
@@ -9,18 +9,16 @@ import { getProviderCapabilityDescriptor, type ProviderEnvironment } from "@/lib
  * this module must never return, log, or expose an actual secret. It also must never claim a
  * capability is "live" that this codebase cannot actually reach.
  *
- * PRSprint 21 (docs/prsprints/PRSPRINT_21_PRODUCTION_FINANCIAL_PROVIDER_ARCHITECTURE.md) update:
- * `paymentProvider`/`kycProvider` are no longer hardcoded `"sandbox"` literals — they now read the
- * selected provider name from `PAYMENT_PROVIDER`/`KYC_PROVIDER` (src/config/env.ts) and resolve its
- * declared `environment` from the capability registry (src/lib/providers/providerCapabilities.ts),
- * mirroring `emailDelivery`/`smsDelivery`'s already-established "read the identical inputs the real
- * factory reads, so this view can never drift from what the code actually does" pattern. Today this
- * still always resolves to `"sandbox"` (only provider registered), but the mechanism is now the same
- * genuinely-conditional one every other provider status field already uses — this satisfies "document
- * live approval state" and "provider status monitoring" for the day a production provider exists,
- * without this file needing to change again then.
+ * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-01): `paymentProvider`/
+ * `kycProvider` used to always resolve to a hardcoded sandbox descriptor (PRSprint 21's own state at
+ * the time). They now read whatever PAYMENT_PROVIDER/KYC_PROVIDER/CARD_ISSUING_PROVIDER is actually
+ * configured and look it up in the SAME capability registry the real provider factories consult
+ * (src/lib/providers/providerCapabilities.ts) — which is empty until a live provider is approved. So
+ * today, in every environment, this correctly reports "unavailable" rather than a sandbox label that
+ * no longer exists anywhere in this codebase's runtime.
  */
 export type ProviderConfigStatus = "configured" | "not_configured";
+export type ProviderRuntimeStatus = "unavailable" | ProviderEnvironment;
 export type EmailDeliveryStatus = "resend" | "console_log_only_no_provider" | "console_log_only_kill_switch";
 export type SmsDeliveryStatus = "twilio" | "console_log_only_no_provider" | "console_log_only_kill_switch";
 
@@ -29,10 +27,12 @@ export interface AdminEnvironmentStatus {
   nodeEnv: string;
   database: ProviderConfigStatus;
   documentStorage: ProviderConfigStatus;
-  paymentProvider: string;
-  paymentProviderEnvironment: ProviderEnvironment;
-  kycProvider: string;
-  kycProviderEnvironment: ProviderEnvironment;
+  paymentProvider: string | null;
+  paymentProviderEnvironment: ProviderRuntimeStatus;
+  kycProvider: string | null;
+  kycProviderEnvironment: ProviderRuntimeStatus;
+  cardIssuingProvider: string | null;
+  cardIssuingProviderEnvironment: ProviderRuntimeStatus;
   emailDelivery: EmailDeliveryStatus;
   smsDelivery: SmsDeliveryStatus;
   scheduledJobs: ProviderConfigStatus;
@@ -52,30 +52,24 @@ export function computeSmsDeliveryStatus(env: ServerEnv): SmsDeliveryStatus {
   return "twilio";
 }
 
-// PRSprint 21: maps the env-var selector value (PAYMENT_PROVIDER/KYC_PROVIDER — "sandbox") to the
-// concrete provider's own `providerName` (the capability registry's key, e.g. "sandbox_mock") —
-// these two vocabularies are deliberately distinct (the env var selects a *kind* of provider; the
-// registry key identifies one *specific implementation*, matching getPaymentProvider.ts's own
-// switch). Extending this to a real provider means adding a case here alongside its registry entry.
-function resolveProviderName(selector: "sandbox", kind: "payment" | "kyc"): string {
-  if (selector === "sandbox") return kind === "payment" ? "sandbox_mock" : "sandbox_kyc_mock";
-  const exhaustive: never = selector;
-  throw new Error(`Unhandled provider selector: ${String(exhaustive)}`);
+/** Resolves a configured provider name against the live capability registry — "unavailable" whenever nothing is registered under that name (including when the env var itself is unset), never a sandbox label. */
+function resolveProviderRuntimeStatus(providerName: string | undefined): ProviderRuntimeStatus {
+  return findProviderCapabilityDescriptor(providerName)?.environment ?? "unavailable";
 }
 
 /** Pure classification function — kept separate from the process.env-reading singleton below so it can be unit-tested with constructed ServerEnv values, mirroring parseServerEnv/getServerEnv's own split in src/config/env.ts. */
 export function computeEnvironmentStatus(env: ServerEnv): AdminEnvironmentStatus {
-  const paymentProvider = resolveProviderName(env.PAYMENT_PROVIDER, "payment");
-  const kycProvider = resolveProviderName(env.KYC_PROVIDER, "kyc");
   return {
     appEnv: env.APP_ENV,
     nodeEnv: env.NODE_ENV,
     database: env.DATABASE_URL ? "configured" : "not_configured",
     documentStorage: env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY ? "configured" : "not_configured",
-    paymentProvider,
-    paymentProviderEnvironment: getProviderCapabilityDescriptor(paymentProvider).environment,
-    kycProvider,
-    kycProviderEnvironment: getProviderCapabilityDescriptor(kycProvider).environment,
+    paymentProvider: env.PAYMENT_PROVIDER ?? null,
+    paymentProviderEnvironment: resolveProviderRuntimeStatus(env.PAYMENT_PROVIDER),
+    kycProvider: env.KYC_PROVIDER ?? null,
+    kycProviderEnvironment: resolveProviderRuntimeStatus(env.KYC_PROVIDER),
+    cardIssuingProvider: env.CARD_ISSUING_PROVIDER ?? null,
+    cardIssuingProviderEnvironment: resolveProviderRuntimeStatus(env.CARD_ISSUING_PROVIDER),
     emailDelivery: computeEmailDeliveryStatus(env),
     smsDelivery: computeSmsDeliveryStatus(env),
     scheduledJobs: env.CRON_SECRET ? "configured" : "not_configured",

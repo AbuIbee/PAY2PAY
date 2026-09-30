@@ -1,4 +1,5 @@
 import "server-only";
+import { getServerEnv } from "@/config/env";
 import { DrizzlePaymentAttemptRepository } from "@/lib/payments/drizzlePaymentAttemptRepository";
 import { getPaymentService } from "@/lib/payments/getPaymentService";
 import { AchPaymentService } from "./achPaymentService";
@@ -12,6 +13,8 @@ export function getAchPaymentService(): AchPaymentService {
       mandates: getAchMandateService(),
       payments: getPaymentService(),
       paymentAttempts: new DrizzlePaymentAttemptRepository(),
+      // Payment activation gate (SC-10): see AchPaymentService.submitScheduledPayment's own doc comment.
+      newPaymentInitiationVerified: getServerEnv().PAYMENT_INITIATION_VERIFIED,
     });
   }
   return cached;

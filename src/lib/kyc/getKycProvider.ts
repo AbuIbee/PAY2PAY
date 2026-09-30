@@ -1,25 +1,24 @@
 import "server-only";
 import { getServerEnv } from "@/config/env";
 import { ConfigurationError } from "@/lib/errors";
-import { assertProviderEnvironmentConsistency, getProviderCapabilityDescriptor } from "@/lib/providers/providerCapabilities";
-import { SandboxKycProvider } from "./sandboxKycProvider";
+import { assertProviderAvailableForRuntime } from "@/lib/providers/providerCapabilities";
 import type { KycKybProvider } from "./kycProvider";
 
-let cached: SandboxKycProvider | null = null;
+// `const`, not `let` — genuinely never reassigned today: the body below always throws before reaching
+// a point that would assign it (see this function's own doc comment).
+const cached: KycKybProvider | null = null;
 
-/** PRSprint 21 — see getPaymentProvider.ts's identical doc comment for the runtime-switch/registry pattern this mirrors. */
+/**
+ * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-01) — see
+ * getPaymentProvider.ts's identical doc comment for the fail-closed runtime-switch/registry pattern
+ * this mirrors. `PROVIDER_CAPABILITY_REGISTRY` has no KYC/KYB entry — no vendor has been selected —
+ * so this always throws `ProviderNotAvailableError` today.
+ */
 export function getKycProvider(): KycKybProvider {
   if (!cached) {
-    const { KYC_PROVIDER, KYC_SANDBOX_WEBHOOK_SECRET, APP_ENV } = getServerEnv();
-    if (KYC_PROVIDER === "sandbox") {
-      if (!KYC_SANDBOX_WEBHOOK_SECRET) {
-        throw new ConfigurationError("KYC_SANDBOX_WEBHOOK_SECRET is not configured.");
-      }
-      cached = new SandboxKycProvider(KYC_SANDBOX_WEBHOOK_SECRET);
-    } else {
-      throw new ConfigurationError(`No KYC/KYB provider factory is registered for "${KYC_PROVIDER}".`);
-    }
-    assertProviderEnvironmentConsistency(getProviderCapabilityDescriptor(cached.providerName), APP_ENV);
+    const env = getServerEnv();
+    const descriptor = assertProviderAvailableForRuntime("kyc", env.KYC_PROVIDER, env.APP_ENV);
+    throw new ConfigurationError(`No KYC/KYB provider factory is registered for "${descriptor.providerName}".`);
   }
   return cached;
 }

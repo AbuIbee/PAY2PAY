@@ -6,6 +6,7 @@ import { TEST_SIGNUP_IDENTITY, TEST_ADULT_DATE_OF_BIRTH, createTestAuthService }
 import { createTestAgreementService } from "@/lib/agreements/testFakes";
 import { createTestPaymentService } from "@/lib/payments/testFakes";
 import type { DraftTermsInput } from "@/lib/agreements/agreementService";
+import { FakePayoutStatusReader } from "@/lib/payouts/testFakes";
 import { createPaymentsByAgreementHandler } from "./route";
 
 /**
@@ -52,8 +53,10 @@ describe("GET /api/payments/by-agreement", () => {
   let authCtx: ReturnType<typeof createTestAuthService>;
   let agreementCtx: ReturnType<typeof createTestAgreementService>;
   let paymentCtx: ReturnType<typeof createTestPaymentService>;
+  let payoutCtx: FakePayoutStatusReader;
   let agreementId: string;
   let otherAgreementId: string;
+  let paymentId: string;
   let creditorToken: string;
   let strangerToken: string;
 
@@ -121,7 +124,8 @@ describe("GET /api/payments/by-agreement", () => {
     });
     otherAgreementId = otherCreated.agreement.id;
 
-    await paymentCtx.payments.insertPending({
+    payoutCtx = new FakePayoutStatusReader();
+    const payment = await paymentCtx.payments.insertPending({
       idempotencyKey: `by-agreement-route-test-${randomUUID()}`,
       payerProfileKind: "personal",
       payerProfileId: debtorProfileId,
@@ -132,6 +136,7 @@ describe("GET /api/payments/by-agreement", () => {
       agreementId,
       providerName: "sandbox_mock",
     });
+    paymentId = payment.id;
     await paymentCtx.payments.insertPending({
       idempotencyKey: `by-agreement-route-test-other-${randomUUID()}`,
       payerProfileKind: "personal",
@@ -148,7 +153,7 @@ describe("GET /api/payments/by-agreement", () => {
   function handlerFor() {
     return withErrorHandling(
       "payments_by_agreement",
-      createPaymentsByAgreementHandler(authCtx.authService, agreementCtx.agreementService, paymentCtx.paymentService),
+      createPaymentsByAgreementHandler(authCtx.authService, agreementCtx.agreementService, paymentCtx.paymentService, payoutCtx),
     );
   }
 
@@ -159,6 +164,36 @@ describe("GET /api/payments/by-agreement", () => {
     expect(body.payments).toHaveLength(1);
     expect(body.payments[0]?.agreementId).toBe(agreementId);
     expect(body.payments.some((p) => p.amountMinorUnits === 45_000)).toBe(false);
+  });
+
+  describe("accurate creditor payout reporting (SC-08)", () => {
+    it("reports payoutStatus: null when no payout_attempt has been recorded — never fabricates a status", async () => {
+      const response = await handlerFor()(getWithCookie(agreementId, creditorToken));
+      const body = (await response.json()) as { payments: Array<{ id: string; payoutStatus: string | null }> };
+      expect(body.payments[0]?.payoutStatus).toBeNull();
+    });
+
+    it.each(["pending", "confirmed", "failed", "returned"] as const)(
+      "reports the authoritative payoutStatus %s exactly as payout_attempt records it",
+      async (payoutStatus) => {
+        payoutCtx.seed(paymentId, payoutStatus);
+        const response = await handlerFor()(getWithCookie(agreementId, creditorToken));
+        const body = (await response.json()) as { payments: Array<{ id: string; payoutStatus: string | null }> };
+        expect(body.payments.find((p) => p.id === paymentId)?.payoutStatus).toBe(payoutStatus);
+      },
+    );
+
+    it("never exposes providerPaymentId, idempotencyKey, or other internal fields — only the whitelisted, authoritative shape", async () => {
+      const response = await handlerFor()(getWithCookie(agreementId, creditorToken));
+      const body = (await response.json()) as { payments: Array<Record<string, unknown>> };
+      const payment = body.payments[0]!;
+      expect(payment).not.toHaveProperty("providerPaymentId");
+      expect(payment).not.toHaveProperty("idempotencyKey");
+      expect(payment).not.toHaveProperty("recordedByUserId");
+      expect(payment).not.toHaveProperty("bankConnectionId");
+      expect(payment).not.toHaveProperty("payoutCompletedAt");
+      expect(payment).not.toHaveProperty("payoutInitiatedAt");
+    });
   });
 
   it("rejects a cross-tenant IDOR attempt: an authenticated stranger cannot list another agreement's payments", async () => {

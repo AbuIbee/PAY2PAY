@@ -82,11 +82,11 @@ export interface ReconciliationExceptionRecord {
  * Sprint 10 requirement #9/#10: exceptions are explicit persisted records, and re-running
  * reconciliation must not create duplicates. `findOpen` is the idempotency check —
  * ReconciliationService always calls it before `insert`. This is an application-level check
- * (find-then-insert), not a DB partial-unique-index, because `payment_attempt_id` and
- * `provider_event_id` are each independently nullable depending on exception type (a DB unique
- * index over a mixed-nullable tuple needs a partial index whose Drizzle-version support this
- * project hasn't otherwise depended on) — reconciliation is an administrative/batch operation, not
- * a concurrent-request hot path, so the race window this leaves is acceptable and documented.
+ * (find-then-insert), guarded by `recordExceptionAtomically` — see that method's own doc comment for
+ * why a `pg_advisory_xact_lock`, not the `reconciliation_exception_open_identity_unique` partial
+ * index, is what actually makes it safe (Stage 4 financial-accounting remediation: the previous
+ * "acceptable and documented" unguarded race was demonstrated reachable and closed, without any
+ * schema change).
  */
 export interface ReconciliationExceptionRepository {
   findOpen(
@@ -120,6 +120,24 @@ export interface ReconciliationExceptionRepository {
     providerEventId: string;
     details: unknown;
   }): Promise<ReconciliationExceptionRecord | null>;
+  /**
+   * Stage 4 financial-accounting remediation: the atomic get-or-create `ReconciliationService.
+   * recordException` (below) actually calls — safe even when `paymentAttemptId` and/or
+   * `providerEventId` are `null`, where `ensureOpenException`'s own partial unique index cannot help
+   * (SQL NULL is never equal to NULL, so two concurrent inserts sharing the same null-containing
+   * identity never conflict on that index — demonstrated reachable in
+   * `reconciliationDrift.postgres.test.ts`'s REC-02). Real implementation wraps the existing
+   * `findOpen`-then-`insert` sequence in a `pg_advisory_xact_lock` keyed on the full identity tuple —
+   * mirrors this codebase's own established precedent for exactly this class of problem (the audit
+   * hash-chain's serializing lock; `test/postgres/lockBarrier.ts`'s `acquireAdvisoryLockBarrier`) —
+   * never a schema change.
+   */
+  recordExceptionAtomically(input: {
+    exceptionType: ReconciliationExceptionType;
+    paymentAttemptId: string | null;
+    providerEventId: string | null;
+    details: unknown;
+  }): Promise<ReconciliationExceptionRecord>;
 }
 
 const STALE_PENDING_THRESHOLD_MS = 5 * 24 * 60 * 60 * 1000; // 5 days — see class doc comment.
@@ -703,8 +721,6 @@ export class ReconciliationService {
     providerEventId: string | null,
     details: unknown,
   ): Promise<ReconciliationExceptionRecord> {
-    const existing = await this.deps.exceptions.findOpen(exceptionType, paymentAttemptId, providerEventId);
-    if (existing) return existing;
-    return this.deps.exceptions.insert({ exceptionType, paymentAttemptId, providerEventId, details });
+    return this.deps.exceptions.recordExceptionAtomically({ exceptionType, paymentAttemptId, providerEventId, details });
   }
 }

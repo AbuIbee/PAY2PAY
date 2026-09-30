@@ -1,4 +1,5 @@
 import "server-only";
+import { getServerEnv } from "@/config/env";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getAchPaymentService } from "@/lib/ach/getAchPaymentService";
@@ -27,13 +28,26 @@ export function getPaymentRetryService(): PaymentRetryService {
       // PAID2YOU — PACKAGE B (final retry-submission serialization): the SAME real provider instance
       // every payment method's own orchestration ultimately submits through — see
       // `PaymentRetryService`'s own doc comment on this dependency.
-      provider: getPaymentProvider(),
+      //
+      // STAGE 3 G01-G12 (docs/remediation/STAGE_03_G01_G12_EXECUTION_AND_ACCEPTANCE_REPORT.md): lazy
+      // dependency-access boundary — `PaymentRetryService.deps.provider` is already optional and is
+      // only validated inside `fireDueRetries` at actual dispatch time (paymentRetryService.ts's own
+      // `if (!this.deps.provider) throw ...` guard); `findForOriginalPayment` never touches it. This
+      // getter defers `getPaymentProvider()` to that same point of actual use instead of resolving it
+      // eagerly here, so an unregistered provider no longer blocks construction or provider-independent
+      // reads.
+      get provider() {
+        return getPaymentProvider();
+      },
       // PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 1): the SAME reusable
       // eligibility layer PaymentService.reserveAttempt is built on.
       eligibility: new DrizzlePaymentInitiationEligibilityService({
         verification: getVerificationService(),
         payments: new DrizzlePaymentAttemptRepository(),
         balances: getBalanceService(),
+        // Payment activation gate (SC-10): the real production value, explicitly wired — see
+        // DrizzlePaymentInitiationEligibilityService's own doc comment on this field.
+        newPaymentInitiationVerified: getServerEnv().PAYMENT_INITIATION_VERIFIED,
       }),
       // PAID2YOU — PACKAGE B (Codex final remaining blockers, Section 2, and CRITICAL fix — Section
       // B1): the SAME singleton every real webhook delivery already processes through — see

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AuditService, type AuditEventRecord, type AuditEventRepository } from "@/lib/audit/auditService";
 import { BalanceService } from "./balanceService";
-import type { AgreementTermsReader } from "./balanceService";
+import type { AgreementTermsReader, SettlementBalanceReader, SettlementBalanceResolution } from "./balanceService";
 import { LedgerService } from "./ledgerService";
 import type {
   LedgerAccountRecord,
@@ -117,11 +117,32 @@ export class InMemoryAgreementTermsReader implements AgreementTermsReader {
   }
 }
 
+/**
+ * Stage 4 settlement-balance remediation: in-memory double for `SettlementForgivenessReader`, mirroring
+ * `InMemoryAgreementTermsReader`'s identical shape.
+ */
+export class InMemorySettlementBalanceReader implements SettlementBalanceReader {
+  private byAgreementId = new Map<string, SettlementBalanceResolution>();
+
+  setEffectiveForgivenMinorUnits(agreementId: string, forgivenMinorUnits: number): void {
+    this.byAgreementId.set(agreementId, { kind: "forgiveness", effectiveForgivenMinorUnits: forgivenMinorUnits });
+  }
+
+  setRestoredRemainingBalanceMinorUnits(agreementId: string, restoredRemainingBalanceMinorUnits: number): void {
+    this.byAgreementId.set(agreementId, { kind: "restoredBalance", restoredRemainingBalanceMinorUnits });
+  }
+
+  async getSettlementBalanceResolution(agreementId: string): Promise<SettlementBalanceResolution> {
+    return this.byAgreementId.get(agreementId) ?? { kind: "none" };
+  }
+}
+
 /** Builds a BalanceService test context sharing an existing LedgerService test context's ledger. */
 export function createTestBalanceService(ledgerCtx: ReturnType<typeof createTestLedgerService>) {
   const terms = new InMemoryAgreementTermsReader();
-  const balanceService = new BalanceService({ ledger: ledgerCtx.ledgerService, terms });
-  return { terms, balanceService };
+  const settlementBalance = new InMemorySettlementBalanceReader();
+  const balanceService = new BalanceService({ ledger: ledgerCtx.ledgerService, terms, settlementBalance });
+  return { terms, settlementBalance, balanceService };
 }
 
 export class InMemoryReconciliationExceptionRepository implements ReconciliationExceptionRepository {
@@ -195,6 +216,34 @@ export class InMemoryReconciliationExceptionRepository implements Reconciliation
         e.providerEventId === input.providerEventId,
     );
     if (existing) return null;
+    const record: ReconciliationExceptionRecord = {
+      id: randomUUID(),
+      status: "open",
+      detectedAt: new Date(),
+      resolvedAt: null,
+      resolvedByUserId: null,
+      resolutionReason: null,
+      ...input,
+    };
+    this.byId.set(record.id, record);
+    return record;
+  }
+
+  /** Stage 4 financial-accounting remediation: mirrors `ensureOpenException`'s identical synchronous, no-await-before-reserve atomicity guarantee — see `DrizzleReconciliationExceptionRepository.recordExceptionAtomically`'s own doc comment for the real implementation's `pg_advisory_xact_lock`-backed counterpart. */
+  async recordExceptionAtomically(input: {
+    exceptionType: ReconciliationExceptionType;
+    paymentAttemptId: string | null;
+    providerEventId: string | null;
+    details: unknown;
+  }): Promise<ReconciliationExceptionRecord> {
+    const existing = [...this.byId.values()].find(
+      (e) =>
+        e.exceptionType === input.exceptionType &&
+        e.status === "open" &&
+        e.paymentAttemptId === input.paymentAttemptId &&
+        e.providerEventId === input.providerEventId,
+    );
+    if (existing) return existing;
     const record: ReconciliationExceptionRecord = {
       id: randomUUID(),
       status: "open",

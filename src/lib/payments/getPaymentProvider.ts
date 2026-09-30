@@ -1,41 +1,34 @@
 import "server-only";
 import { getServerEnv } from "@/config/env";
 import { ConfigurationError } from "@/lib/errors";
-import { assertProviderEnvironmentConsistency, getProviderCapabilityDescriptor } from "@/lib/providers/providerCapabilities";
-import { SandboxPaymentProvider } from "./sandboxPaymentProvider";
+import { assertProviderAvailableForRuntime } from "@/lib/providers/providerCapabilities";
 import type { PaymentProvider } from "./paymentProvider";
 
-let cached: SandboxPaymentProvider | null = null;
+// `const`, not `let` — genuinely never reassigned today: the body below always throws before reaching
+// a point that would assign it (see this function's own doc comment). Kept as a plain variable, not
+// inlined, so a future real adapter needs only to add an assignment here, no shape change.
+const cached: PaymentProvider | null = null;
 
 /**
- * PRSprint 21 (docs/prsprints/PRSPRINT_21_PRODUCTION_FINANCIAL_PROVIDER_ARCHITECTURE.md): a real
- * runtime switch driven by the `PAYMENT_PROVIDER` env var (src/config/env.ts), replacing Sprint 9's
- * unconditional sandbox wiring — exactly what that sprint's own doc comment anticipated ("A real
- * Stripe Connect/Plaid adapter would get its own getXProvider() and a runtime switch here driven by
- * configuration, without any change to PaymentService"). Only "sandbox" is registered today; adding a
- * real adapter later is additive (a new case here + a new registry entry in providerCapabilities.ts +
- * a new enum value on PAYMENT_PROVIDER), never a change to PaymentService or any other consumer.
+ * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-01): fail-closed shape
+ * ported from the B0-D TOTAL SANDBOX ELIMINATION fix. `assertProviderAvailableForRuntime` throws
+ * `ProviderNotAvailableError` whenever `PAYMENT_PROVIDER` does not resolve to a registered, live
+ * (`environment: "production"`) descriptor — never a sandbox fallback. Every route/service that calls
+ * this (directly or via getPaymentService.ts/getPaymentWebhookService.ts/getBankConnectionService.ts/
+ * etc.) therefore fails closed before doing anything else whenever no provider is available.
+ *
+ * `PROVIDER_CAPABILITY_REGISTRY` (providerCapabilities.ts) is currently empty — the V3
+ * bank-managed-payments provider has not been implemented or approved yet — so this function
+ * unconditionally throws `ProviderNotAvailableError` today. Adding the real adapter later is additive:
+ * a new `case` below, a new registry entry, no change to PaymentService or any other consumer.
  */
 export function getPaymentProvider(): PaymentProvider {
   if (!cached) {
-    const { PAYMENT_PROVIDER, PAYMENT_SANDBOX_WEBHOOK_SECRET, APP_ENV } = getServerEnv();
-    if (PAYMENT_PROVIDER === "sandbox") {
-      if (!PAYMENT_SANDBOX_WEBHOOK_SECRET) {
-        throw new ConfigurationError("PAYMENT_SANDBOX_WEBHOOK_SECRET is not configured.");
-      }
-      cached = new SandboxPaymentProvider(PAYMENT_SANDBOX_WEBHOOK_SECRET);
-    } else {
-      // Unreachable while the env schema's PAYMENT_PROVIDER enum only contains "sandbox" — kept as
-      // an explicit, loud failure (not a silent fallback to sandbox) for the day a new enum value is
-      // added to the schema before its provider factory is registered here.
-      throw new ConfigurationError(`No payment provider factory is registered for "${PAYMENT_PROVIDER}".`);
-    }
-    assertProviderEnvironmentConsistency(getProviderCapabilityDescriptor(cached.providerName), APP_ENV);
+    const env = getServerEnv();
+    const descriptor = assertProviderAvailableForRuntime("payment", env.PAYMENT_PROVIDER, env.APP_ENV);
+    // Unreachable today (the registry has no entries) — kept as an explicit, loud failure for the
+    // day a descriptor is registered before its concrete adapter is wired here.
+    throw new ConfigurationError(`No payment provider factory is registered for "${descriptor.providerName}".`);
   }
   return cached;
-}
-
-/** Test/internal-only accessor to the concrete sandbox instance (e.g. to call simulateSettlement). */
-export function getSandboxPaymentProviderInstance(): SandboxPaymentProvider {
-  return getPaymentProvider() as SandboxPaymentProvider;
 }

@@ -108,7 +108,15 @@ export async function appendAuditEventTxBound(
   computeHash: (previousEventHash: string | null) => string,
 ): Promise<AuditEventRecord> {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${AUDIT_CHAIN_LOCK_KEY_A}), hashtext(${AUDIT_CHAIN_LOCK_KEY_B}))`);
+  return appendAuditEventAfterLockAcquiredTxBound(tx, payload, computeHash);
+}
 
+/** The tail-read/dedup/hash/insert sequence, factored out so `ensureAuditEventAtomicallyTxBound` (Stage 4, S4-03 remediation) can reuse it AFTER its own existence check, still inside the SAME already-lock-held transaction — never a second, independently-diverging append implementation. */
+async function appendAuditEventAfterLockAcquiredTxBound(
+  tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  payload: AuditEventPayload,
+  computeHash: (previousEventHash: string | null) => string,
+): Promise<AuditEventRecord> {
   if (payload.providerEventId) {
     const existing = await tx
       .select()
@@ -131,6 +139,44 @@ export async function appendAuditEventTxBound(
     throw new ConfigurationError("audit_event insert returned no row during tx-bound append");
   }
   return toRecord(row);
+}
+
+/**
+ * Stage 4 (S4-03 remediation — concurrent payout audit repair is not idempotent). The atomic
+ * get-or-create `AuditEventRepository.ensureAtomically` delegates to:
+ *   1. acquire the SAME chain-serializing advisory lock `appendAuditEventTxBound` uses (reentrant
+ *      within one transaction — re-acquiring it here is safe even though `appendAuditEventAfter
+ *      LockAcquiredTxBound` below never itself re-acquires it, since it now runs strictly after this
+ *      lock is already held);
+ *   2. while that lock is held, query for an event matching `identity` — the exact same
+ *      `(targetResourceType, targetResourceId, action)` identity `PayoutService`'s own
+ *      `ensureConfirmationAuditRecorded`/`ensureReturnAuditRecorded` already use, never a broader or
+ *      weaker match, never a timestamp;
+ *   3. if found, return it — no insert, no second caller can ever append a second one, since every
+ *      concurrent caller serializes on the SAME lock before reaching this check;
+ *   4. if absent, append exactly one new event via the SAME tail-read/hash/insert sequence
+ *      `appendAtomically` itself uses (`appendAuditEventAfterLockAcquiredTxBound` — never a parallel,
+ *      independently-diverging insert path), preserving `previousEventHash`/`eventHash` construction,
+ *      actor/source metadata, and financial-object linkage exactly as before this remediation;
+ *   5. commit (or roll back, on error — the lock and any insert are released/undone together).
+ */
+export async function ensureAuditEventAtomicallyTxBound(
+  tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  identity: { targetResourceType: string; targetResourceId: string; action: string },
+  payload: AuditEventPayload,
+  computeHash: (previousEventHash: string | null) => string,
+): Promise<{ event: AuditEventRecord; created: boolean }> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${AUDIT_CHAIN_LOCK_KEY_A}), hashtext(${AUDIT_CHAIN_LOCK_KEY_B}))`);
+  const existingRows = await tx
+    .select()
+    .from(auditEvent)
+    .where(and(eq(auditEvent.targetResourceType, identity.targetResourceType), eq(auditEvent.targetResourceId, identity.targetResourceId), eq(auditEvent.action, identity.action)))
+    .limit(1);
+  if (existingRows[0]) {
+    return { event: toRecord(existingRows[0]), created: false };
+  }
+  const event = await appendAuditEventAfterLockAcquiredTxBound(tx, payload, computeHash);
+  return { event, created: true };
 }
 
 /**
@@ -205,5 +251,15 @@ export class DrizzleAuditEventRepository implements AuditEventRepository {
   ): Promise<AuditEventRecord> {
     const db = this.db;
     return db.transaction(async (tx) => appendAuditEventTxBound(tx, payload, computeHash));
+  }
+
+  /** Stage 4 (S4-03 remediation). See `ensureAuditEventAtomicallyTxBound`'s own doc comment for the exact atomic get-or-create sequence this delegates to. */
+  async ensureAtomically(
+    identity: { targetResourceType: string; targetResourceId: string; action: string },
+    payload: AuditEventPayload,
+    computeHash: (previousEventHash: string | null) => string,
+  ): Promise<{ event: AuditEventRecord; created: boolean }> {
+    const db = this.db;
+    return db.transaction(async (tx) => ensureAuditEventAtomicallyTxBound(tx, identity, payload, computeHash));
   }
 }

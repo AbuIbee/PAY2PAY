@@ -1,4 +1,5 @@
 import "server-only";
+import { getServerEnv } from "@/config/env";
 import { AuditService } from "@/lib/audit/auditService";
 import { DrizzleAuditEventRepository } from "@/lib/audit/drizzleAuditEventRepository";
 import { getPartialPaymentAutoApplicationService } from "@/lib/partialPayments/getPartialPaymentAutoApplicationService";
@@ -23,6 +24,9 @@ export function getFailedPaymentRetryCoordinator(): FailedPaymentRetryCoordinato
       // R11 PASS B1 — FINAL LIFECYCLE CLOSURE (Defect 1B): see
       // `DrizzleFailedPaymentRetryCoordinator.repairLegacyLineageAndApply`'s own doc comment.
       getPartialPaymentAutoApplicationService(),
+      // Payment activation gate (SC-10): required (no default) — the real, actual operator-configured
+      // value, never a hardcoded `true`. See `DrizzleFailedPaymentRetryCoordinator`'s own doc comment.
+      getServerEnv().PAYMENT_INITIATION_VERIFIED,
     );
   }
   return cached;

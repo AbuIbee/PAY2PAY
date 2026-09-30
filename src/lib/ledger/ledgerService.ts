@@ -29,7 +29,15 @@ export type LedgerAccountType =
   | "creditor_clawback_exposure"
   | "admin_adjustment_suspense";
 
-export type LedgerEntryType = "payment_cleared" | "refund" | "reversal" | "payout" | "dispute_adjustment" | "admin_adjustment";
+export type LedgerEntryType =
+  | "payment_cleared"
+  | "refund"
+  | "reversal"
+  | "payout"
+  | "dispute_adjustment"
+  | "admin_adjustment"
+  | "refund_correction"
+  | "payout_returned";
 export type LedgerPostingDirection = "debit" | "credit";
 /** Automatic entry types, each posted at most once per payment attempt via idempotent get-or-post. */
 export type AutomaticReversalEntryType = "refund" | "reversal" | "dispute_adjustment";
@@ -244,6 +252,94 @@ export class LedgerService {
       { entryType: input.entryType, agreementId: clearEntry.agreementId, paymentAttemptId: input.paymentAttemptId, currency: clearEntry.currency, reason: input.reason, postings },
     );
     await this.recordAudit(entry, `ledger_${input.entryType}`, null, "ledger_system");
+    return entry;
+  }
+
+  /**
+   * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-11). Reinstates a
+   * payment's cleared financial state after its own `refund` entry is invalidated — either the refund
+   * failed at the processor/bank level after initially succeeding, or a previously-confirmed refund
+   * was later reversed. Both real-world causes require the exact same correction: the money was never
+   * actually (or is no longer) returned to the payer, so the `refund` entry's own effect must be
+   * undone.
+   *
+   * Posted by flipping the EXISTING `refund` entry's own postings (never re-derived from
+   * `payment_cleared`/`payout` — the `refund` entry already correctly encoded whichever shape applied
+   * at the time it was posted, pre- or post-payout; flipping it back is the exact, general inverse
+   * regardless of that shape). Idempotent per payment attempt
+   * (`(paymentAttemptId, "refund_correction")` get-or-post, identical to every other automatic entry
+   * type) — a duplicate/replayed event that reaches this call a second time is a safe no-op, never a
+   * second correction. Throws (retryable `ValidationError`, a missing prerequisite — never
+   * `FinancialIntegrityError`) if no `refund` entry exists yet; callers only ever reach this once the
+   * payment's OWN status has already legally transitioned from "refunded" (see
+   * `ALLOWED_SOURCE_STATUSES_FOR_DESTINATION`), which itself is only ever reachable once a `refund`
+   * entry was posted — so this should never actually fire in practice, but never silently fabricates a
+   * correction against nothing either.
+   */
+  async correctRefund(input: { paymentAttemptId: string; reason: string | null }): Promise<LedgerJournalEntryRecord> {
+    const existing = await this.deps.entries.findByPaymentAndType(input.paymentAttemptId, "refund_correction");
+    if (existing) return existing;
+
+    const refundEntry = await this.deps.entries.findByPaymentAndType(input.paymentAttemptId, "refund");
+    if (!refundEntry) {
+      throw new ValidationError("Cannot correct a refund that has not been posted.");
+    }
+
+    const postings: LedgerPostingInput[] = refundEntry.postings.map((p) => ({
+      accountId: p.accountId,
+      accountType: p.accountType,
+      direction: p.direction === "debit" ? "credit" : "debit",
+      amountMinorUnits: p.amountMinorUnits,
+    }));
+    this.assertBalanced(postings);
+
+    const entry = await this.insertIdempotently({
+      entryType: "refund_correction",
+      agreementId: refundEntry.agreementId,
+      paymentAttemptId: input.paymentAttemptId,
+      currency: refundEntry.currency,
+      reason: input.reason,
+      postings,
+    });
+    await this.recordAudit(entry, "ledger_refund_correction", null, "ledger_system");
+    return entry;
+  }
+
+  /**
+   * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-05/06): reverses an
+   * existing "payout" entry once a CONFIRMED payout is later returned by the receiving bank — mirrors
+   * a refund-correction's own exact shape/rationale (flip the existing entry's own postings, insert as
+   * a new row, never edit or delete). Posted by `PayoutService.returnPayout`, driven exclusively by an
+   * explicit, caller-supplied return signal — never by a bare webhook event. See `payout_attempt`'s own
+   * doc comment (src/db/schema/payoutAttempt.ts) for the full provider-independent payout lifecycle
+   * this closes.
+   */
+  async postPayoutReturn(input: { paymentAttemptId: string; reason: string | null }): Promise<LedgerJournalEntryRecord> {
+    const existing = await this.deps.entries.findByPaymentAndType(input.paymentAttemptId, "payout_returned");
+    if (existing) return existing;
+
+    const payoutEntry = await this.deps.entries.findByPaymentAndType(input.paymentAttemptId, "payout");
+    if (!payoutEntry) {
+      throw new ValidationError("Cannot return a payout that has not been posted.");
+    }
+
+    const postings: LedgerPostingInput[] = payoutEntry.postings.map((p) => ({
+      accountId: p.accountId,
+      accountType: p.accountType,
+      direction: p.direction === "debit" ? "credit" : "debit",
+      amountMinorUnits: p.amountMinorUnits,
+    }));
+    this.assertBalanced(postings);
+
+    const entry = await this.insertIdempotently({
+      entryType: "payout_returned",
+      agreementId: payoutEntry.agreementId,
+      paymentAttemptId: input.paymentAttemptId,
+      currency: payoutEntry.currency,
+      reason: input.reason,
+      postings,
+    });
+    await this.recordAudit(entry, "ledger_payout_returned", null, "ledger_system");
     return entry;
   }
 

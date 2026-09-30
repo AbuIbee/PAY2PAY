@@ -53,6 +53,19 @@ export class ValidationError extends AppError {
 }
 
 /**
+ * A payout cannot be confirmed until the creditor receiving it has completed full identity
+ * verification (SC-07 — creditor verification eligibility). An instanceof `ValidationError` (existing
+ * callers/tests that check for that keep working), with its own `code` for the same reason as
+ * `ScheduleRevisionRequiredError` below.
+ */
+export class CreditorNotVerifiedError extends ValidationError {
+  constructor(message = "This payout cannot be confirmed until the creditor has completed full identity verification.") {
+    super(message, undefined, "CREDITOR_NOT_VERIFIED");
+    this.name = "CreditorNotVerifiedError";
+  }
+}
+
+/**
  * The agreement's proposed first-payment date has already passed while it is still unsigned. Still
  * an instanceof ValidationError (existing callers/tests that check for that keep working), but with
  * its own `code` so a client can reliably offer a schedule-revision action and retry, instead of
@@ -199,6 +212,30 @@ export class DependencyError extends AppError {
       isOperational: true,
     });
     this.name = "DependencyError";
+  }
+}
+
+/**
+ * PAID2YOU — V3 BANK-MANAGED-PAYMENTS ARCHITECTURE (security transfer, SC-01): thrown by the
+ * provider-availability guard (src/lib/providers/providerCapabilities.ts's
+ * assertProviderAvailableForRuntime, invoked by getPaymentProvider()/getKycProvider()/
+ * getCardIssuingProvider()) whenever no live, production-tagged provider is registered for the
+ * requested capability. Deliberately distinct from ConfigurationError (which means "this is a bug in
+ * how the app is wired") — this is an *expected*, operator-visible state ("no live financial/KYC/card
+ * provider has been approved yet") that must stop the request before any provider call, financial
+ * mutation, ledger mutation, or lifecycle transition — never a silent substitution of sandbox/mock
+ * behavior. 503, not 500: this is the same "not a bug, a temporarily/structurally unavailable
+ * dependency" shape DependencyError already uses, with its own code so a client can reliably show
+ * "not yet available" instead of a generic error.
+ */
+export class ProviderNotAvailableError extends AppError {
+  constructor(message = "This feature is not available yet. No live provider has been approved and configured.") {
+    super(message, {
+      statusCode: 503,
+      code: "PROVIDER_NOT_AVAILABLE",
+      isOperational: true,
+    });
+    this.name = "ProviderNotAvailableError";
   }
 }
 
