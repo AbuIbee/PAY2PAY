@@ -1,0 +1,10 @@
+{
+  "name": "final-campaign-01-migration-runner-proof",
+  "command": "node scripts/stage5-migration-runner-proof.mjs",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "timestamp": "2026-09-29T13:26:53.363Z",
+  "exitCode": 0,
+  "stdout": "[stage5-runner-proof] prefix set: 57 migrations (through 20260928000000_ledger_entry_type_stage4_parity.sql). full set: 58 migrations. newest: 20260929000000_payment_attempt_status_stage5_parity.sql.\n[stage5-runner-proof] starting disposable Postgres container \"pay2pay-s5-runner-22368-c15aa584\"\n[stage5-runner-proof] Postgres reachable at 127.0.0.1:55893\n[stage5-runner-proof] container identity confirmed (id b70ed39ae9c2...)\n[stage5-runner-proof] PHASE 1 (DB-09 applied-state persistence): PASS — 58 migrations tracked, unchanged across a no-op rerun.\n[stage5-runner-proof] PHASE 2 (pending-only application): PASS — 57 pre-applied migrations untouched, 1 pending migration applied exactly once, further rerun applied zero.\n[stage5-runner-proof] PHASE 3 (failure/retry semantics): PASS — failed migration's DDL did not persist and was not marked applied; retry applied it exactly once; further rerun applied zero.\n[stage5-runner-proof] MIGRATION RUNNER PROOF: PASS (DB-09, pending-only, failure/retry all verified against the authoritative supabase CLI runner)\n[stage5-runner-proof] stopping and removing container \"pay2pay-s5-runner-22368-c15aa584\"\n",
+  "stderr": "(node:22368) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.\n(Use `node --trace-deprecation ...` to show where the warning was created)\n",
+  "spawnError": null
+}

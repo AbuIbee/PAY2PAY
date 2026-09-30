@@ -1,0 +1,26 @@
+{
+  "name": "stage5-migration-runner-proof-summary",
+  "timestamp": "2026-09-30T01:17:08.090Z",
+  "results": {
+    "dbo9AppliedStatePersistence": {
+      "runA": 0,
+      "runB": 0,
+      "trackedCount": 58
+    },
+    "pendingOnly": {
+      "runA": 0,
+      "runB": 0,
+      "runC": 0,
+      "appliedInB": [
+        "C:\\Development\\PAY2PAY-bank-v3\\.stage5-runner-proof-scratch\\pending-only-full\\supabase\\migrations\\20260929000000_payment_attempt_status_stage5_parity.sql"
+      ],
+      "finalTrackedCount": 58
+    },
+    "failureRetry": {
+      "failureRun": 1,
+      "retryRun": 0,
+      "laterRerun": 0
+    }
+  },
+  "allPhasesPassed": true
+}

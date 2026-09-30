@@ -1,0 +1,9 @@
+{
+  "command": "node scripts/stage5-migration-runner-proof.mjs",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "startTimestamp": "2026-09-29T15:20:15.139Z",
+  "finishTimestamp": "2026-09-29T15:20:47.817Z",
+  "exitCode": 0,
+  "spawnError": null,
+  "sourceFreezeId": "46b0df49ecafd499"
+}

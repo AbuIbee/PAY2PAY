@@ -1,0 +1,7 @@
+=== provider boundary v2 ===
+Command: grep -rniE adyen across every Stage 5 file (including this round's freeze-mechanism files)
+grep exit code: 1
+
+package.json/package-lock.json diff:
+ package.json | 2 ++
+ 1 file changed, 2 insertions(+)

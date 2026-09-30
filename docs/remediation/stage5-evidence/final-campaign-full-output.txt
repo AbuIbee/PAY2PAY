@@ -1,0 +1,37 @@
+﻿[final-campaign] running: fresh disposable PG + full authoritative migration chain + pending-only + failure/retry (DB-09, pending-only, failure/retry) (node scripts/stage5-migration-runner-proof.mjs)
+[final-campaign] PASS (exit 0) — fresh disposable PG + full authoritative migration chain + pending-only + failure/retry (DB-09, pending-only, failure/retry)
+[final-campaign] running: fresh build + semantic schema parity suite (node scripts/postgres-test-db.mjs --stage5-only --run-tests)
+[final-campaign] PASS (exit 0) — fresh build + semantic schema parity suite
+[final-campaign] running: verifier self-validation suite (npx vitest run src/db/schemaParityComparators.self-validation.test.ts)
+[final-campaign] PASS (exit 0) — verifier self-validation suite
+[final-campaign] running: forward-upgrade proof (node scripts/stage5-forward-upgrade-test.mjs)
+[final-campaign] PASS (exit 0) — forward-upgrade proof
+[final-campaign] running: Stage 4 PostgreSQL regression (reused, unexpanded selector) (node scripts/postgres-test-db.mjs --stage4-only --run-tests)
+[final-campaign] PASS (exit 0) — Stage 4 PostgreSQL regression (reused, unexpanded selector)
+[final-campaign] running: typecheck (npx tsc --noEmit)
+[final-campaign] PASS (exit 0) — typecheck
+[final-campaign] running: lint (npm run lint)
+[final-campaign] PASS (exit 0) — lint
+[final-campaign] running: broader regression (npm test) (npm test)
+[final-campaign] PASS (exit 0) — broader regression (npm test)
+
+=== FINAL CAMPAIGN SUMMARY ===
+PASS (exit 0) — final-campaign-01-migration-runner-proof — fresh disposable PG + full authoritative migration chain + pending-only + failure/retry (DB-09, pending-only, failure/retry)
+PASS (exit 0) — final-campaign-02-schema-parity — fresh build + semantic schema parity suite
+PASS (exit 0) — final-campaign-03-verifier-self-validation — verifier self-validation suite
+PASS (exit 0) — final-campaign-04-forward-upgrade — forward-upgrade proof
+PASS (exit 0) — final-campaign-05-stage4-regression — Stage 4 PostgreSQL regression (reused, unexpanded selector)
+PASS (exit 0) — final-campaign-06-typecheck — typecheck
+PASS (exit 0) — final-campaign-07-lint — lint
+PASS (exit 0) — final-campaign-08-npm-test — broader regression (npm test)
+EVIDENCE INTEGRITY: PASS
+OVERALL: PASS
+node : (node:26252) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only 
+concatenated.
+At line:1 char:454
++ ...  guard failed" }; node scripts/stage5-final-campaign.mjs 2>&1 | Tee-O ...
++                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ((node:26252) [D...y concatenated.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+(Use `node --trace-deprecation ...` to show where the warning was created)

@@ -1,0 +1,90 @@
+Stage 5 — Final Zero-False-Positive Index Parity Remediation Order — empirical basis for the
+corrected actual-index catalog extraction in src/db/schemaParity.postgres.test.ts.
+
+Root cause of the Codex-demonstrated false positive: the prior extraction unnested
+pg_index.indkey and INNER JOINed each position to pg_attribute. Expression key positions have
+attnum = 0, which matches no row in pg_attribute, so those positions silently disappeared from
+the result set (not "extra", not "wrong type" — absent entirely), letting a comparator that
+diffs ordered column-name lists see a shortened, apparently-matching list.
+
+=== Probe: disposable postgres:17-alpine, scratch table + 5 index cases (never touching any real
+accepted table) ===
+
+  CREATE TABLE t (payment_attempt_id uuid, provider_name text, status text);
+  CREATE UNIQUE INDEX case_a_ordinary ON t (payment_attempt_id);
+  CREATE UNIQUE INDEX case_b_mixed ON t (payment_attempt_id, lower(provider_name));
+  CREATE INDEX case_c_expr_only ON t (lower(provider_name));
+  CREATE UNIQUE INDEX case_d_include ON t (payment_attempt_id) INCLUDE (provider_name);
+  CREATE UNIQUE INDEX case_e_partial ON t (payment_attempt_id) WHERE status = 'open';
+
+=== Corrected extraction query ===
+
+  SELECT ic.relname AS index_name, tc.relname AS table_name, ix.indisunique AS is_unique,
+         ix.indnkeyatts AS key_count, ix.indnatts AS total_count,
+         pg_get_expr(ix.indpred, ix.indrelid) AS predicate,
+         (
+           SELECT jsonb_agg(jsonb_build_object(
+             'ord', k.ord,
+             'attnum', k.attnum,
+             'isKey', k.ord <= ix.indnkeyatts,
+             'value', pg_get_indexdef(ix.indexrelid, k.ord::int, true)
+           ) ORDER BY k.ord)
+           FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
+         ) AS positions
+  FROM pg_index ix
+  JOIN pg_class ic ON ic.oid = ix.indexrelid
+  JOIN pg_class tc ON tc.oid = ix.indrelid
+  JOIN pg_namespace n ON n.oid = tc.relnamespace
+  WHERE n.nspname = 'public'
+
+Uses a correlated subquery (not GROUP BY) for the per-index position array, because
+pg_node_tree (ix.indpred's underlying storage type) has no equality/hash operator class and
+cannot appear in a GROUP BY clause — grouping by ix.indexrelid alone does not reliably let
+PostgreSQL treat ix.indpred as functionally dependent on system catalogs, so GROUP BY was
+avoided entirely rather than relied upon.
+
+=== Output (5 cases) ===
+
+case_a_ordinary   (ordinary single column):
+  is_unique=true key_count=1 total_count=1 predicate=NULL
+  positions=[{"ord":1,"isKey":true,"attnum":1,"value":"payment_attempt_id"}]
+
+case_b_mixed      (THE Codex-demonstrated false-positive shape: ordinary + expression):
+  is_unique=true key_count=2 total_count=2 predicate=NULL
+  positions=[
+    {"ord":1,"isKey":true,"attnum":1,"value":"payment_attempt_id"},
+    {"ord":2,"isKey":true,"attnum":0,"value":"lower(provider_name)"}
+  ]
+  -> attnum=0 at ord=2 is exactly the position the old inner-join-to-pg_attribute extraction
+     dropped. The corrected query preserves it, with pg_get_indexdef reconstructing its full
+     expression text ("lower(provider_name)"), not a blank/null value.
+
+case_c_expr_only  (expression-only index — must not produce zero keys):
+  is_unique=false key_count=1 total_count=1 predicate=NULL
+  positions=[{"ord":1,"isKey":true,"attnum":0,"value":"lower(provider_name)"}]
+  -> exactly one key, never zero (the old extraction would have produced zero rows for this
+     index entirely, since its single position has attnum=0).
+
+case_d_include    (INCLUDE column — must not be counted as a uniqueness key):
+  is_unique=true key_count=1 total_count=2 predicate=NULL
+  positions=[
+    {"ord":1,"isKey":true,"attnum":1,"value":"payment_attempt_id"},
+    {"ord":2,"isKey":false,"attnum":2,"value":"provider_name"}
+  ]
+  -> indnkeyatts=1 correctly marks only position 1 as a uniqueness key; position 2 (the INCLUDE
+     column) is flagged isKey=false and is never an expression (PostgreSQL disallows expression
+     INCLUDE columns), confirmed by attnum=2 (nonzero).
+
+case_e_partial    (ordinary partial index — regression sanity check, unaffected by this fix):
+  is_unique=true key_count=1 total_count=1 predicate=(status = 'open'::text)
+  positions=[{"ord":1,"isKey":true,"attnum":1,"value":"payment_attempt_id"}]
+
+=== Conclusion ===
+
+pg_get_indexdef(indexrelid, key_position, true) correctly reconstructs both ordinary column
+names (unquoted, exactly matching drizzle's raw column name — verified across all four ordinary-
+column positions above, zero quoting/qualification difference, so zero additional normalization
+is needed for the "column" kind) and expression text (for attnum=0 positions), for both key and
+INCLUDE positions, distinguished via indnkeyatts vs. indnatts. This is now the extraction basis
+for src/db/schemaParityComparators.ts's ActualIndex model and
+src/db/schemaParity.postgres.test.ts's real-database query.

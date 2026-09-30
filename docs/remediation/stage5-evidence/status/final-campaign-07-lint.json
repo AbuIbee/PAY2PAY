@@ -1,0 +1,10 @@
+{
+  "name": "final-campaign-07-lint",
+  "command": "npm run lint",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "timestamp": "2026-09-29T14:47:45.628Z",
+  "exitCode": 0,
+  "stdout": "\n> pay2pay@0.1.0 lint\n> eslint\n\n\nC:\\Development\\PAY2PAY-bank-v3\\src\\components\\admin\\AdminVerificationQueue.test.tsx\n  26:62  warning  '_init' is defined but never used  @typescript-eslint/no-unused-vars\n\nC:\\Development\\PAY2PAY-bank-v3\\src\\lib\\disputes\\testFakes.ts\n  278:50  warning  '_paymentMethod' is defined but never used  @typescript-eslint/no-unused-vars\n\nC:\\Development\\PAY2PAY-bank-v3\\src\\lib\\payments\\paymentWebhookRecovery.postgres.test.ts\n  4617:41  warning  '_omitted' is assigned a value but never used  @typescript-eslint/no-unused-vars\n  4667:33  warning  '_omitted' is assigned a value but never used  @typescript-eslint/no-unused-vars\n\nC:\\Development\\PAY2PAY-bank-v3\\src\\lib\\payments\\platformFeePolicy.ts\n  52:34  warning  '_context' is defined but never used  @typescript-eslint/no-unused-vars\n\nC:\\Development\\PAY2PAY-bank-v3\\src\\lib\\security\\challengeProvider.ts\n  31:16  warning  '_request' is defined but never used  @typescript-eslint/no-unused-vars\n\nC:\\Development\\PAY2PAY-bank-v3\\src\\test-support\\kyc\\sandboxKycProvider.ts\n  29:38  warning  '_input' is defined but never used  @typescript-eslint/no-unused-vars\n  33:36  warning  '_input' is defined but never used  @typescript-eslint/no-unused-vars\n\nC:\\Development\\PAY2PAY-bank-v3\\src\\test-support\\payments\\sandboxPaymentProvider.ts\n   59:32  warning  '_input' is defined but never used             @typescript-eslint/no-unused-vars\n   63:25  warning  '_input' is defined but never used             @typescript-eslint/no-unused-vars\n   67:34  warning  '_input' is defined but never used             @typescript-eslint/no-unused-vars\n  173:50  warning  '_amountMinorUnits' is defined but never used  @typescript-eslint/no-unused-vars\n\n✖ 12 problems (0 errors, 12 warnings)\n\n",
+  "stderr": "",
+  "spawnError": null
+}

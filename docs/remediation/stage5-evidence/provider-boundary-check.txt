@@ -1,0 +1,36 @@
+Stage 5 — Part VII Step 23: unwanted provider check.
+
+Scope: every file created or modified specifically by Stage 5 (the Zero-False-Positive
+Completion remediation, this session and its predecessor) — not the full repository diff, which
+also contains substantial pre-existing, out-of-scope Stage 1-4 work.
+
+Command (from repo root):
+  grep -rniE "adyen" \
+    supabase/migrations/20260929000000_payment_attempt_status_stage5_parity.sql \
+    src/db/schemaParity.postgres.test.ts \
+    src/db/schemaParityComparators.ts \
+    src/db/schemaParityComparators.self-validation.test.ts \
+    scripts/stage5-forward-upgrade-test.mjs \
+    scripts/stage5-migration-runner-proof.mjs \
+    scripts/stage5-final-campaign.mjs \
+    scripts/lib/statusSidecar.mjs
+
+Output: (no matches — grep exit code 1)
+
+Additional check — the Stage-5-added hunk of scripts/postgres-test-db.mjs (diff-only, not the
+whole file, since that file predates Stage 5):
+  git diff -- scripts/postgres-test-db.mjs | grep -niE "adyen"
+Output: (no matches — grep exit code 1)
+
+Dependency manifest check:
+  git diff --stat -- package.json package-lock.json
+Output: package.json | 2 ++ (adds two npm-script aliases, "check-no-sandbox-runtime" and
+"check-no-adyen-dependency" — both PROTECTIVE checks guarding against Adyen/sandbox runtime
+dependencies, and both predate this Stage's own session: scripts/check-no-adyen-dependency.mjs
+and scripts/check-no-sandbox-runtime.mjs already appeared as untracked files in this session's
+opening git-status snapshot, before any Stage 5 work began). package-lock.json: zero changes.
+No new dependency of any kind was added by Stage 5.
+
+Conclusion:
+
+NEW UNWANTED BANKING/PROVIDER DEPENDENCIES INTRODUCED: 0

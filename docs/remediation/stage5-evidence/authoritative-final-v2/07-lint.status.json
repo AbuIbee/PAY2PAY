@@ -1,0 +1,8 @@
+{
+  "command": "npm run lint",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "startTimestamp": "2026-09-30T01:17:31.881Z",
+  "finishTimestamp": "2026-09-30T01:17:54.952Z",
+  "exitCode": 0,
+  "spawnError": null
+}

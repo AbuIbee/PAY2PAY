@@ -1,0 +1,137 @@
+﻿BRANCH: architecture/bank-managed-payments-v3
+HEAD: 93bbbbf8950010d4c0a70c7133339dc352ebd0fd
+---
+ M .github/workflows/ci.yml
+ M CLAUDE.md
+ M package.json
+ M scripts/postgres-test-db.mjs
+ M scripts/postgres-test-db.test.mjs
+D  src/app/api/admin/sandbox/simulate-settlement/route.test.ts
+D  src/app/api/admin/sandbox/simulate-settlement/route.ts
+ M src/app/api/payments/by-agreement/route.test.ts
+ M src/app/api/payments/by-agreement/route.ts
+ M src/app/api/payments/detail/route.test.ts
+ M src/app/api/payments/detail/route.ts
+ M src/app/api/relationships/accounts/bank/connect/route.test.ts
+ M src/components/PaymentDetail.test.tsx
+ M src/components/PaymentDetail.tsx
+ M src/components/PaymentsList.test.tsx
+ M src/components/PaymentsList.tsx
+ M src/config/env.ts
+ M src/db/schema/enums.ts
+ M src/db/schema/index.ts
+ M src/lib/ach/achPaymentService.ts
+ M src/lib/ach/getAchPaymentService.ts
+ M src/lib/ach/testFakes.ts
+ M src/lib/admin/environmentStatus.test.ts
+ M src/lib/admin/environmentStatus.ts
+ M src/lib/admin/testFakes.ts
+ M src/lib/agreements/agreementProgressService.ts
+ M src/lib/audit/auditService.ts
+ M src/lib/audit/drizzleAuditEventRepository.ts
+ M src/lib/cards/getCardIssuingProvider.ts
+ M src/lib/cards/testFakes.ts
+ M src/lib/debitCard/debitCardPaymentService.test.ts
+ M src/lib/debitCard/debitCardPaymentService.ts
+ M src/lib/debitCard/getDebitCardPaymentService.ts
+ M src/lib/debitCard/testFakes.ts
+ M src/lib/errors.ts
+ M src/lib/failedPayments/failedPaymentRetryCoordinator.ts
+ M src/lib/failedPayments/getFailedPaymentRetryCoordinator.ts
+ M src/lib/failedPayments/getPaymentRetryService.ts
+ M src/lib/failedPayments/productionFactoryRecursion.test.ts
+ M src/lib/kyc/getKycProvider.ts
+ M src/lib/kyc/testFakes.ts
+ M src/lib/ledger/agreementCompletionService.ts
+ M src/lib/ledger/balanceService.test.ts
+ M src/lib/ledger/balanceService.ts
+ M src/lib/ledger/concurrencyAndIdempotency.test.ts
+ M src/lib/ledger/drizzleReconciliationExceptionRepository.ts
+ M src/lib/ledger/getBalanceService.ts
+ M src/lib/ledger/installmentAmountAwareness.postgres.test.ts
+ M src/lib/ledger/ledgerService.ts
+ M src/lib/ledger/paymentLedgerIntegration.test.ts
+ M src/lib/ledger/reconciliationService.ts
+ M src/lib/ledger/testFakes.ts
+ M src/lib/notify/consoleEmailSender.ts
+ M src/lib/notify/consoleSmsSender.ts
+ M src/lib/notify/getEmailSender.ts
+ M src/lib/notify/getSmsSender.ts
+ M src/lib/payments/drizzlePaymentAttemptRepository.ts
+ M src/lib/payments/getPaymentProvider.ts
+ M src/lib/payments/getPaymentService.ts
+ M src/lib/payments/getPaymentWebhookService.ts
+ M src/lib/payments/paymentInitiationEligibilityService.ts
+ M src/lib/payments/paymentService.test.ts
+ M src/lib/payments/paymentService.ts
+ M src/lib/payments/paymentWebhookRecovery.postgres.test.ts
+ M src/lib/payments/paymentWebhookService.test.ts
+ M src/lib/payments/paymentWebhookService.ts
+ M src/lib/payments/testFakes.ts
+ M src/lib/providers/providerCapabilities.test.ts
+ M src/lib/providers/providerCapabilities.ts
+ M src/lib/relationships/bankConnectionService.test.ts
+ M src/lib/settlements/settlementBinding.postgres.test.ts
+ M src/lib/ui/statusLabels.test.ts
+ M src/lib/ui/statusLabels.ts
+RM src/lib/cards/sandboxCardIssuingProvider.ts -> src/test-support/cards/sandboxCardIssuingProvider.ts
+RM src/lib/kyc/sandboxKycProvider.test.ts -> src/test-support/kyc/sandboxKycProvider.test.ts
+RM src/lib/kyc/sandboxKycProvider.ts -> src/test-support/kyc/sandboxKycProvider.ts
+RM src/lib/payments/sandboxPaymentProvider.test.ts -> src/test-support/payments/sandboxPaymentProvider.test.ts
+RM src/lib/payments/sandboxPaymentProvider.ts -> src/test-support/payments/sandboxPaymentProvider.ts
+ M vitest.postgres.config.ts
+ M vitest.postgres.setup.ts
+?? docs/remediation/CONTROL_ORDER_004-B_SV-007_FACTORY_TEST_CORRECTION.md
+?? docs/remediation/Paid2You_Codex_Stage01_Final_Acceptance_Addendum.md
+?? docs/remediation/Paid2You_Codex_Stage01_Final_Verification.md
+?? docs/remediation/Paid2You_Codex_Stage02_Evidence_Addendum.md
+?? docs/remediation/Paid2You_Codex_Stage02_Final_Acceptance_Addendum.md
+?? docs/remediation/Paid2You_Codex_Stage02_Independent_Acceptance_Report.md
+?? docs/remediation/Paid2You_Codex_Stage03_Final_Acceptance_Addendum.md
+?? docs/remediation/Paid2You_Codex_Stage03_Final_Technical_Acceptance.md
+?? docs/remediation/Paid2You_Codex_Stage03_Independent_Acceptance_Report.md
+?? docs/remediation/STAGE_01_FINAL_IMPLEMENTATION_AND_EXIT_REPORT.md
+?? docs/remediation/STAGE_02_008I_EXACT_ASSERTION_FIX.md
+?? docs/remediation/STAGE_02_FINAL_PREAUTHORIZATION_CLARIFICATION.md
+?? docs/remediation/STAGE_02_FOUR_FINDINGS_REMEDIATION_AND_GATE_B_READINESS.md
+?? docs/remediation/STAGE_02_PHASE_A_ARCHITECTURE_AND_ISOLATION_REPORT.md
+?? docs/remediation/STAGE_02_PHASE_B_ISOLATION_AND_HARNESS_EVIDENCE.md
+?? docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EVIDENCE_AND_AUTHORIZATION.md
+?? docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EXECUTION_REPORT.md
+?? docs/remediation/STAGE_02_PHASE_C_008I_FINAL_FAILURE_DIAGNOSIS.md
+?? docs/remediation/STAGE_02_PHASE_C_FAILURE_DIAGNOSIS.md
+?? docs/remediation/STAGE_02_PHASE_C_FINAL_COMPLETION_REPORT.md
+?? docs/remediation/STAGE_02_PHASE_C_REM008_POSTGRESQL_EXECUTION_REPORT.md
+?? docs/remediation/STAGE_02_PHASE_C_TWO_FAILURES_REMEDIATION_AND_EXECUTION_READINESS.md
+?? docs/remediation/STAGE_02_REPORTER_ONLY_CONFIGURATION_CHANGE.md
+?? docs/remediation/STAGE_02_ROLE_OWNERSHIP_FINAL_CORRECTION_AND_PHASE_B_APPROVAL.md
+?? docs/remediation/STAGE_03_G01_G12_EXECUTION_AND_ACCEPTANCE_REPORT.md
+?? docs/remediation/STAGE_03_PROJECT_OWNER_FINAL_ACCEPTANCE_AND_CARRY_FORWARD.md
+?? docs/remediation/stage03-g03-g04-evidence/
+?? docs/remediation/stage4-evidence/
+?? scripts/check-no-adyen-dependency.mjs
+?? scripts/check-no-adyen-dependency.test.mjs
+?? scripts/check-no-sandbox-runtime.mjs
+?? scripts/check-no-sandbox-runtime.test.mjs
+?? src/db/schema/payoutAttempt.ts
+?? src/lib/failedPayments/failedPaymentRetryCoordinatorActivationGate.test.ts
+?? src/lib/failedPayments/getPaymentRetryService.test.ts
+?? src/lib/ledger/drizzleSettlementBalanceReader.ts
+?? src/lib/ledger/reconciliationDrift.postgres.test.ts
+?? src/lib/ledger/refundCorrection.postgres.test.ts
+?? src/lib/ledger/settlementBalanceReader.postgres.test.ts
+?? src/lib/notify/consoleEmailSender.test.ts
+?? src/lib/notify/consoleSmsSender.test.ts
+?? src/lib/notify/getEmailSender.test.ts
+?? src/lib/notify/getSmsSender.test.ts
+?? src/lib/notify/productionFailClosed.test.ts
+?? src/lib/payments/correctiveEventAccounting.postgres.test.ts
+?? src/lib/payments/getPaymentWebhookService.test.ts
+?? src/lib/payments/paymentInitiationEligibilityService.test.ts
+?? src/lib/payouts/
+?? src/test-support/payments/perKeyProviderCallCounter.test.ts
+?? src/test-support/payments/perKeyProviderCallCounter.ts
+?? supabase/migrations/20260922000000_payout_attempt.sql
+?? supabase/migrations/20260928000000_ledger_entry_type_stage4_parity.sql
+?? test/postgres/outboundTransportGuard.mjs
+?? test/postgres/outboundTransportGuard.test.mjs

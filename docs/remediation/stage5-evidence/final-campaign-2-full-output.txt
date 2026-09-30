@@ -1,0 +1,37 @@
+﻿[final-campaign] running: [order items 1, 2, 4] fresh disposable PG build + corrected semantic schema-parity suite + real-PostgreSQL index-extraction self-validation (node scripts/postgres-test-db.mjs --stage5-only --run-tests)
+[final-campaign] PASS (exit 0) — [order items 1, 2, 4] fresh disposable PG build + corrected semantic schema-parity suite + real-PostgreSQL index-extraction self-validation
+[final-campaign] running: [order item 3] comparator self-validation suite (includes the INDEX-EXPRESSION-FALSE-POSITIVE-REGRESSION test) (npx vitest run src/db/schemaParityComparators.self-validation.test.ts)
+[final-campaign] PASS (exit 0) — [order item 3] comparator self-validation suite (includes the INDEX-EXPRESSION-FALSE-POSITIVE-REGRESSION test)
+[final-campaign] running: [order item 5] forward-upgrade proof (node scripts/stage5-forward-upgrade-test.mjs)
+[final-campaign] PASS (exit 0) — [order item 5] forward-upgrade proof
+[final-campaign] running: [order items 6, 7] Supabase applied-state/pending-only proof + failure/retry proof (node scripts/stage5-migration-runner-proof.mjs)
+[final-campaign] PASS (exit 0) — [order items 6, 7] Supabase applied-state/pending-only proof + failure/retry proof
+[final-campaign] running: [order item 8] Stage 4 PostgreSQL regression (reused, unexpanded selector) (node scripts/postgres-test-db.mjs --stage4-only --run-tests)
+[final-campaign] PASS (exit 0) — [order item 8] Stage 4 PostgreSQL regression (reused, unexpanded selector)
+[final-campaign] running: [order item 9] typecheck (npx tsc --noEmit)
+[final-campaign] PASS (exit 0) — [order item 9] typecheck
+[final-campaign] running: [order item 10] lint (npm run lint)
+[final-campaign] PASS (exit 0) — [order item 10] lint
+[final-campaign] running: [order item 11] broader regression (npm test) (npm test)
+[final-campaign] FAIL (exit 1) — [order item 11] broader regression (npm test)
+
+=== FINAL CAMPAIGN SUMMARY ===
+PASS (exit 0) — final-campaign-01-schema-parity-and-index-extraction — [order items 1, 2, 4] fresh disposable PG build + corrected semantic schema-parity suite + real-PostgreSQL index-extraction self-validation
+PASS (exit 0) — final-campaign-02-verifier-self-validation — [order item 3] comparator self-validation suite (includes the INDEX-EXPRESSION-FALSE-POSITIVE-REGRESSION test)
+PASS (exit 0) — final-campaign-03-forward-upgrade — [order item 5] forward-upgrade proof
+PASS (exit 0) — final-campaign-04-migration-runner-proof — [order items 6, 7] Supabase applied-state/pending-only proof + failure/retry proof
+PASS (exit 0) — final-campaign-05-stage4-regression — [order item 8] Stage 4 PostgreSQL regression (reused, unexpanded selector)
+PASS (exit 0) — final-campaign-06-typecheck — [order item 9] typecheck
+PASS (exit 0) — final-campaign-07-lint — [order item 10] lint
+FAIL (exit 1) — final-campaign-08-npm-test — [order item 11] broader regression (npm test)
+EVIDENCE INTEGRITY: PASS
+OVERALL: FAIL
+node : (node:30280) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only 
+concatenated.
+At line:1 char:454
++ ...  guard failed" }; node scripts/stage5-final-campaign.mjs 2>&1 | Tee-O ...
++                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ((node:30280) [D...y concatenated.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+(Use `node --trace-deprecation ...` to show where the warning was created)

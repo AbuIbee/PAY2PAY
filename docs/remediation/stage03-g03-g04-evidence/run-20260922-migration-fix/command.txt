@@ -1,0 +1,6 @@
+﻿COMMAND: node scripts/postgres-test-db.mjs --run-tests --stage3-g03-g04-only
+START_TIME_UTC: 2026-09-22T03:36:58.1602407Z
+DOCKER_CONTEXT: desktop-linux (verified local workstation context immediately before this run)
+NEW_MIGRATION: supabase/migrations/20260922000000_payout_attempt.sql
+END_TIME_UTC: 2026-09-22T03:37:10.3380161Z
+HARNESS_PROCESS_EXIT_CODE: 0

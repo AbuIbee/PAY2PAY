@@ -1,0 +1,291 @@
+{
+  "generatedAt": "2026-09-30T01:24:07.597Z",
+  "evidenceDirectory": "docs/remediation/stage5-evidence/authoritative-final-v2/",
+  "requiredSteps": [
+    "01-schema-parity-and-index-extraction",
+    "02-verifier-self-validation",
+    "03-forward-upgrade",
+    "04-migration-runner-proof",
+    "05-stage4-regression",
+    "06-typecheck",
+    "07-lint",
+    "08-broader-regression-run-1",
+    "09-broader-regression-run-2",
+    "10-broader-regression-run-3"
+  ],
+  "artifacts": [
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/source-freeze.json",
+      "label": "pre-campaign source freeze (NUL-delimited git discovery, hashes, HEAD, coverage)",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/source-freeze-after.json",
+      "label": "post-campaign, INDEPENDENTLY re-derived source freeze",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/source-freeze-drift.json",
+      "label": "before/after drift comparison (path-set, existence-state, content-hash, curated, migrations, CI workflow)",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/campaign-summary.json",
+      "label": "top-level campaign result",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/git-tracked-changed-raw-before.txt",
+      "label": "raw `git diff --name-only -z HEAD --` output, pre-campaign",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/git-untracked-raw-before.txt",
+      "label": "raw `git ls-files --others --exclude-standard -z` output, pre-campaign",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/git-tracked-changed-raw-after.txt",
+      "label": "raw tracked-changed output, post-campaign",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/git-untracked-raw-after.txt",
+      "label": "raw untracked output, post-campaign",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/changed-path-list-before.json",
+      "label": "final unioned, filtered changed-path list, pre-campaign",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/changed-path-list-after.json",
+      "label": "final unioned, filtered changed-path list, post-campaign",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/deployment-ordering.md",
+      "label": "G5-10 authoritative deployment-ordering evidence",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/provider-boundary-check.txt",
+      "label": "provider-boundary evidence",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/pre-push-inventory-git-status.txt",
+      "label": "pre-push inventory",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/adversarial-preflight.md",
+      "label": "Codex-style adversarial preflight, including the freeze-logic-specific RULE 18 attack",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/01-schema-parity-and-index-extraction.command.txt",
+      "label": "01-schema-parity-and-index-extraction: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/01-schema-parity-and-index-extraction.stdout.txt",
+      "label": "01-schema-parity-and-index-extraction: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/01-schema-parity-and-index-extraction.stderr.txt",
+      "label": "01-schema-parity-and-index-extraction: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/01-schema-parity-and-index-extraction.status.json",
+      "label": "01-schema-parity-and-index-extraction: status sidecar",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/02-verifier-self-validation.command.txt",
+      "label": "02-verifier-self-validation: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/02-verifier-self-validation.stdout.txt",
+      "label": "02-verifier-self-validation: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/02-verifier-self-validation.stderr.txt",
+      "label": "02-verifier-self-validation: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/02-verifier-self-validation.status.json",
+      "label": "02-verifier-self-validation: status sidecar",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/03-forward-upgrade.command.txt",
+      "label": "03-forward-upgrade: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/03-forward-upgrade.stdout.txt",
+      "label": "03-forward-upgrade: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/03-forward-upgrade.stderr.txt",
+      "label": "03-forward-upgrade: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/03-forward-upgrade.status.json",
+      "label": "03-forward-upgrade: status sidecar",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/04-migration-runner-proof.command.txt",
+      "label": "04-migration-runner-proof: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/04-migration-runner-proof.stdout.txt",
+      "label": "04-migration-runner-proof: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/04-migration-runner-proof.stderr.txt",
+      "label": "04-migration-runner-proof: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/04-migration-runner-proof.status.json",
+      "label": "04-migration-runner-proof: status sidecar",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/05-stage4-regression.command.txt",
+      "label": "05-stage4-regression: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/05-stage4-regression.stdout.txt",
+      "label": "05-stage4-regression: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/05-stage4-regression.stderr.txt",
+      "label": "05-stage4-regression: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/05-stage4-regression.status.json",
+      "label": "05-stage4-regression: status sidecar",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/06-typecheck.command.txt",
+      "label": "06-typecheck: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/06-typecheck.stdout.txt",
+      "label": "06-typecheck: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/06-typecheck.stderr.txt",
+      "label": "06-typecheck: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/06-typecheck.status.json",
+      "label": "06-typecheck: status sidecar",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/07-lint.command.txt",
+      "label": "07-lint: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/07-lint.stdout.txt",
+      "label": "07-lint: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/07-lint.stderr.txt",
+      "label": "07-lint: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/07-lint.status.json",
+      "label": "07-lint: status sidecar",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/08-broader-regression-run-1.command.txt",
+      "label": "08-broader-regression-run-1: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/08-broader-regression-run-1.stdout.txt",
+      "label": "08-broader-regression-run-1: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/08-broader-regression-run-1.stderr.txt",
+      "label": "08-broader-regression-run-1: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/08-broader-regression-run-1.status.json",
+      "label": "08-broader-regression-run-1: status sidecar",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/09-broader-regression-run-2.command.txt",
+      "label": "09-broader-regression-run-2: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/09-broader-regression-run-2.stdout.txt",
+      "label": "09-broader-regression-run-2: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/09-broader-regression-run-2.stderr.txt",
+      "label": "09-broader-regression-run-2: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/09-broader-regression-run-2.status.json",
+      "label": "09-broader-regression-run-2: status sidecar",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/10-broader-regression-run-3.command.txt",
+      "label": "10-broader-regression-run-3: command text",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/10-broader-regression-run-3.stdout.txt",
+      "label": "10-broader-regression-run-3: captured stdout",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/10-broader-regression-run-3.stderr.txt",
+      "label": "10-broader-regression-run-3: captured stderr",
+      "exists": true
+    },
+    {
+      "path": "docs/remediation/stage5-evidence/authoritative-final-v2/10-broader-regression-run-3.status.json",
+      "label": "10-broader-regression-run-3: status sidecar",
+      "exists": true
+    }
+  ],
+  "ciWorkflowCoverageStatus": "PASS",
+  "integrityIssues": [],
+  "integrityPass": true
+}

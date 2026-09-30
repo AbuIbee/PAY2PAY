@@ -1,0 +1,2 @@
+npm test
+cwd: C:\Development\PAY2PAY-bank-v3

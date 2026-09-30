@@ -1,0 +1,8 @@
+{
+  "command": "npm test",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "startTimestamp": "2026-09-30T01:19:06.132Z",
+  "finishTimestamp": "2026-09-30T01:20:17.800Z",
+  "exitCode": 0,
+  "spawnError": null
+}

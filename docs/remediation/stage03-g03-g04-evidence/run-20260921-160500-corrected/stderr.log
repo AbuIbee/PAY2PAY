@@ -1,0 +1,20 @@
+stderr | src/lib/payments/paymentWebhookRecovery.postgres.test.ts > R06 + R09: payment/webhook recovery integrity (real Postgres) > STAGE3-G03-REAL-FACTORY-POSTGRES-RECOVERY — the REAL, unmodified production getPaymentWebhookService() factory's recoverBatch recovers a durably crashed, lease-expired historical webhook event against real PostgreSQL, with the exact expected financial effects, no duplicate effect, and no provider resolution of any kind
+{"level":"error","message":"payment_webhook_processing_failed","time":"2026-09-22T03:25:41.036Z","eventId":"217f28f2-4964-4414-8f62-3cba166c9685","eventType":"payment.succeeded","attempt":2,"retryable":true,"code":"transient_processing_error"}
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/payments/paymentWebhookRecovery.postgres.test.ts > R06 + R09: payment/webhook recovery integrity (real Postgres) > STAGE3-G03-REAL-FACTORY-POSTGRES-RECOVERY — the REAL, unmodified production getPaymentWebhookService() factory's recoverBatch recovers a durably crashed, lease-expired historical webhook event against real PostgreSQL, with the exact expected financial effects, no duplicate effect, and no provider resolution of any kind
+AssertionError: expected 0 to be greater than or equal to 1
+ ❯ src/lib/payments/paymentWebhookRecovery.postgres.test.ts:3029:34
+    3027|       const recovery = await realWebhookService.recoverBatch(10, after…
+    3028|       expect(recovery.claimed).toBeGreaterThanOrEqual(1);
+    3029|       expect(recovery.processed).toBeGreaterThanOrEqual(1);
+       |                                  ^
+    3030| 
+    3031|       // Exact expected persisted financial effects — the SAME asserti…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+(node:25968) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)

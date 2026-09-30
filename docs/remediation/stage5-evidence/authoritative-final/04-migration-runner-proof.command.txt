@@ -1,0 +1,2 @@
+node scripts/stage5-migration-runner-proof.mjs
+cwd: C:\Development\PAY2PAY-bank-v3

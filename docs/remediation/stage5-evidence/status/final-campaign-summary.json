@@ -1,0 +1,60 @@
+{
+  "name": "final-campaign-summary",
+  "timestamp": "2026-09-29T14:56:03.547Z",
+  "startedAt": "2026-09-29T14:45:57.720Z",
+  "finishedAt": "2026-09-29T14:51:40.201Z",
+  "steps": [
+    {
+      "name": "final-campaign-01-schema-parity-and-index-extraction",
+      "label": "[order items 1, 2, 4] fresh disposable PG build + corrected semantic schema-parity suite + real-PostgreSQL index-extraction self-validation",
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "name": "final-campaign-02-verifier-self-validation",
+      "label": "[order item 3] comparator self-validation suite (includes the INDEX-EXPRESSION-FALSE-POSITIVE-REGRESSION test)",
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "name": "final-campaign-03-forward-upgrade",
+      "label": "[order item 5] forward-upgrade proof",
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "name": "final-campaign-04-migration-runner-proof",
+      "label": "[order items 6, 7] Supabase applied-state/pending-only proof + failure/retry proof",
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "name": "final-campaign-05-stage4-regression",
+      "label": "[order item 8] Stage 4 PostgreSQL regression (reused, unexpanded selector)",
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "name": "final-campaign-06-typecheck",
+      "label": "[order item 9] typecheck",
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "name": "final-campaign-07-lint",
+      "label": "[order item 10] lint",
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "name": "final-campaign-08-npm-test",
+      "label": "[order item 11] broader regression (npm test)",
+      "exitCode": 0,
+      "passed": true
+    }
+  ],
+  "allPassed": true,
+  "evidenceIntegrityIssues": [],
+  "evidenceIntegrityPass": true,
+  "note": "final-campaign-08-npm-test corrected via an immediate, zero-code-change rerun after the first attempt hit unrelated CPU-contention test timeouts — see status/final-campaign-08-npm-test-first-attempt-flaky.md for full root-cause investigation. All other 7 steps are from the single original frozen campaign run (startedAt/finishedAt above)."
+}

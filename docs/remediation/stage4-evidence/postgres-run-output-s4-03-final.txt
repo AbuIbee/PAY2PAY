@@ -1,0 +1,337 @@
+﻿[test:postgres] starting disposable Postgres container "pay2pay-pgtest-31884-0586bd99" (image postgres:17-alpine, run token 6d925363-803e-4c76-82ac-7c2bb8851e8c)
+[test:postgres] Postgres will be reachable at 127.0.0.1:62556 (container "pay2pay-pgtest-31884-0586bd99")
+[test:postgres] verifying host-side container identity via `docker inspect` (independent of the name this process itself generated)...
+[test:postgres] host-side identity confirmed (container id ced46480a2bd..., image postgres:17-alpine, running)
+[test:postgres] waiting for Postgres to accept connections...
+[test:postgres] verifying in-database identity before any schema/data write...
+[test:postgres] in-database identity confirmed (current_database=postgres, current_user=postgres, server reports internal port 5432 — this need not equal the published host port 62556)
+[test:postgres] bootstrapping and immediately verifying the run-ownership marker (before any migration)...
+[test:postgres] run-ownership marker verified.
+[test:postgres] applying repository migrations to the disposable database...
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "business_staff_member_business_profile_id_business_profile_id_fk" will be truncated to "business_staff_member_business_profile_id_business_profile_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "identity_verification_record_reviewer_user_id_user_account_id_fk" will be truncated to "identity_verification_record_reviewer_user_id_user_account_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "business_approval_policy_business_profile_id_business_profile_id_fk" will be truncated to "business_approval_policy_business_profile_id_business_profile_i"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "business_staff_invitation_business_profile_id_business_profile_id_fk" will be truncated to "business_staff_invitation_business_profile_id_business_profile_"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "business_staff_invitation_accepted_by_user_id_user_account_id_fk" will be truncated to "business_staff_invitation_accepted_by_user_id_user_account_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "staff_approval_request_business_profile_id_business_profile_id_fk" will be truncated to "staff_approval_request_business_profile_id_business_profile_id_"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "staff_approval_request_proposed_by_staff_id_business_staff_member_id_fk" will be truncated to "staff_approval_request_proposed_by_staff_id_business_staff_memb"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "staff_approval_request_approved_by_staff_id_business_staff_member_id_fk" will be truncated to "staff_approval_request_approved_by_staff_id_business_staff_memb"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "installment_schedule_item_agreement_version_id_agreement_version_id_fk" will be truncated to "installment_schedule_item_agreement_version_id_agreement_versio"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "reconciliation_exception_payment_attempt_id_payment_attempt_id_fk" will be truncated to "reconciliation_exception_payment_attempt_id_payment_attempt_id_"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "payment_attempt_installment_schedule_item_id_installment_schedule_item_id_fk" will be truncated to "payment_attempt_installment_schedule_item_id_installment_schedu"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "notification_event_related_payment_attempt_id_payment_attempt_id_fk" will be truncated to "notification_event_related_payment_attempt_id_payment_attempt_i"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "payment_retry_installment_schedule_item_id_installment_schedule_item_id_fk" will be truncated to "payment_retry_installment_schedule_item_id_installment_schedule"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "payment_retry_resulting_payment_attempt_id_payment_attempt_id_fk" will be truncated to "payment_retry_resulting_payment_attempt_id_payment_attempt_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "reschedule_request_installment_schedule_item_id_installment_schedule_item_id_fk" will be truncated to "reschedule_request_installment_schedule_item_id_installment_sch"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "partial_payment_request_installment_schedule_item_id_installment_schedule_item_id_fk" will be truncated to "partial_payment_request_installment_schedule_item_id_installmen"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "partial_payment_request_payment_attempt_id_payment_attempt_id_fk" will be truncated to "partial_payment_request_payment_attempt_id_payment_attempt_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "settlement_payment_settlement_proposal_id_settlement_proposal_id_fk" will be truncated to "settlement_payment_settlement_proposal_id_settlement_proposal_i"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_invitation_resolved_invitee_user_id_user_account_id_fk" will be truncated to "relationship_invitation_resolved_invitee_user_id_user_account_i"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_participant_individual_profile_id_personal_profile_id_fk" will be truncated to "relationship_participant_individual_profile_id_personal_profile"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_participant_represented_by_user_id_user_account_id_fk" will be truncated to "relationship_participant_represented_by_user_id_user_account_id"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_financial_account_relationship_id_relationship_id_fk" will be truncated to "relationship_financial_account_relationship_id_relationship_id_"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_financial_account_relationship_participant_id_relationship_participant_id_fk" will be truncated to "relationship_financial_account_relationship_participant_id_rela"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_financial_account_financial_account_id_financial_account_id_fk" will be truncated to "relationship_financial_account_financial_account_id_financial_a"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_financial_account_selected_by_user_id_user_account_id_fk" will be truncated to "relationship_financial_account_selected_by_user_id_user_account"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "notification_event_related_invitation_id_relationship_invitation_id_fk" will be truncated to "notification_event_related_invitation_id_relationship_invitatio"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "agreement_party_snapshot_agreement_version_id_agreement_version_id_fk" will be truncated to "agreement_party_snapshot_agreement_version_id_agreement_version"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "preferred_email_verification_token_personal_profile_id_personal_profile_id_fk" will be truncated to "preferred_email_verification_token_personal_profile_id_personal"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+[fresh-migration-test] OK — all 57 migrations applied cleanly to an empty database.
+[test:postgres] creating reduced-privilege runtime role "pay2pay_test_runtime" for actual test execution...
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '00000',
+  message: 'role "pay2pay_test_runtime" does not exist, skipping',
+  file: 'user.c',
+  line: '1139',
+  routine: 'DropRole'
+}
+[test:postgres] creating harmless scratch-verification table...
+[test:postgres] verifying the runtime role's actual effective identity and privileges...
+[test:postgres] runtime role identity, attributes, marker protection, and application-table privileges all verified.
+[test:postgres] performing harmless scratch write-and-rollback verification...
+[test:postgres] harmless scratch write-and-rollback verification succeeded — no persistent row remains.
+[test:postgres] STAGE 4 — running ONLY the fixed Stage 4 postgres test files: src/lib/payouts/payoutAtomicity.postgres.test.ts, src/lib/ledger/refundCorrection.postgres.test.ts, src/lib/payments/correctiveEventAccounting.postgres.test.ts, src/lib/ledger/reconciliationDrift.postgres.test.ts, src/lib/settlements/settlementBinding.postgres.test.ts, src/lib/ledger/settlementBalanceReader.postgres.test.ts, src/lib/audit/auditService.postgres.test.ts...
+
+ RUN  v3.2.7 C:/Development/PAY2PAY-bank-v3
+
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-S1 — durable settlement binding: a settlement-authorized payment created through the REAL PaymentService/SettlementContextVerifier flow persists P.settlementProposalId == S.id before recordSettlementPayment is ever called 199ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-S2 — wrong settlement binding: a payment durably bound to S1 is rejected when attributed to a DIFFERENT settlement S2 on the same agreement, and no settlement_payment row is created for S2 141ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-S3 — wrong agreement: a succeeded payment recorded against a DIFFERENT agreement than the settlement's own is rejected before insertion, and the settlement's real agreement is left unchanged 106ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-S4 — wrong payer/recipient: a succeeded payment whose parties are NOT this agreement's canonical debtor/creditor is rejected before insertion, even though its own settlementProposalId/agreementId are correct 110ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-S5 — scheduled sequential ceiling: with 400 already collected toward a 1000 settlement, a new 700 payment is rejected, the total remains 400, and the settlement is never completed 132ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-S6 — scheduled concurrent ceiling: two DIFFERENT, correctly-bound 400 payments recorded concurrently (on top of an existing 400 toward a 1000 settlement) via two GENUINELY independent Postgres connections — at most one may insert, the final total never exceeds 1000, and there is no deadlock 190ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-S7 — exact scheduled completion: 400 existing + a new 600 reaches exactly the 1000 settlement amount — the proposal completes and the agreement becomes settled_in_full 148ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-I1 — standard exact replay: repeating the exact same createPayment request returns the SAME payment id, produces exactly one payment_attempt, and never dispatches a second provider charge 55ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-I2 — standard mismatch matrix: changing any single material field for an existing idempotency key rejects, one field at a time 124ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-I3 — replay authorization: a different acting user replaying an otherwise-identical request for an existing idempotency key is rejected 64ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-I4 — concurrent conflicting race: two independent connections racing K/1000 against K/500 — one wins, the loser rejects the mismatch, and exactly one payment_attempt exists 65ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-I5 — manual exact replay: repeating an identical manual off-platform request returns the exact same payment, with no duplicate ledger posting 96ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-I6 — manual mismatch matrix: changing any single material field for an existing manual idempotency key rejects, and a NON-manual (provider-routed) existing key can never be adopted by the manual method 154ms
+ ✓ src/lib/settlements/settlementBinding.postgres.test.ts > R11 PASS B2 — settlement payment binding, agreement/party identity, atomic scheduled ceiling (real Postgres) > B2-I7 — partial-payment regression: invoking Pay-Now twice for the SAME accepted partialPaymentRequestId returns the exact same payment attempt, with the exact proposal-derived amount/installment and no duplicate provider charge — Checks 9/10 remain intact after the new general replay validator 108ms
+ ✓ src/lib/payouts/payoutAtomicity.postgres.test.ts > WP-01: payout concurrency and local atomicity proof (real Postgres) > STAGE4-MIGRATION — ledger_entry_type enum parity: refund_correction and payout_returned are present, and every pre-existing value remains present, after migration 20260928000000_ledger_entry_type_stage4_parity.sql applies 14ms
+ ✓ src/lib/payouts/payoutAtomicity.postgres.test.ts > WP-01: payout concurrency and local atomicity proof (real Postgres) > PAY-01 — duplicate payout entitlement: two genuinely separate PostgreSQL connections, BOTH forced to observe the row as absent before either inserts, exercise the real unique-conflict recovery branch and resolve to exactly one durable payout row 125ms
+ ✓ src/lib/payouts/payoutAtomicity.postgres.test.ts > WP-01: payout concurrency and local atomicity proof (real Postgres) > PAY-02 — duplicate payout confirmation: Worker A proven (via pg_stat_activity) to hold the payout_attempt row lock before Worker B's confirmation attempt starts, producing exactly one economic confirmation 169ms
+ ✓ src/lib/payouts/payoutAtomicity.postgres.test.ts > WP-01: payout concurrency and local atomicity proof (real Postgres) > PAY-03 — confirmation transaction rollback: a deterministic failure after the ledger mutation but before commit leaves zero committed effect, and the retried confirmation then succeeds exactly once 107ms
+ ✓ src/lib/payouts/payoutAtomicity.postgres.test.ts > WP-01: payout concurrency and local atomicity proof (real Postgres) > PAY-04 — payout return: a confirmed payout transitions correctly to returned, with exactly one corrective ledger effect, and replay does not duplicate the correction 115ms
+ ✓ src/lib/payouts/payoutAtomicity.postgres.test.ts > Stage 4 — Steps 7/8: payout audit recovery after committed financial effect (real Postgres) > AUD-01 — confirmation audit-write failure: retry repairs the missing audit event without reconfirming financially or duplicating the ledger effect 121ms
+ ✓ src/lib/payouts/payoutAtomicity.postgres.test.ts > Stage 4 — Steps 7/8: payout audit recovery after committed financial effect (real Postgres) > AUD-02 — return audit-write failure: retry repairs the missing return audit event without repeating the return or duplicating the corrective ledger effect 156ms
+ ✓ src/lib/payouts/payoutAtomicity.postgres.test.ts > Stage 4 — Steps 7/8: payout audit recovery after committed financial effect (real Postgres) > AUD-CONCURRENT-01 — confirmation audit repair is atomic under genuine concurrent replay: exactly one payout_confirmed event, financial effect remains singular, hash chain remains valid 159ms
+ ✓ src/lib/payouts/payoutAtomicity.postgres.test.ts > Stage 4 — Steps 7/8: payout audit recovery after committed financial effect (real Postgres) > AUD-CONCURRENT-02 — return audit repair is atomic under genuine concurrent replay: exactly one payout_returned event, the return financial correction remains singular, hash chain remains valid 174ms
+ ✓ src/lib/audit/auditService.postgres.test.ts > R04: AuditService + DrizzleAuditEventRepository.appendAtomically (real Postgres) > R04-A (contention proof): a real append genuinely blocks on the production audit advisory lock, not merely 'runs after' in JS scheduling 71ms
+ ✓ src/lib/audit/auditService.postgres.test.ts > R04: AuditService + DrizzleAuditEventRepository.appendAtomically (real Postgres) > R04-A: 20+ concurrent record() calls on genuinely distinct connections all persist, form exactly one chain, and every hash recomputes correctly 347ms
+ ✓ src/lib/audit/auditService.postgres.test.ts > R04: AuditService + DrizzleAuditEventRepository.appendAtomically (real Postgres) > R04-B: a forced append failure (FK violation) rolls back cleanly, and the next successful append continues from the correct, unaffected tail 25ms
+ ✓ src/lib/payments/correctiveEventAccounting.postgres.test.ts > Stage 4: minimum corrective-event accounting proof (real Postgres) > COR-01 — a cleared payment, then refunded: no longer counts as economically paid, a corrective ledger entry exists, balance is restored correctly, and history is preserved 275ms
+node : stderr | src/lib/payments/correctiveEventAccounting.postgres.test.ts > Stage 4: minimum corrective-event accounting proof (real Postgres) > COR-02 — a refund is already 
+authoritative, then a delayed/duplicate success is processed: the stale success does not recreate the paid effect, no duplicate ledger entry, and the final balance remains authoritative
+At line:5 char:1
++ node scripts/postgres-test-db.mjs --run-tests --stage4-only *>&1 | Te ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (stderr | src/li...s authoritative:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+{"level":"warn","message":"payment_webhook_stale_event_ignored","time":"2026-09-28T22:40:58.657Z","paymentAttemptId":"5d320b64-24a4-4ab8-b9ca-4e9a22ccb7cf","eventType":"payment.succeeded",
+"currentStatus":"refunded","attemptedStatus":"succeeded"}
+
+ ✓ src/lib/payments/correctiveEventAccounting.postgres.test.ts > Stage 4: minimum corrective-event accounting proof (real Postgres) > COR-02 — a refund is already authoritative, then a delayed/duplicate success is processed: the stale success does not recreate the paid effect, no duplicate ledger entry, and the final balance remains authoritative 221ms
+ ✓ src/lib/ledger/reconciliationDrift.postgres.test.ts > Stage 4: reconciliation real-PostgreSQL proof > REC-01 — a genuine persisted drift (succeeded payment with no provider reference) produces exactly the expected open reconciliation exception, with correct linkage, and no silent financial mutation 112ms
+ ✓ src/lib/ledger/reconciliationDrift.postgres.test.ts > Stage 4: reconciliation real-PostgreSQL proof > REC-02 — two genuinely concurrent reconciliation runs detecting the identical drift produce exactly one open exception, not two 123ms
+ ✓ src/lib/ledger/settlementBalanceReader.postgres.test.ts > Stage 4: real-PostgreSQL settlement balance reader proof > SETTLEMENT-READER-01 — a real completed settlement_proposal row resolves to forgiveness, end-to-end through BalanceService 135ms
+ ✓ src/lib/ledger/settlementBalanceReader.postgres.test.ts > Stage 4: real-PostgreSQL settlement balance reader proof > SETTLEMENT-READER-02 — a real failed settlement_proposal row with forgive_permanently resolves to forgiveness using the resolved amount 45ms
+ ✓ src/lib/ledger/settlementBalanceReader.postgres.test.ts > Stage 4: real-PostgreSQL settlement balance reader proof > SETTLEMENT-READER-03 — a real failed settlement_proposal row with restore_stated resolves to the authoritative restored balance, overriding the ordinary calculation 45ms
+ ✓ src/lib/ledger/settlementBalanceReader.postgres.test.ts > Stage 4: real-PostgreSQL settlement balance reader proof > SETTLEMENT-READER-04 — no settlement_proposal row at all resolves to none, exactly like normal agreement balance behavior 34ms
+ ✓ src/lib/ledger/refundCorrection.postgres.test.ts > Stage 4: refund_correction direct real-PostgreSQL proof > REFUND-CORRECTION-01 — correcting a posted refund creates exactly one refund_correction entry, the ledger remains balanced, and duplicate correction does not duplicate the effect 163ms
+
+ Test Files  7 passed (7)
+      Tests  35 passed (35)
+   Start at  18:40:52
+   Duration  6.71s (transform 745ms, setup 251ms, collect 1.81s, tests 4.43s, environment 0ms, prepare 56ms)
+
+[test:postgres] stopping and removing this run's own container "pay2pay-pgtest-31884-0586bd99" (if it exists)
+(node:31884) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)

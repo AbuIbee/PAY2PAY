@@ -1,0 +1,156 @@
+﻿On branch architecture/bank-managed-payments-v3
+Your branch is up to date with 'origin/master'.
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	deleted:    src/app/api/admin/sandbox/simulate-settlement/route.test.ts
+	deleted:    src/app/api/admin/sandbox/simulate-settlement/route.ts
+	renamed:    src/lib/cards/sandboxCardIssuingProvider.ts -> src/test-support/cards/sandboxCardIssuingProvider.ts
+	renamed:    src/lib/kyc/sandboxKycProvider.test.ts -> src/test-support/kyc/sandboxKycProvider.test.ts
+	renamed:    src/lib/kyc/sandboxKycProvider.ts -> src/test-support/kyc/sandboxKycProvider.ts
+	renamed:    src/lib/payments/sandboxPaymentProvider.test.ts -> src/test-support/payments/sandboxPaymentProvider.test.ts
+	renamed:    src/lib/payments/sandboxPaymentProvider.ts -> src/test-support/payments/sandboxPaymentProvider.ts
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .github/workflows/ci.yml
+	modified:   CLAUDE.md
+	modified:   package.json
+	modified:   scripts/postgres-test-db.mjs
+	modified:   scripts/postgres-test-db.test.mjs
+	modified:   src/app/api/payments/by-agreement/route.test.ts
+	modified:   src/app/api/payments/by-agreement/route.ts
+	modified:   src/app/api/payments/detail/route.test.ts
+	modified:   src/app/api/payments/detail/route.ts
+	modified:   src/app/api/relationships/accounts/bank/connect/route.test.ts
+	modified:   src/components/PaymentDetail.test.tsx
+	modified:   src/components/PaymentDetail.tsx
+	modified:   src/components/PaymentsList.test.tsx
+	modified:   src/components/PaymentsList.tsx
+	modified:   src/config/env.ts
+	modified:   src/db/schema/enums.ts
+	modified:   src/db/schema/index.ts
+	modified:   src/lib/ach/achPaymentService.ts
+	modified:   src/lib/ach/getAchPaymentService.ts
+	modified:   src/lib/ach/testFakes.ts
+	modified:   src/lib/admin/environmentStatus.test.ts
+	modified:   src/lib/admin/environmentStatus.ts
+	modified:   src/lib/admin/testFakes.ts
+	modified:   src/lib/agreements/agreementProgressService.ts
+	modified:   src/lib/audit/auditService.ts
+	modified:   src/lib/audit/drizzleAuditEventRepository.ts
+	modified:   src/lib/cards/getCardIssuingProvider.ts
+	modified:   src/lib/cards/testFakes.ts
+	modified:   src/lib/debitCard/debitCardPaymentService.test.ts
+	modified:   src/lib/debitCard/debitCardPaymentService.ts
+	modified:   src/lib/debitCard/getDebitCardPaymentService.ts
+	modified:   src/lib/debitCard/testFakes.ts
+	modified:   src/lib/errors.ts
+	modified:   src/lib/failedPayments/failedPaymentRetryCoordinator.ts
+	modified:   src/lib/failedPayments/getFailedPaymentRetryCoordinator.ts
+	modified:   src/lib/failedPayments/getPaymentRetryService.ts
+	modified:   src/lib/failedPayments/productionFactoryRecursion.test.ts
+	modified:   src/lib/kyc/getKycProvider.ts
+	modified:   src/lib/kyc/testFakes.ts
+	modified:   src/lib/ledger/agreementCompletionService.ts
+	modified:   src/lib/ledger/balanceService.test.ts
+	modified:   src/lib/ledger/balanceService.ts
+	modified:   src/lib/ledger/concurrencyAndIdempotency.test.ts
+	modified:   src/lib/ledger/drizzleReconciliationExceptionRepository.ts
+	modified:   src/lib/ledger/getBalanceService.ts
+	modified:   src/lib/ledger/installmentAmountAwareness.postgres.test.ts
+	modified:   src/lib/ledger/ledgerService.ts
+	modified:   src/lib/ledger/paymentLedgerIntegration.test.ts
+	modified:   src/lib/ledger/reconciliationService.ts
+	modified:   src/lib/ledger/testFakes.ts
+	modified:   src/lib/notify/consoleEmailSender.ts
+	modified:   src/lib/notify/consoleSmsSender.ts
+	modified:   src/lib/notify/getEmailSender.ts
+	modified:   src/lib/notify/getSmsSender.ts
+	modified:   src/lib/payments/drizzlePaymentAttemptRepository.ts
+	modified:   src/lib/payments/getPaymentProvider.ts
+	modified:   src/lib/payments/getPaymentService.ts
+	modified:   src/lib/payments/getPaymentWebhookService.ts
+	modified:   src/lib/payments/paymentInitiationEligibilityService.ts
+	modified:   src/lib/payments/paymentService.test.ts
+	modified:   src/lib/payments/paymentService.ts
+	modified:   src/lib/payments/paymentWebhookRecovery.postgres.test.ts
+	modified:   src/lib/payments/paymentWebhookService.test.ts
+	modified:   src/lib/payments/paymentWebhookService.ts
+	modified:   src/lib/payments/testFakes.ts
+	modified:   src/lib/providers/providerCapabilities.test.ts
+	modified:   src/lib/providers/providerCapabilities.ts
+	modified:   src/lib/relationships/bankConnectionService.test.ts
+	modified:   src/lib/settlements/settlementBinding.postgres.test.ts
+	modified:   src/lib/ui/statusLabels.test.ts
+	modified:   src/lib/ui/statusLabels.ts
+	modified:   src/test-support/cards/sandboxCardIssuingProvider.ts
+	modified:   src/test-support/kyc/sandboxKycProvider.test.ts
+	modified:   src/test-support/kyc/sandboxKycProvider.ts
+	modified:   src/test-support/payments/sandboxPaymentProvider.test.ts
+	modified:   src/test-support/payments/sandboxPaymentProvider.ts
+	modified:   vitest.postgres.config.ts
+	modified:   vitest.postgres.setup.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	docs/remediation/CONTROL_ORDER_004-B_SV-007_FACTORY_TEST_CORRECTION.md
+	docs/remediation/Paid2You_Codex_Stage01_Final_Acceptance_Addendum.md
+	docs/remediation/Paid2You_Codex_Stage01_Final_Verification.md
+	docs/remediation/Paid2You_Codex_Stage02_Evidence_Addendum.md
+	docs/remediation/Paid2You_Codex_Stage02_Final_Acceptance_Addendum.md
+	docs/remediation/Paid2You_Codex_Stage02_Independent_Acceptance_Report.md
+	docs/remediation/Paid2You_Codex_Stage03_Final_Acceptance_Addendum.md
+	docs/remediation/Paid2You_Codex_Stage03_Final_Technical_Acceptance.md
+	docs/remediation/Paid2You_Codex_Stage03_Independent_Acceptance_Report.md
+	docs/remediation/STAGE_01_FINAL_IMPLEMENTATION_AND_EXIT_REPORT.md
+	docs/remediation/STAGE_02_008I_EXACT_ASSERTION_FIX.md
+	docs/remediation/STAGE_02_FINAL_PREAUTHORIZATION_CLARIFICATION.md
+	docs/remediation/STAGE_02_FOUR_FINDINGS_REMEDIATION_AND_GATE_B_READINESS.md
+	docs/remediation/STAGE_02_PHASE_A_ARCHITECTURE_AND_ISOLATION_REPORT.md
+	docs/remediation/STAGE_02_PHASE_B_ISOLATION_AND_HARNESS_EVIDENCE.md
+	docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EVIDENCE_AND_AUTHORIZATION.md
+	docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EXECUTION_REPORT.md
+	docs/remediation/STAGE_02_PHASE_C_008I_FINAL_FAILURE_DIAGNOSIS.md
+	docs/remediation/STAGE_02_PHASE_C_FAILURE_DIAGNOSIS.md
+	docs/remediation/STAGE_02_PHASE_C_FINAL_COMPLETION_REPORT.md
+	docs/remediation/STAGE_02_PHASE_C_REM008_POSTGRESQL_EXECUTION_REPORT.md
+	docs/remediation/STAGE_02_PHASE_C_TWO_FAILURES_REMEDIATION_AND_EXECUTION_READINESS.md
+	docs/remediation/STAGE_02_REPORTER_ONLY_CONFIGURATION_CHANGE.md
+	docs/remediation/STAGE_02_ROLE_OWNERSHIP_FINAL_CORRECTION_AND_PHASE_B_APPROVAL.md
+	docs/remediation/STAGE_03_G01_G12_EXECUTION_AND_ACCEPTANCE_REPORT.md
+	docs/remediation/STAGE_03_PROJECT_OWNER_FINAL_ACCEPTANCE_AND_CARRY_FORWARD.md
+	docs/remediation/stage03-g03-g04-evidence/
+	docs/remediation/stage4-evidence/
+	docs/remediation/stage5-evidence/
+	scripts/check-no-adyen-dependency.mjs
+	scripts/check-no-adyen-dependency.test.mjs
+	scripts/check-no-sandbox-runtime.mjs
+	scripts/check-no-sandbox-runtime.test.mjs
+	scripts/stage5-forward-upgrade-test.mjs
+	src/db/schema/payoutAttempt.ts
+	src/db/schemaParity.postgres.test.ts
+	src/lib/failedPayments/failedPaymentRetryCoordinatorActivationGate.test.ts
+	src/lib/failedPayments/getPaymentRetryService.test.ts
+	src/lib/ledger/drizzleSettlementBalanceReader.ts
+	src/lib/ledger/reconciliationDrift.postgres.test.ts
+	src/lib/ledger/refundCorrection.postgres.test.ts
+	src/lib/ledger/settlementBalanceReader.postgres.test.ts
+	src/lib/notify/consoleEmailSender.test.ts
+	src/lib/notify/consoleSmsSender.test.ts
+	src/lib/notify/getEmailSender.test.ts
+	src/lib/notify/getSmsSender.test.ts
+	src/lib/notify/productionFailClosed.test.ts
+	src/lib/payments/correctiveEventAccounting.postgres.test.ts
+	src/lib/payments/getPaymentWebhookService.test.ts
+	src/lib/payments/paymentInitiationEligibilityService.test.ts
+	src/lib/payouts/
+	src/test-support/payments/perKeyProviderCallCounter.test.ts
+	src/test-support/payments/perKeyProviderCallCounter.ts
+	supabase/migrations/20260922000000_payout_attempt.sql
+	supabase/migrations/20260928000000_ledger_entry_type_stage4_parity.sql
+	supabase/migrations/20260929000000_payment_attempt_status_stage5_parity.sql
+	test/postgres/outboundTransportGuard.mjs
+	test/postgres/outboundTransportGuard.test.mjs
+

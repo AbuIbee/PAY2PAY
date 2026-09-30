@@ -1,0 +1,4 @@
+﻿COMMAND: node scripts/postgres-test-db.mjs --run-tests --stage3-g03-g04-only
+START_TIME_UTC: 2026-09-21T19:54:27.8197354Z
+END_TIME_UTC: 2026-09-21T19:54:32.8871170Z
+EXIT_CODE: 255

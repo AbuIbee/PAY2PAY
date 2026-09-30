@@ -1,0 +1,65 @@
+﻿
+ RUN  v3.2.7 C:/Development/PAY2PAY-bank-v3
+
+ ✓ src/lib/agreements/schedule.test.ts (15 tests) 11ms
+ ✓ src/lib/agreements/agreementPartyDisplay.test.ts (4 tests) 5ms
+ ✓ src/lib/ledger/balanceService.test.ts (15 tests) 15ms
+ ✓ src/lib/ledger/ledgerService.test.ts (19 tests) 16ms
+ ✓ src/lib/ach/achPaymentBankConnectionProvenance.test.ts (3 tests) 11ms
+ ✓ src/lib/ach/achMandateService.test.ts (19 tests) 23ms
+ ✓ src/lib/ach/achReconciliation.test.ts (3 tests) 24ms
+ ✓ src/lib/ach/achPaymentService.test.ts (11 tests) 28ms
+ ✓ src/lib/settlements/settlementService.test.ts (25 tests) 47ms
+node.exe : stderr | src/lib/agreements/agreementService.test.ts > AgreementService > PRSprint 13: notification wiring > a notification-layer failure never fails the underlying agreement 
+transition (failure isolation)
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (stderr | src/li...lure isolation):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+{"level":"error","message":"agreement_notification_failed","time":"2026-09-28T15:57:58.072Z","agreementId":"cf6ba2ce-b682-4057-8e97-f4cf9a8eb158","notificationType":"agreement_action_requi
+red","error":"simulated_notify_outage"}
+
+ ✓ src/lib/agreements/agreementService.test.ts (59 tests) 132ms
+ ✓ src/lib/agreements/agreementCancellationService.test.ts (10 tests) 32ms
+ ✓ src/lib/ledger/reconciliationService.test.ts (19 tests) 37ms
+stderr | src/lib/ledger/concurrencyAndIdempotency.test.ts > PRSprint 20: concurrency and idempotency — genuine adversarial races > 9. out-of-order status transition: a refund/dispute 
+webhook arriving before the payment has ever cleared is rejected cleanly, not silently applied against nothing
+{"level":"warn","message":"payment_webhook_stale_event_ignored","time":"2026-09-28T15:57:58.165Z","paymentAttemptId":"b3137fda-4e42-4efa-8313-3ceda40e2c46","eventType":"payment.refunded","
+currentStatus":"pending","attemptedStatus":"refunded"}
+
+stderr | src/lib/ledger/concurrencyAndIdempotency.test.ts > PRSprint 20: concurrency and idempotency — genuine adversarial races > 9. out-of-order status transition: a refund/dispute 
+webhook arriving before the payment has ever cleared is rejected cleanly, not silently applied against nothing
+{"level":"error","message":"payment_webhook_processing_failed","time":"2026-09-28T15:57:58.167Z","eventId":"ac8392e5-1994-4654-b86d-753d579f39d2","eventType":"payment.refunded","attempt":1
+,"retryable":true,"code":"unresolved_financial_prerequisite"}
+
+ ✓ src/lib/ledger/concurrencyAndIdempotency.test.ts (10 tests) 55ms
+stderr | src/lib/ledger/paymentLedgerIntegration.test.ts > Payment webhook -> ledger integration (Sprint 10) > posts a refund reversal on payment.refunded, after a prior payment.succeeded
+{"level":"error","message":"payment_webhook_processing_failed","time":"2026-09-28T15:57:58.205Z","eventId":"2f0d626a-5620-4e2e-82b6-5eb6b3f617f4","eventType":"payment.refunded","attempt":1
+,"retryable":true,"code":"transient_processing_error"}
+
+ ✓ src/lib/ledger/ledgerAdminService.test.ts (7 tests) 36ms
+stderr | src/lib/ledger/balanceReconstruction.test.ts > PRSprint 19: balance reconstruction from authoritative ledger records alone > 6a. reversal: a cleared-then-refunded payment is 
+excluded from amountPaid and counted as reversed, not deleted from history
+{"level":"error","message":"payment_webhook_processing_failed","time":"2026-09-28T15:57:58.211Z","eventId":"6b346d37-9541-4cd2-802d-26a91204b73c","eventType":"payment.refunded","attempt":1
+,"retryable":true,"code":"transient_processing_error"}
+
+ ✓ src/lib/ledger/balanceReconstruction.test.ts (11 tests) 99ms
+stderr | src/lib/ledger/paymentLedgerIntegration.test.ts > Payment webhook -> ledger integration (Sprint 10) > posts a reversal on payment.returned and sets status to returned
+{"level":"error","message":"payment_webhook_processing_failed","time":"2026-09-28T15:57:58.243Z","eventId":"7455fcd8-a2c2-4ae9-9a54-0a1ab354f6d6","eventType":"payment.returned","attempt":1
+,"retryable":true,"code":"transient_processing_error"}
+
+stderr | src/lib/ledger/paymentLedgerIntegration.test.ts > Payment webhook -> ledger integration (Sprint 10) > a legacy provider-routed payment with a null agreementId is never marked 
+processed by the webhook, and its ledger accounting is never fabricated
+{"level":"error","message":"payment_webhook_processing_failed","time":"2026-09-28T15:57:58.248Z","eventId":"21ceae59-b150-4ded-a723-4afc37a2776d","eventType":"payment.succeeded","attempt":
+1,"retryable":true,"code":"repairable_configuration_defect"}
+
+ ✓ src/lib/ledger/paymentLedgerIntegration.test.ts (17 tests) 142ms
+ ✓ src/lib/agreements/agreementProgressService.test.ts (54 tests) 74ms
+
+ Test Files  17 passed (17)
+      Tests  301 passed (301)
+   Start at  11:57:54
+   Duration  4.20s (transform 2.36s, setup 29.13s, collect 9.86s, tests 787ms, environment 15.35s, prepare 3.38s)
+

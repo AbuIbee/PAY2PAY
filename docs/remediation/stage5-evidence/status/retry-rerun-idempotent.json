@@ -1,0 +1,10 @@
+{
+  "name": "retry-rerun-idempotent",
+  "command": "npx supabase migration up --db-url postgres://postgres:postgres@127.0.0.1:58717/failure_retry_proof?sslmode=disable --workdir C:\\Development\\PAY2PAY-bank-v3\\.stage5-runner-proof-scratch\\failure-retry --include-all --yes",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "timestamp": "2026-09-30T01:17:05.903Z",
+  "exitCode": 0,
+  "stdout": "{\"applied\":[],\"message\":\"Migrations applied\"}\n",
+  "stderr": "Connecting to remote database...\n",
+  "spawnError": null
+}

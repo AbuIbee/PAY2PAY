@@ -1,0 +1,32 @@
+Stage 5 Step 10 — forward-upgrade test (disposable Postgres only; no production/staging access)
+
+Command run from repo root (C:\Development\PAY2PAY-bank-v3):
+
+  node scripts/stage5-forward-upgrade-test.mjs
+
+Fixed cutoff (migration immediately preceding the first new Stage 5 migration, per Step 10's
+required process — no other cutoff choice permitted):
+  20260928000000_ledger_entry_type_stage4_parity.sql
+
+Sequence executed by the script:
+  1. Start a disposable, uniquely-named, loopback-only Postgres 17 container (verified by
+     independent host-side docker inspect + in-database current_database()/current_user identity
+     checks before any migration is applied).
+  2. Apply all 57 pre-Stage-5 migrations (through and including the cutoff) in lexical order.
+  3. Seed exactly one representative row in payment_attempt (the only table the new Stage 5
+     migration's enum touches), with status='succeeded' (a pre-existing enum value, not one of
+     the two newly added values) — no FK parent rows required: payer_profile_id/
+     recipient_profile_id are plain uuid columns (not FK-constrained), and agreement_id is
+     nullable and was left null.
+  4. Record the seeded row's id, idempotency_key, status, amount_minor_units, currency,
+     provider_name.
+  5. Apply the one new Stage 5 migration
+     (20260929000000_payment_attempt_status_stage5_parity.sql).
+  6. Re-read the same row by id.
+  7. Byte-compare every recorded field; fail loudly on any mismatch.
+  8. Unconditionally remove the disposable container (finally-block cleanup).
+
+Raw output: forward-upgrade-output.txt (same directory).
+Result: FORWARD UPGRADE: PASS — all fields unchanged, row count unchanged (1), zero errors
+(the many "NOTICE: identifier ... will be truncated" lines are pre-existing PostgreSQL 63-byte
+identifier-length notices from historical migrations, not new Stage 5 defects, and not errors).

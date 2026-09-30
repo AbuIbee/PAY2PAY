@@ -1,0 +1,5 @@
+[90mstderr[2m | src/lib/payments/correctiveEventAccounting.postgres.test.ts[2m > [22m[2mStage 4: minimum corrective-event accounting proof (real Postgres)[2m > [22m[2mCOR-02 — a refund is already authoritative, then a delayed/duplicate success is processed: the stale success does not recreate the paid effect, no duplicate ledger entry, and the final balance remains authoritative
+[22m[39m{"level":"warn","message":"payment_webhook_stale_event_ignored","time":"2026-09-30T01:17:23.606Z","paymentAttemptId":"0e66d737-0886-4163-b220-7fd8932580f6","eventType":"payment.succeeded","currentStatus":"refunded","attemptedStatus":"succeeded"}
+
+(node:27196) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)

@@ -1,0 +1,2 @@
+npx vitest run src/db/schemaParityComparators.self-validation.test.ts
+cwd: C:\Development\PAY2PAY-bank-v3

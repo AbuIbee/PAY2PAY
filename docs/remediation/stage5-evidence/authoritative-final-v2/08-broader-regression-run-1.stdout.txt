@@ -1,0 +1,429 @@
+
+> pay2pay@0.1.0 test
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mC:/Development/PAY2PAY-bank-v3[39m
+
+[90mstdout[2m | src/lib/notify/productionFailClosed.test.ts[2m > [22m[2mREM-015 — production email/SMS fail-closed, proven end-to-end through the real factory (not a test double)[2m > [22m[2mdevelopment (unchanged, safe default): the SAME real wiring succeeds via console-only logging — proves the production gate is genuinely APP_ENV-scoped, not a global regression
+[22m[39m{"level":"info","message":"email_send_console_only","time":"2026-09-30T01:18:02.375Z","to":"user1@example.com","subject":"A payment did not go through","body":"A scheduled payment could not be completed (an issue with the payment method). A manual payment can be made now, or the system will automatically retry once.","ctaUrl":null}
+
+[90mstdout[2m | src/lib/notify/productionFailClosed.test.ts[2m > [22m[2mREM-015 — production email/SMS fail-closed, proven end-to-end through the real factory (not a test double)[2m > [22m[2mdevelopment (unchanged, safe default): the SAME real wiring succeeds via console-only logging — proves the production gate is genuinely APP_ENV-scoped, not a global regression
+[22m[39m{"level":"info","message":"sms_send_console_only","time":"2026-09-30T01:18:02.377Z","to":"+1********06","body":"A PAY2PAY payment failed (an issue with the payment method). A retry is scheduled, or you can pay manually now."}
+
+ [32m✓[39m src/components/DemoWalkthrough.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 989[2mms[22m[39m
+   [33m[2m✓[22m[39m DemoWalkthrough[2m > [22mnever calls fetch — every scenario is fixture data only [33m 356[2mms[22m[39m
+ [32m✓[39m src/components/AppNav.test.tsx [2m([22m[2m16 tests[22m[2m)[22m[33m 1272[2mms[22m[39m
+ [32m✓[39m src/lib/notify/productionFailClosed.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 2233[2mms[22m[39m
+   [33m[2m✓[22m[39m REM-015 — production email/SMS fail-closed, proven end-to-end through the real factory (not a test double)[2m > [22mproduction, no live Resend/Twilio credentials: both the email and SMS channel dead-letter immediately on the first attempt — never silently 'sent', never retried as if transient [33m 689[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/login/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1405[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/auth/login[2m > [22mrate-limits repeated login attempts against the same account [33m 717[2mms[22m[39m
+ [32m✓[39m src/lib/payments/getPaymentWebhookService.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 2853[2mms[22m[39m
+   [33m[2m✓[22m[39m STAGE 3 — getPaymentWebhookService() lazy provider dependency[2m > [22mG01 — a cold construction succeeds with the provider unavailable, resolves the provider ZERO times during construction, and exposes recoverBatch [33m 2538[2mms[22m[39m
+   [33m[2m✓[22m[39m STAGE 3 — getPaymentWebhookService() lazy provider dependency[2m > [22mG05 — receiveWebhook on the real factory-constructed service rejects under the existing provider-unavailable contract, resolving the provider (not zero) only at actual invocation time, before any event claim/processing could occur [33m 313[2mms[22m[39m
+ [32m✓[39m src/lib/failedPayments/getPaymentRetryService.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 2833[2mms[22m[39m
+   [33m[2m✓[22m[39m STAGE 3 — getPaymentRetryService() lazy provider dependency[2m > [22mG02 — a cold construction succeeds with the provider unavailable, resolves the provider ZERO times during construction, and exposes findForOriginalPayment [33m 2517[2mms[22m[39m
+   [33m[2m✓[22m[39m STAGE 3 — getPaymentRetryService() lazy provider dependency[2m > [22mG06 — fireDueRetries on the real factory-constructed service still fails closed when the provider is unavailable, before any due-retry lookup or dispatch is attempted [33m 314[2mms[22m[39m
+ [32m✓[39m src/components/BankConnectionForm.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 2586[2mms[22m[39m
+   [33m[2m✓[22m[39m BankConnectionForm[2m > [22mshows a step-up challenge when required, and completes the connection after verification [33m 1398[2mms[22m[39m
+   [33m[2m✓[22m[39m BankConnectionForm[2m > [22msubmits normally with no step-up prompt when none is required [33m 1186[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/login-logout-cycle.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 2394[2mms[22m[39m
+   [33m[2m✓[22m[39m login/logout lifecycle (route-handler level)[2m > [22mmultiple login/logout cycles: three full cycles each leave the session in the correct state [33m 327[2mms[22m[39m
+   [33m[2m✓[22m[39m login/logout lifecycle (route-handler level)[2m > [22mPlatform Admin: login works, logout works, and a subsequent login works [33m 302[2mms[22m[39m
+   [33m[2m✓[22m[39m login/logout lifecycle (route-handler level)[2m > [22mPlatform Owner: login works, logout works, and a subsequent login works [33m 312[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/versions/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1470[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/versions[2m > [22mlets the creditor party list the version history, oldest first [33m 328[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/versions[2m > [22mrejects a tampered/nonexistent agreement id with a non-200, without leaking existence of other agreements [33m 326[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/revise-terms/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1518[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/revise-terms[2m > [22mrejects an unauthenticated request with 401 [33m 348[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/revise-terms[2m > [22mrejects the creditor attempting to revise when it isn't their turn (not 200) — server-authoritative turn enforcement [33m 325[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/revise-first-payment-date/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1503[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/revise-first-payment-date[2m > [22mrejects an unauthenticated request with 401 [33m 361[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/revise-first-payment-date[2m > [22mrejects a new date that is itself still in the past (400) [33m 309[2mms[22m[39m
+ [32m✓[39m src/lib/failedPayments/productionFactoryRecursion.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 3896[2mms[22m[39m
+   [33m[2m✓[22m[39m PAID2YOU — PACKAGE B (Codex final remaining blockers, Section B1): production factory recursion[2m > [22mTEST 013-A — a cold call to getPaymentRetryService() succeeds past provider construction, and its effectApplier NEVER invokes getPaymentWebhookService() during that construction (the original lazy-thunk fix, proven by a zero call count — not merely by the absence of a throw) [33m 2574[2mms[22m[39m
+   [33m[2m✓[22m[39m PAID2YOU — PACKAGE B (Codex final remaining blockers, Section B1): production factory recursion[2m > [22mTEST 013-B — a cold call to getPaymentWebhookService() succeeds all the way through its eager failedPaymentWorkflow dependency (which itself eagerly constructs getPaymentRetryService), with getPaymentWebhookService never re-entered during its own construction, and getPaymentRetryService's own effectApplier edge still never firing [33m 321[2mms[22m[39m
+   [33m[2m✓[22m[39m PAID2YOU — PACKAGE B (Codex final remaining blockers, Section B1): production factory recursion[2m > [22mTEST 013-C — a cold call to getFailedPaymentWorkflowService() constructs its entire dependency graph (including getPaymentRetryService, eagerly, as its own `retries` property) without recursion — the SAME effectApplier edge inside that nested getPaymentRetryService construction never fires either [33m 321[2mms[22m[39m
+   [33m[2m✓[22m[39m PAID2YOU — PACKAGE B (Codex final remaining blockers, Section B1): production factory recursion[2m > [22mTEST 013-D — a cold call to getPaymentService() succeeds, and its installmentHook NEVER invokes getFailedPaymentWorkflowService() during construction (Defect B1-2's own lazy-thunk fix, proven by a zero call count) [33m 318[2mms[22m[39m
+   [33m[2m✓[22m[39m PAID2YOU — PACKAGE B (Codex final remaining blockers, Section B1): production factory recursion[2m > [22mspy sanity check: the call-count wrapper genuinely increments on a real invocation (TEST 013-B's own callCount() === 1 assertion already demonstrates this for getPaymentWebhookService — this test demonstrates it independently for getFailedPaymentWorkflowService, so neither spy's zero-count assertions above are vacuously true) [33m 360[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/detail/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1673[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/detail[2m > [22mDecision 8: includes a partyDisplay block for on-screen identity, with no raw profile/user id in it [33m 302[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/amendments/preview/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1504[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/amendments/preview[2m > [22mcomputes the proposed effective schedule from the amendment's own proposed terms — never the current agreement's schedule [33m 321[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/amendments/preview[2m > [22m400s when id is missing [33m 373[2mms[22m[39m
+ [32m✓[39m src/components/InviteToAgreement.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 3648[2mms[22m[39m
+   [33m[2m✓[22m[39m InviteToAgreement — pre-registration invitation SMS blocker correction (B0-B)[2m > [22m10: never claims a text message was sent, and states the opt-in policy, when a phone number is provided [33m 942[2mms[22m[39m
+   [33m[2m✓[22m[39m InviteToAgreement — pre-registration invitation SMS blocker correction (B0-B)[2m > [22mdoes not show the SMS opt-in policy line when no phone number was provided [33m 968[2mms[22m[39m
+   [33m[2m✓[22m[39m InviteToAgreement — pre-registration invitation SMS blocker correction (B0-B)[2m > [22m9: Copy link and Share on WhatsApp remain available and functional when a phone number was provided [33m 825[2mms[22m[39m
+   [33m[2m✓[22m[39m InviteToAgreement — pre-registration invitation SMS blocker correction (B0-B)[2m > [22m8: the secure link/token is displayed regardless of whether a phone was provided [33m 911[2mms[22m[39m
+ [32m✓[39m src/components/AdminUserDetail.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 3878[2mms[22m[39m
+   [33m[2m✓[22m[39m AdminUserDetail[2m > [22mshows a step-up challenge when suspending a user, and retries after verification [33m 722[2mms[22m[39m
+   [33m[2m✓[22m[39m AdminUserDetail[2m > [22mshows a step-up challenge when promoting a user's role, and retries after verification [33m 669[2mms[22m[39m
+   [33m[2m✓[22m[39m AdminUserDetail[2m > [22mcloses an account after confirmation, with a step-up challenge [33m 881[2mms[22m[39m
+   [33m[2m✓[22m[39m AdminUserDetail[2m > [22mdoes not close the account when the confirmation dialog is declined [33m 726[2mms[22m[39m
+   [33m[2m✓[22m[39m AdminUserDetail[2m > [22mshows a step-up challenge when sending a password reset, and confirms once sent [33m 878[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/ensure-relationship/route.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 2413[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/ensure-relationship[2m > [22mrejects an unauthenticated request with 401 — no mutation occurs [33m 361[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/ensure-relationship[2m > [22mrejects a request missing agreementId (400) [33m 331[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/ensure-relationship[2m > [22mis idempotent — repeated calls never create a second relationship [33m 311[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/ensure-relationship[2m > [22mCorrection 3 — a fresh draft already has relationship_id populated at Step 1, before Step 2 has run [33m 306[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/ensure-relationship[2m > [22mthis route never establishes a connection for a still-pre-acceptance (draft) agreement, even if relationship_id is null on it [33m 333[2mms[22m[39m
+ [32m✓[39m src/components/NotificationPreferences.test.tsx [2m([22m[2m14 tests[22m[2m)[22m[33m 4402[2mms[22m[39m
+   [33m[2m✓[22m[39m NotificationPreferences[2m > [22mB0-B: master SMS consent control[2m > [22mshows the control OFF for a user with no recorded consent — never preselected [33m 469[2mms[22m[39m
+   [33m[2m✓[22m[39m NotificationPreferences[2m > [22mB0-B: master SMS consent control[2m > [22mreflects an already-active, persisted consent state as checked [33m 434[2mms[22m[39m
+   [33m[2m✓[22m[39m NotificationPreferences[2m > [22mB0-B: master SMS consent control[2m > [22menabling requires explicit user action — clicking the control posts enabled:true [33m 686[2mms[22m[39m
+   [33m[2m✓[22m[39m NotificationPreferences[2m > [22mB0-B: master SMS consent control[2m > [22mthe control is disabled (cannot be turned on) when no verified phone exists [33m 490[2mms[22m[39m
+   [33m[2m✓[22m[39m NotificationPreferences[2m > [22mB0-B: master SMS consent control[2m > [22mshows Terms and Privacy links adjacent to the consent disclosure [33m 562[2mms[22m[39m
+   [33m[2m✓[22m[39m NotificationPreferences[2m > [22mB0-B: master SMS consent control[2m > [22mthe disclosure communicates transactional purpose, variable frequency, message/data rates, STOP, HELP, and that consent is not required [33m 504[2mms[22m[39m
+   [33m[2m✓[22m[39m NotificationPreferences[2m > [22mB0-B: master SMS consent control[2m > [22mintroduces no marketing/promotional language [33m 486[2mms[22m[39m
+ [32m✓[39m src/app/api/payments/by-agreement/route.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 2710[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/by-agreement[2m > [22mlets an agreement party list only that agreement's payments, never another agreement's [33m 332[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/by-agreement[2m > [22maccurate creditor payout reporting (SC-08)[2m > [22mreports the authoritative payoutStatus confirmed exactly as payout_attempt records it [33m 342[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/by-agreement[2m > [22maccurate creditor payout reporting (SC-08)[2m > [22mnever exposes providerPaymentId, idempotencyKey, or other internal fields — only the whitelisted, authoritative shape [33m 302[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/by-agreement[2m > [22mrejects a cross-tenant IDOR attempt: an authenticated stranger cannot list another agreement's payments [33m 332[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/by-agreement[2m > [22mrejects an unauthenticated request with 401 [33m 309[2mms[22m[39m
+ [32m✓[39m src/components/AgreementCreateWizard.test.tsx [2m([22m[2m10 tests[22m[2m)[22m[33m 4917[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementCreateWizard[2m > [22mNew Agreement -> Step 1: Parties navigation fix: 'Next: Terms' never silently does nothing[2m > [22mclicking the '2. Terms' tab and clicking 'Next: Terms' both land on the same Step 2 (Terms) view, preserving whatever party was already selected [33m 368[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementCreateWizard[2m > [22mderives both parties' roles from the selected connection and creates + links a draft agreement [33m 3699[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementCreateWizard[2m > [22mcurrent_agreement_id / relationship_participant.role audit (item 3): 'Swap roles for this agreement' lets the user create a role-reversed agreement on the same connection, instead of being permanently locked to the connection's stored role [33m 348[2mms[22m[39m
+ [32m✓[39m src/app/api/payments/detail/route.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 3078[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/detail[2m > [22mlets the payer fetch the payment [33m 337[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/detail[2m > [22maccurate creditor payout reporting (SC-08)[2m > [22mreports payoutStatus: null when no payout_attempt has been recorded [33m 343[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/detail[2m > [22maccurate creditor payout reporting (SC-08)[2m > [22mreports the authoritative payoutStatus failed exactly as payout_attempt records it, to the recipient [33m 332[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/detail[2m > [22maccurate creditor payout reporting (SC-08)[2m > [22mnever exposes providerPayoutReference — only the payoutStatus enum [33m 310[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/payments/detail[2m > [22mrejects a cross-tenant IDOR attempt: an authenticated stranger cannot fetch someone else's payment by id [33m 340[2mms[22m[39m
+ [32m✓[39m src/app/api/payments/manual/confirm/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1292[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/payments/manual/confirm[2m > [22mlets the creditor (recipient) confirm the manual payment [33m 346[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/payments/manual/confirm[2m > [22mrejects the debtor confirming their own manual payment [33m 333[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/payments/manual/confirm[2m > [22mrejects a cross-tenant stranger [33m 303[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/payments/manual/confirm[2m > [22mrejects an unauthenticated request with 401 [33m 309[2mms[22m[39m
+ [32m✓[39m src/app/api/payments/manual/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1724[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/payments/manual[2m > [22mlets the debtor record a manual off-platform payment [33m 308[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/payments/manual[2m > [22mrejects the creditor recording their own manual payment — only the debtor may [33m 309[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/payments/manual[2m > [22mrejects a cross-tenant stranger [33m 319[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/payments/manual[2m > [22mrejects an unauthenticated request with 401 [33m 340[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/payments/manual[2m > [22mrejects an amount that exceeds the remaining balance [33m 446[2mms[22m[39m
+ [32m✓[39m src/lib/auth/authService.test.ts [2m([22m[2m61 tests[22m[2m)[22m[33m 6690[2mms[22m[39m
+   [33m[2m✓[22m[39m AuthService.listSessions / revokeSession / revokeAllSessions[2m > [22mlists only this user's active sessions, never another user's [33m 319[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/cancel/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1386[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/cancel[2m > [22mlets either party cancel a sent, unexecuted agreement (200) [33m 442[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/cancel[2m > [22mrejects an unauthenticated request (401) [33m 348[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/agreements/cancel[2m > [22mrejects a stranger with no relationship to either party (403) [33m 301[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/payment-setup/next-payment/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1368[2mms[22m[39m
+ [32m✓[39m src/app/api/cards/request/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1488[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/cards/*[2m > [22mrejects an unauthenticated request with 401 [33m 317[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/progress/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1428[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/progress[2m > [22mreturns the full step list for a real party (200) [33m 465[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/progress[2m > [22mrejects an unauthenticated request with 401 [33m 317[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/progress[2m > [22mrejects a cross-tenant stranger — this is UX data, but still never leaks another party's agreement state [33m 357[2mms[22m[39m
+ [32m✓[39m src/components/demo/ProductTour.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 1738[2mms[22m[39m
+   [33m[2m✓[22m[39m ProductTour[2m > [22mnever calls fetch — the tour requires no test data to be created [33m 421[2mms[22m[39m
+   [33m[2m✓[22m[39m ProductTour[2m > [22mcovers all 11 required areas in order, each with a progress indicator and what-it's-for / what-you-can-do / what's-next explanation [33m 1150[2mms[22m[39m
+ [32m✓[39m src/lib/auth/password.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 901[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/delete-draft/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1106[2mms[22m[39m
+ [32m✓[39m src/app/api/ach/mandate/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1051[2mms[22m[39m
+ [32m✓[39m src/components/AccountSecurity.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 1616[2mms[22m[39m
+   [33m[2m✓[22m[39m AccountSecurity[2m > [22mshows 'Not set up' before enrollment and completes TOTP enrollment end to end [33m 1006[2mms[22m[39m
+   [33m[2m✓[22m[39m AccountSecurity[2m > [22mshows a step-up challenge when disabling an enrolled method, and reflects the change once verified [33m 418[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/signup/route.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 1634[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/auth/signup[2m > [22mrate-limits repeated signups from the same IP [33m 562[2mms[22m[39m
+ [32m✓[39m src/components/AgreementDetail.test.tsx [2m([22m[2m34 tests[22m[2m)[22m[33m 9479[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementDetail[2m > [22mProblem 2 remediation: shows an inline schedule-revision form (not a dead-end error) when signing fails because the first payment date has already passed, and successfully proposing a new date returns to normal signing [33m 439[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementDetail[2m > [22mRestore agreement payment functionality: Make Payment section[2m > [22mFix the 'Make payment' button: 'Cancel' on the confirmation step backs out without submitting, and clicking 'Confirm payment' twice never submits twice [33m 515[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementDetail[2m > [22mReceiving-party amendment review remediation: the recipient must see actual proposed terms before deciding[2m > [22mshows 'View revised agreement' before Accept/Reject, and reveals the actual proposed terms (not just title/description) only once selected [33m 352[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementDetail[2m > [22mAgreement Lifecycle V2: the debtor can request changes (not just acknowledge) at awaiting_debtor_acknowledgment, via the shared revise-terms path [33m 2193[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementDetail[2m > [22mAgreement Lifecycle V2 UAT (Defect 3): Cancel Agreement requires a reason and shows the exact required explanatory text before confirming [33m 1161[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementDetail[2m > [22mMutual cancellation (mandatory command)[2m > [22mwith no pending request, offers 'Request Cancellation', and submitting one calls the real API with the reason [33m 672[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementDetail[2m > [22mMutual cancellation (mandatory command)[2m > [22mthe counterparty can Decline instead, leaving the agreement unchanged [33m 940[2mms[22m[39m
+ [32m✓[39m src/components/NotificationCenter.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[33m 1511[2mms[22m[39m
+ [32m✓[39m src/components/Dashboard.test.tsx [2m([22m[2m10 tests[22m[2m)[22m[33m 1379[2mms[22m[39m
+   [33m[2m✓[22m[39m Dashboard summary — Personal/Business consistency[2m > [22m2/9. Business dashboard renders the exact same five summary cards (same structure), on desktop and mobile (same markup regardless of viewport) [33m 337[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/evidence/signed-url/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1029[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/evidence/signed-url[2m > [22missues a signed URL to an agreement party [33m 388[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/evidence/signed-url[2m > [22mrejects an unauthenticated request with 401 [33m 335[2mms[22m[39m
+ [32m✓[39m src/components/OrganizationStaffRoles.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 1374[2mms[22m[39m
+   [33m[2m✓[22m[39m OrganizationStaffRoles[2m > [22mshows a step-up challenge on create, and retries the create after a successful verify [33m 1241[2mms[22m[39m
+ [32m✓[39m src/components/PasswordField.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 1074[2mms[22m[39m
+   [33m[2m✓[22m[39m PasswordField[2m > [22mdefaults to masked and reveals/re-masks the value on toggle [33m 1058[2mms[22m[39m
+ [32m✓[39m src/components/OrganizationStaff.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[33m 1190[2mms[22m[39m
+   [33m[2m✓[22m[39m OrganizationStaff[2m > [22mPRSprint 08: removing a staff member confirms, requires step-up, and retries after verification [33m 658[2mms[22m[39m
+ [32m✓[39m src/components/admin/AdminBusinessDetail.test.tsx [2m([22m[2m1 test[22m[2m)[22m[33m 1208[2mms[22m[39m
+   [33m[2m✓[22m[39m AdminBusinessDetail[2m > [22mshows a step-up challenge when suspending a business, and retries after verification [33m 1206[2mms[22m[39m
+ [32m✓[39m src/components/LoginForm.test.tsx [2m([22m[2m1 test[22m[2m)[22m[33m 1480[2mms[22m[39m
+   [33m[2m✓[22m[39m LoginForm[2m > [22msubmits the typed password even after toggling it visible [33m 1478[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/businesses/route.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 909[2mms[22m[39m
+ [32m✓[39m src/app/(marketing)/terms/page.test.tsx [2m([22m[2m27 tests[22m[2m)[22m[33m 1033[2mms[22m[39m
+ [32m✓[39m src/components/demo/B2BDemo.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 1356[2mms[22m[39m
+   [33m[2m✓[22m[39m B2BDemo[2m > [22mnever calls fetch — every step is fixture data only [33m 337[2mms[22m[39m
+   [33m[2m✓[22m[39m B2BDemo[2m > [22mwalks the required B2B journey: relationship, authorized staff/role context, agreement, approval/signing, payment method, scheduled payments, completion — for the $5,000 example [33m 1000[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/cancellation-requests/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1121[2mms[22m[39m
+   [33m[2m✓[22m[39m POST/GET /api/agreements/cancellation-requests[2m > [22mrejects a request missing a reason [33m 331[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/logout/route.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 1258[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/payment-setup/authorize-mandate/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 879[2mms[22m[39m
+ [32m✓[39m src/components/InviteConnectionWizard.test.tsx [2m([22m[2m1 test[22m[2m)[22m[33m 1673[2mms[22m[39m
+   [33m[2m✓[22m[39m InviteConnectionWizard[2m > [22mwalks identity -> invitee -> review -> submit, posting the opposite role for the invitee and showing the waiting state [33m 1671[2mms[22m[39m
+ [32m✓[39m src/app/(marketing)/privacy/page.test.tsx [2m([22m[2m26 tests[22m[2m)[22m[33m 762[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/resend-verification/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 788[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/cancellation-requests/decide/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 714[2mms[22m[39m
+ [32m✓[39m src/app/api/notifications/sms-consent/route.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 772[2mms[22m[39m
+ [32m✓[39m src/components/demo/P2PDemo.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 1435[2mms[22m[39m
+   [33m[2m✓[22m[39m P2PDemo[2m > [22mnever calls fetch — every step is fixture data only [33m 472[2mms[22m[39m
+   [33m[2m✓[22m[39m P2PDemo[2m > [22mwalks the full required P2P journey in order: invitation, acceptance, agreement, signing, payment method, $250 partial payment, $750 remaining, subsequent payments, paid in full [33m 930[2mms[22m[39m
+ [32m✓[39m src/components/demo/C2BDemo.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 1048[2mms[22m[39m
+   [33m[2m✓[22m[39m C2BDemo[2m > [22mnever calls fetch — every step is fixture data only [33m 372[2mms[22m[39m
+   [33m[2m✓[22m[39m C2BDemo[2m > [22mwalks the required C2B journey: relationship, agreement, schedule, payment method, payment/balance reduction, completion — for the $600 example [33m 605[2mms[22m[39m
+ [32m✓[39m src/components/admin/AdminAppeals.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 843[2mms[22m[39m
+   [33m[2m✓[22m[39m AdminAppeals[2m > [22mblocks assigning the original decision-maker as reviewer [33m 572[2mms[22m[39m
+ [32m✓[39m src/components/ConnectionDetail.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 1130[2mms[22m[39m
+   [33m[2m✓[22m[39m ConnectionDetail[2m > [22mshows a step-up challenge when replacing an already-assigned account, and retries after verification [33m 793[2mms[22m[39m
+ [32m✓[39m src/app/api/dashboard/business/route.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 766[2mms[22m[39m
+ [32m✓[39m src/app/api/account/sessions/logout-all/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 803[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/account/sessions/logout-all[2m > [22mrejects access with no session cookie (401) [33m 307[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/account/sessions/logout-all[2m > [22mdoes not affect another user's sessions [33m 309[2mms[22m[39m
+ [32m✓[39m src/app/api/relationships/accounts/bank/connect/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 881[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/password-reset/confirm/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 773[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/auth/password-reset/confirm[2m > [22mresets the password with a valid token and returns 200 [33m 331[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/link-candidates/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 791[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/link-candidates[2m > [22mincludes only the connection matching the agreement's actual counterparty, excluding an unrelated one [33m 365[2mms[22m[39m
+ [32m✓[39m src/app/api/account/sessions/revoke/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 526[2mms[22m[39m
+ [32m✓[39m src/app/api/ach/payments/submit/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 601[2mms[22m[39m
+ [32m✓[39m src/components/AcceptDeclineInvitation.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 627[2mms[22m[39m
+ [32m✓[39m src/components/PaymentDetail.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[33m 764[2mms[22m[39m
+ [32m✓[39m src/app/(marketing)/page.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 725[2mms[22m[39m
+ [32m✓[39m src/app/api/debit-card/payments/submit/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 785[2mms[22m[39m
+ [32m✓[39m src/components/AgreementPaymentAuthorize.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 948[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementPaymentAuthorize[2m > [22mauthorizes on click and returns to the agreement's Make Payment section [33m 435[2mms[22m[39m
+ [32m✓[39m src/components/RescheduleRequest.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 623[2mms[22m[39m
+ [32m✓[39m src/app/api/profiles/active/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 780[2mms[22m[39m
+ [32m✓[39m src/app/(marketing)/legalCrossDocument.test.tsx [2m([22m[2m8 tests[22m[2m)[22m[33m 732[2mms[22m[39m
+ [32m✓[39m src/components/AgreementProgress.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[33m 957[2mms[22m[39m
+ [32m✓[39m src/components/StepUpChallenge.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 589[2mms[22m[39m
+   [33m[2m✓[22m[39m StepUpChallenge[2m > [22moffers to check again after enrolling elsewhere, without losing the pending action [33m 420[2mms[22m[39m
+ [32m✓[39m src/app/api/notifications/preferences/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 631[2mms[22m[39m
+ [32m✓[39m src/components/AccountDashboard.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 448[2mms[22m[39m
+ [32m✓[39m src/app/api/account/dashboard/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 609[2mms[22m[39m
+ [32m✓[39m src/components/PublicSupport.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 408[2mms[22m[39m
+ [32m✓[39m src/lib/amendments/amendmentService.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 595[2mms[22m[39m
+ [32m✓[39m src/app/api/staff/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 617[2mms[22m[39m
+ [32m✓[39m src/components/admin/AdminVerificationQueue.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 673[2mms[22m[39m
+   [33m[2m✓[22m[39m AdminVerificationQueue[2m > [22mlists pending verification requests and lets an admin approve one [33m 473[2mms[22m[39m
+ [32m✓[39m src/lib/agreementInvitations/agreementInvitationService.test.ts [2m([22m[2m30 tests[22m[2m)[22m[33m 518[2mms[22m[39m
+   [33m[2m✓[22m[39m AgreementInvitationService[2m > [22mPRSprint 11 integration: an agreement created through this invitation flow can be amended normally afterward[2m > [22mpropose -> accept -> sign an amendment against an invitation-created agreement, producing a second retrievable version [33m 365[2mms[22m[39m
+ [32m✓[39m src/app/api/profiles/verification/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 547[2mms[22m[39m
+ [32m✓[39m src/app/api/notifications/archive/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 584[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/pdf/preview/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 557[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/agreements/pdf/preview[2m > [22ma party to a still-draft agreement receives an inline PDF (200) — the point of a live preview [33m 347[2mms[22m[39m
+ [32m✓[39m src/app/api/profiles/business/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 633[2mms[22m[39m
+ [32m✓[39m src/components/PaymentsList.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[33m 415[2mms[22m[39m
+ [32m✓[39m src/app/api/relationships/invitations/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 679[2mms[22m[39m
+ [32m✓[39m src/components/admin/AdminRiskEvents.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 503[2mms[22m[39m
+   [33m[2m✓[22m[39m AdminRiskEvents[2m > [22mlists open risk signals and lets an admin mark one reviewed [33m 463[2mms[22m[39m
+ [32m✓[39m src/components/SupportAppeals.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 412[2mms[22m[39m
+ [32m✓[39m src/app/api/account/sessions/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 533[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/verification/decide/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 541[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/me/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 631[2mms[22m[39m
+ [32m✓[39m src/components/MobileNavToggle.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 538[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/beta-invites/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 580[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/verify-email/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 556[2mms[22m[39m
+ [32m✓[39m src/app/api/staff/invite/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 484[2mms[22m[39m
+ [32m✓[39m src/app/api/notifications/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 624[2mms[22m[39m
+   [33m[2m✓[22m[39m GET /api/notifications[2m > [22mreturns only the authenticated user's own notifications, never another user's, and in the grouped shape (not raw rows) [33m 368[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/mfa/disable/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 478[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/mfa/step-up/initiate/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 481[2mms[22m[39m
+ [32m✓[39m src/components/OnboardingBanner.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 438[2mms[22m[39m
+[90mstdout[2m | src/lib/signatures/signatureService.test.ts[2m > [22m[2mSignatureService[2m > [22m[2mtest B/C — legacy executed agreement with an existing PDF and no snapshot[2m > [22m[2mthe existing PDF is never regenerated after profile edits, even across repeated getSignedPdfUrl/ensurePdfForVersion calls
+[22m[39m{"level":"info","message":"agreement_pdf_generated_without_snapshot","time":"2026-09-30T01:18:30.070Z","agreementId":"d27adbcc-e792-4ba1-9459-4524e9c29ab0","agreementVersionId":"e91462f9-5547-433a-9af9-90580a58a202"}
+
+ [32m✓[39m src/components/OrganizationApprovals.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 439[2mms[22m[39m
+ [32m✓[39m src/lib/signatures/signatureService.test.ts [2m([22m[2m24 tests[22m[2m)[22m[33m 520[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/mfa/totp/confirm/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 453[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/mfa/sms/enroll/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 454[2mms[22m[39m
+ [32m✓[39m src/app/api/dashboard/personal/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 577[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/mfa/step-up/verify/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 364[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/pdf/route.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 306[2mms[22m[39m
+ [32m✓[39m src/app/(marketing)/layout.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 367[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/notifications/sms/retry/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 387[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/notifications/sms/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 442[2mms[22m[39m
+ [32m✓[39m src/app/api/agreements/sign/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 403[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/risk-events/review/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 372[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/notifications/email/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 472[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/mfa/sms/confirm/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 518[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/mfa/status/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 389[2mms[22m[39m
+ [32m✓[39m src/components/ConnectionsList.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 432[2mms[22m[39m
+ [32m✓[39m src/components/PaymentMethodsList.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 534[2mms[22m[39m
+   [33m[2m✓[22m[39m PaymentMethodsList[2m > [22mshows an empty state with add-account links when there are no accounts [33m 353[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/password-reset/request/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 424[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/notifications/email/retry/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 453[2mms[22m[39m
+ [32m✓[39m src/lib/auth/crossAccountIsolation.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 330[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/impersonation/active/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 384[2mms[22m[39m
+ [32m✓[39m src/lib/ledger/paymentLedgerIntegration.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 246[2mms[22m[39m
+ [32m✓[39m src/app/api/ach/payments/manual/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 433[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/risk-events/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 331[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/overview/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 342[2mms[22m[39m
+ [32m✓[39m src/components/ComingSoon.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 264[2mms[22m[39m
+ [32m✓[39m src/app/api/profiles/route.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 277[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/verification/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 342[2mms[22m[39m
+ [32m✓[39m src/app/api/auth/mfa/totp/enroll/route.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 276[2mms[22m[39m
+ [32m✓[39m src/app/api/notifications/archive-all/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 283[2mms[22m[39m
+ [32m✓[39m src/app/(marketing)/accessibility/page.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[32m 200[2mms[22m[39m
+ [32m✓[39m src/components/OnboardingGate.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[32m 199[2mms[22m[39m
+ [32m✓[39m src/lib/ledger/balanceReconstruction.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 230[2mms[22m[39m
+ [32m✓[39m src/app/api/profiles/pricing/route.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 252[2mms[22m[39m
+ [32m✓[39m src/lib/ui/useStepUpGuardedAction.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 212[2mms[22m[39m
+[90mstdout[2m | src/lib/notify/getEmailSender.test.ts[2m > [22m[2mgetEmailSender (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)[2m > [22m[2mdevelopment/test/staging without RESEND_API_KEY: send succeeds via console-only logging — unchanged, safe non-production default
+[22m[39m{"level":"info","message":"email_send_console_only","time":"2026-09-30T01:18:39.242Z","to":"user@example.com","subject":"Hi","body":"Body","ctaUrl":null}
+
+[90mstdout[2m | src/lib/notify/getEmailSender.test.ts[2m > [22m[2mgetEmailSender (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)[2m > [22m[2mdevelopment/test/staging without RESEND_API_KEY: send succeeds via console-only logging — unchanged, safe non-production default
+[22m[39m{"level":"info","message":"email_send_console_only","time":"2026-09-30T01:18:39.260Z","to":"user@example.com","subject":"Hi","body":"Body","ctaUrl":null}
+
+[90mstdout[2m | src/lib/notify/getEmailSender.test.ts[2m > [22m[2mgetEmailSender (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)[2m > [22m[2mdevelopment/test/staging without RESEND_API_KEY: send succeeds via console-only logging — unchanged, safe non-production default
+[22m[39m{"level":"info","message":"email_send_console_only","time":"2026-09-30T01:18:39.276Z","to":"user@example.com","subject":"Hi","body":"Body","ctaUrl":null}
+
+ [32m✓[39m src/lib/notify/getEmailSender.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 134[2mms[22m[39m
+ [32m✓[39m src/app/(marketing)/demo/branding.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 246[2mms[22m[39m
+[90mstdout[2m | src/lib/notify/getSmsSender.test.ts[2m > [22m[2mgetSmsSender (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)[2m > [22m[2mdevelopment/test/staging without Twilio credentials: send succeeds via console-only logging — unchanged, safe non-production default
+[22m[39m{"level":"info","message":"sms_send_console_only","time":"2026-09-30T01:18:39.973Z","to":"+1********06","body":"Hi"}
+
+[90mstdout[2m | src/lib/notify/getSmsSender.test.ts[2m > [22m[2mgetSmsSender (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)[2m > [22m[2mdevelopment/test/staging without Twilio credentials: send succeeds via console-only logging — unchanged, safe non-production default
+[22m[39m{"level":"info","message":"sms_send_console_only","time":"2026-09-30T01:18:39.996Z","to":"+1********06","body":"Hi"}
+
+[90mstdout[2m | src/lib/notify/getSmsSender.test.ts[2m > [22m[2mgetSmsSender (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)[2m > [22m[2mdevelopment/test/staging without Twilio credentials: send succeeds via console-only logging — unchanged, safe non-production default
+[22m[39m{"level":"info","message":"sms_send_console_only","time":"2026-09-30T01:18:40.041Z","to":"+1********06","body":"Hi"}
+
+ [32m✓[39m src/lib/notify/getSmsSender.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 182[2mms[22m[39m
+ [32m✓[39m src/lib/agreements/agreementService.test.ts [2m([22m[2m59 tests[22m[2m)[22m[32m 209[2mms[22m[39m
+ [32m✓[39m src/lib/agreements/agreementProgressService.test.ts [2m([22m[2m54 tests[22m[2m)[22m[32m 143[2mms[22m[39m
+ [32m✓[39m src/lib/payments/paymentService.test.ts [2m([22m[2m46 tests[22m[2m)[22m[32m 116[2mms[22m[39m
+ [32m✓[39m src/app/api/admin/health/route.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 210[2mms[22m[39m
+ [32m✓[39m src/lib/admin/deepHealthCheck.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 130[2mms[22m[39m
+ [32m✓[39m src/app/api/scheduler/expire-relationship-invitations/route.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 138[2mms[22m[39m
+ [32m✓[39m src/lib/settlements/settlementService.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 109[2mms[22m[39m
+ [32m✓[39m src/app/api/account/export/route.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 184[2mms[22m[39m
+ [32m✓[39m src/lib/failedPayments/paymentRetryService.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 108[2mms[22m[39m
+ [32m✓[39m src/lib/failedPayments/failedPaymentRetryCoordinatorActivationGate.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 132[2mms[22m[39m
+[90mstdout[2m | src/lib/b2b/b2bWorkflowService.test.ts[2m > [22m[2mB2BWorkflowService[2m > [22m[2msigner authority[2m > [22m[2ma fully-signed B2B agreement (both sides business) correctly captures each signer's title and authority
+[22m[39m{"level":"info","message":"agreement_pdf_generated_without_snapshot","time":"2026-09-30T01:18:41.691Z","agreementId":"54176c8c-d5d6-4b41-8b88-9bda4fa2037a","agreementVersionId":"35fbc06f-818a-4085-800c-70134e51d9b6"}
+
+ [32m✓[39m src/app/api/webhooks/sms/twilio/status/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 71[2mms[22m[39m
+ [32m✓[39m src/app/api/webhooks/email/resend/route.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+ [32m✓[39m src/lib/b2b/b2bWorkflowService.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 134[2mms[22m[39m
+ [32m✓[39m src/lib/ledger/reconciliationService.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/lib/relationships/relationshipService.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 90[2mms[22m[39m
+ [32m✓[39m src/app/api/webhooks/sms/twilio/inbound/route.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+ [32m✓[39m src/app/api/scheduler/expire-negotiations/route.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m src/app/api/scheduler/archive-read-notifications/route.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 100[2mms[22m[39m
+ [32m✓[39m src/lib/partialPayments/partialPaymentService.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/lib/auth/mfaService.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m src/lib/relationships/relationshipInvitationService.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 94[2mms[22m[39m
+ [32m✓[39m src/lib/ledger/concurrencyAndIdempotency.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 67[2mms[22m[39m
+ [32m✓[39m src/lib/notify/notificationService.test.ts [2m([22m[2m71 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/app/api/scheduler/expire-agreement-invitations/route.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m src/lib/payments/paymentWebhookService.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 124[2mms[22m[39m
+ [32m✓[39m src/lib/admin/adminService.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 116[2mms[22m[39m
+ [32m✓[39m src/app/api/scheduler/retry-notifications/route.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32m✓[39m src/lib/evidence/evidenceService.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/lib/relationships/relationshipFinancialAccountService.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 192[2mms[22m[39m
+ [32m✓[39m src/lib/ui/date.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/lib/staff/staffService.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/lib/agreementInvitations/agreementInvitationIdentityConflict.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 67[2mms[22m[39m
+ [32m✓[39m src/app/api/scheduler/recover-payment-webhooks/route.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+ [32m✓[39m src/lib/relationships/relationshipScenarios.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/lib/debitCard/debitCardPaymentService.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 96[2mms[22m[39m
+ [32m✓[39m src/config/env.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/lib/relationships/stepOneStepTwoRelationshipLifecycle.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/app/api/scheduler/retry-failed-payments/route.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 79[2mms[22m[39m
+ [32m✓[39m src/lib/ui/money.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/lib/profiles/personalProfileService.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/lib/disputes/agreementDisputeService.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 79[2mms[22m[39m
+ [32m✓[39m src/lib/relationships/crossUserFinancialAccountIsolation.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 120[2mms[22m[39m
+ [32m✓[39m src/lib/csvImport/csvImportService.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/lib/ledger/balanceService.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m src/lib/notify/twilioSmsSender.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/lib/profiles/businessProfileService.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/lib/cards/cardService.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/lib/agreements/agreementCancellationService.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/lib/risk/riskEventService.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/lib/agreementInvitations/agreementInvitationSmsConsent.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/lib/evidence/witnessService.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/lib/ledger/ledgerAdminService.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/lib/notify/resendEmailSender.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/lib/ach/achMandateService.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/lib/admin/smsDeliveryAdminService.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/lib/notify/notificationService.smsConsent.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m src/lib/disputes/paymentDisputeService.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/lib/admin/appealService.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/lib/ach/achPaymentService.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m src/lib/api-handler.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/app/api/feature-flags/route.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/lib/profiles/verificationService.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/lib/ach/achReconciliation.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/lib/ledger/ledgerService.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/lib/admin/adminRoleService.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/lib/admin/retentionHoldService.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/lib/admin/supportCaseService.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/lib/staff/approvalService.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 99[2mms[22m[39m
+ [32m✓[39m src/lib/relationships/bankConnectionService.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/lib/admin/adminRestrictionService.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/lib/debitCard/debitCardMethodService.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/lib/cards/cardWebhookService.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 90[2mms[22m[39m
+ [32m✓[39m src/lib/kyc/kycWebhookService.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/lib/failedPayments/rescheduleRequestService.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/test-support/payments/sandboxPaymentProvider.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/lib/ui/statusLabels.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/lib/admin/adminCaseReviewService.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/lib/profiles/profileInvariants.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/lib/admin/emailDeliveryAdminService.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/lib/ach/achPaymentBankConnectionProvenance.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/lib/rate-limit.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/lib/notify/emailTemplateShell.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/app/layout.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/lib/compliance/betaInviteService.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/lib/agreements/schedule.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/lib/payments/paymentInitiationEligibilityService.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/lib/notify/verifyTwilioWebhookSignature.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/lib/kyc/kycVerificationService.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/lib/auth/token.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/lib/profiles/profileAccessService.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/lib/audit/auditService.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/lib/pricing/pricingService.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/lib/compliance/dataExportService.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/test-support/kyc/sandboxKycProvider.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/db/schemaParityComparators.self-validation.test.ts [2m([22m[2m34 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/lib/admin/environmentStatus.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/lib/phone.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/lib/auth/totp.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+[90mstdout[2m | src/lib/notify/consoleEmailSender.test.ts[2m > [22m[2mConsoleEmailSender (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION, requirement #9)[2m > [22m[2mlogs and reports success (providerMessageId: null) by default — unchanged non-production behavior
+[22m[39m{"level":"info","message":"email_send_console_only","time":"2026-09-30T01:19:02.714Z","to":"user@example.com","subject":"Hi","body":"Body","ctaUrl":null}
+
+ [32m✓[39m src/components/connections/setupTracker.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/lib/notify/consoleEmailSender.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/lib/pagination.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/lib/documents/drizzleProfileDisplayReader.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/lib/notify/verifyResendWebhookSignature.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/lib/compliance/consentService.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/lib/providers/providerCapabilities.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/lib/audit/hash.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/lib/auth/session.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+[90mstdout[2m | src/lib/notify/consoleSmsSender.test.ts[2m > [22m[2mConsoleSmsSender (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION, requirement #9)[2m > [22m[2mlogs and reports success (providerMessageId: null) by default — unchanged non-production behavior
+[22m[39m{"level":"info","message":"sms_send_console_only","time":"2026-09-30T01:19:03.535Z","to":"+1********06","body":"Hi"}
+
+ [32m✓[39m src/lib/notify/consoleSmsSender.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/lib/errors.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/lib/feature-flags.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/app/api/health/route.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/lib/agreements/agreementPartyDisplay.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/lib/payments/transactionLimits.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/lib/finance/bankAccountValidation.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/test-support/payments/perKeyProviderCallCounter.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/lib/debitCard/cardFeeAllocation.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/components/connections/participantLabels.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/ui/safeRedirect.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/app/manifest.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/lib/failedPayments/businessDays.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/lib/security/challengeProvider.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m261 passed[39m[22m[90m (261)[39m
+[2m      Tests [22m [1m[32m2289 passed[39m[22m[90m (2289)[39m
+[2m   Start at [22m 21:17:56
+[2m   Duration [22m 69.79s[2m (transform 42.89s, setup 604.35s, collect 117.76s, tests 158.92s, environment 446.59s, prepare 69.43s)[22m
+

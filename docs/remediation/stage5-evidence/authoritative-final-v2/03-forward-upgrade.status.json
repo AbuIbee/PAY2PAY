@@ -1,0 +1,8 @@
+{
+  "command": "node scripts/stage5-forward-upgrade-test.mjs",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "startTimestamp": "2026-09-30T01:16:31.603Z",
+  "finishTimestamp": "2026-09-30T01:16:36.615Z",
+  "exitCode": 0,
+  "spawnError": null
+}

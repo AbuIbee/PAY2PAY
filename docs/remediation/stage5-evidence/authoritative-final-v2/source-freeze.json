@@ -1,0 +1,1844 @@
+{
+  "label": "before",
+  "capturedAt": "2026-09-30T01:16:17.405Z",
+  "repoRoot": "C:/Development/PAY2PAY-bank-v3",
+  "branch": "architecture/bank-managed-payments-v3",
+  "head": "93bbbbf8950010d4c0a70c7133339dc352ebd0fd",
+  "rawTrackedStdout": ".github/workflows/ci.yml\u0000CLAUDE.md\u0000package.json\u0000scripts/postgres-test-db.mjs\u0000scripts/postgres-test-db.test.mjs\u0000src/app/api/admin/sandbox/simulate-settlement/route.test.ts\u0000src/app/api/admin/sandbox/simulate-settlement/route.ts\u0000src/app/api/payments/by-agreement/route.test.ts\u0000src/app/api/payments/by-agreement/route.ts\u0000src/app/api/payments/detail/route.test.ts\u0000src/app/api/payments/detail/route.ts\u0000src/app/api/relationships/accounts/bank/connect/route.test.ts\u0000src/components/PaymentDetail.test.tsx\u0000src/components/PaymentDetail.tsx\u0000src/components/PaymentsList.test.tsx\u0000src/components/PaymentsList.tsx\u0000src/config/env.ts\u0000src/db/schema/enums.ts\u0000src/db/schema/index.ts\u0000src/lib/ach/achPaymentService.ts\u0000src/lib/ach/getAchPaymentService.ts\u0000src/lib/ach/testFakes.ts\u0000src/lib/admin/environmentStatus.test.ts\u0000src/lib/admin/environmentStatus.ts\u0000src/lib/admin/testFakes.ts\u0000src/lib/agreements/agreementProgressService.ts\u0000src/lib/audit/auditService.ts\u0000src/lib/audit/drizzleAuditEventRepository.ts\u0000src/lib/cards/getCardIssuingProvider.ts\u0000src/lib/cards/testFakes.ts\u0000src/lib/debitCard/debitCardPaymentService.test.ts\u0000src/lib/debitCard/debitCardPaymentService.ts\u0000src/lib/debitCard/getDebitCardPaymentService.ts\u0000src/lib/debitCard/testFakes.ts\u0000src/lib/errors.ts\u0000src/lib/failedPayments/failedPaymentRetryCoordinator.ts\u0000src/lib/failedPayments/getFailedPaymentRetryCoordinator.ts\u0000src/lib/failedPayments/getPaymentRetryService.ts\u0000src/lib/failedPayments/productionFactoryRecursion.test.ts\u0000src/lib/kyc/getKycProvider.ts\u0000src/lib/kyc/testFakes.ts\u0000src/lib/ledger/agreementCompletionService.ts\u0000src/lib/ledger/balanceService.test.ts\u0000src/lib/ledger/balanceService.ts\u0000src/lib/ledger/concurrencyAndIdempotency.test.ts\u0000src/lib/ledger/drizzleReconciliationExceptionRepository.ts\u0000src/lib/ledger/getBalanceService.ts\u0000src/lib/ledger/installmentAmountAwareness.postgres.test.ts\u0000src/lib/ledger/ledgerService.ts\u0000src/lib/ledger/paymentLedgerIntegration.test.ts\u0000src/lib/ledger/reconciliationService.ts\u0000src/lib/ledger/testFakes.ts\u0000src/lib/notify/consoleEmailSender.ts\u0000src/lib/notify/consoleSmsSender.ts\u0000src/lib/notify/getEmailSender.ts\u0000src/lib/notify/getSmsSender.ts\u0000src/lib/payments/drizzlePaymentAttemptRepository.ts\u0000src/lib/payments/getPaymentProvider.ts\u0000src/lib/payments/getPaymentService.ts\u0000src/lib/payments/getPaymentWebhookService.ts\u0000src/lib/payments/paymentInitiationEligibilityService.ts\u0000src/lib/payments/paymentService.test.ts\u0000src/lib/payments/paymentService.ts\u0000src/lib/payments/paymentWebhookRecovery.postgres.test.ts\u0000src/lib/payments/paymentWebhookService.test.ts\u0000src/lib/payments/paymentWebhookService.ts\u0000src/lib/payments/testFakes.ts\u0000src/lib/providers/providerCapabilities.test.ts\u0000src/lib/providers/providerCapabilities.ts\u0000src/lib/relationships/bankConnectionService.test.ts\u0000src/lib/settlements/settlementBinding.postgres.test.ts\u0000src/lib/ui/statusLabels.test.ts\u0000src/lib/ui/statusLabels.ts\u0000src/test-support/cards/sandboxCardIssuingProvider.ts\u0000src/test-support/kyc/sandboxKycProvider.test.ts\u0000src/test-support/kyc/sandboxKycProvider.ts\u0000src/test-support/payments/sandboxPaymentProvider.test.ts\u0000src/test-support/payments/sandboxPaymentProvider.ts\u0000vitest.postgres.config.ts\u0000vitest.postgres.setup.ts\u0000",
+  "rawTrackedStderr": "warning: in the working copy of 'src/app/api/relationships/accounts/bank/connect/route.test.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/admin/environmentStatus.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/cards/getCardIssuingProvider.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/cards/testFakes.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/failedPayments/productionFactoryRecursion.test.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/kyc/getKycProvider.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/kyc/testFakes.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/ledger/getBalanceService.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/ledger/installmentAmountAwareness.postgres.test.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/payments/getPaymentProvider.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/payments/paymentWebhookRecovery.postgres.test.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/payments/testFakes.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/providers/providerCapabilities.test.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/providers/providerCapabilities.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/relationships/bankConnectionService.test.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/lib/settlements/settlementBinding.postgres.test.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/test-support/cards/sandboxCardIssuingProvider.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/test-support/kyc/sandboxKycProvider.test.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/test-support/kyc/sandboxKycProvider.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/test-support/payments/sandboxPaymentProvider.test.ts', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'src/test-support/payments/sandboxPaymentProvider.ts', LF will be replaced by CRLF the next time Git touches it\n",
+  "rawUntrackedStdout": "docs/remediation/CONTROL_ORDER_004-B_SV-007_FACTORY_TEST_CORRECTION.md\u0000docs/remediation/Paid2You_Codex_Stage01_Final_Acceptance_Addendum.md\u0000docs/remediation/Paid2You_Codex_Stage01_Final_Verification.md\u0000docs/remediation/Paid2You_Codex_Stage02_Evidence_Addendum.md\u0000docs/remediation/Paid2You_Codex_Stage02_Final_Acceptance_Addendum.md\u0000docs/remediation/Paid2You_Codex_Stage02_Independent_Acceptance_Report.md\u0000docs/remediation/Paid2You_Codex_Stage03_Final_Acceptance_Addendum.md\u0000docs/remediation/Paid2You_Codex_Stage03_Final_Technical_Acceptance.md\u0000docs/remediation/Paid2You_Codex_Stage03_Independent_Acceptance_Report.md\u0000docs/remediation/STAGE_01_FINAL_IMPLEMENTATION_AND_EXIT_REPORT.md\u0000docs/remediation/STAGE_02_008I_EXACT_ASSERTION_FIX.md\u0000docs/remediation/STAGE_02_FINAL_PREAUTHORIZATION_CLARIFICATION.md\u0000docs/remediation/STAGE_02_FOUR_FINDINGS_REMEDIATION_AND_GATE_B_READINESS.md\u0000docs/remediation/STAGE_02_PHASE_A_ARCHITECTURE_AND_ISOLATION_REPORT.md\u0000docs/remediation/STAGE_02_PHASE_B_ISOLATION_AND_HARNESS_EVIDENCE.md\u0000docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EVIDENCE_AND_AUTHORIZATION.md\u0000docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EXECUTION_REPORT.md\u0000docs/remediation/STAGE_02_PHASE_C_008I_FINAL_FAILURE_DIAGNOSIS.md\u0000docs/remediation/STAGE_02_PHASE_C_FAILURE_DIAGNOSIS.md\u0000docs/remediation/STAGE_02_PHASE_C_FINAL_COMPLETION_REPORT.md\u0000docs/remediation/STAGE_02_PHASE_C_REM008_POSTGRESQL_EXECUTION_REPORT.md\u0000docs/remediation/STAGE_02_PHASE_C_TWO_FAILURES_REMEDIATION_AND_EXECUTION_READINESS.md\u0000docs/remediation/STAGE_02_REPORTER_ONLY_CONFIGURATION_CHANGE.md\u0000docs/remediation/STAGE_02_ROLE_OWNERSHIP_FINAL_CORRECTION_AND_PHASE_B_APPROVAL.md\u0000docs/remediation/STAGE_03_G01_G12_EXECUTION_AND_ACCEPTANCE_REPORT.md\u0000docs/remediation/STAGE_03_PROJECT_OWNER_FINAL_ACCEPTANCE_AND_CARRY_FORWARD.md\u0000docs/remediation/STAGE_05_CODEX_INDEPENDENT_ACCEPTANCE_REPORT.md\u0000docs/remediation/STAGE_05_DATABASE_MIGRATION_READINESS_CLOSURE_REPORT.md\u0000docs/remediation/stage03-g03-g04-evidence/run-20260921-155419/command.txt\u0000docs/remediation/stage03-g03-g04-evidence/run-20260921-155419/stderr.log\u0000docs/remediation/stage03-g03-g04-evidence/run-20260921-155419/stdout.log\u0000docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/cleanup-verification.txt\u0000docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/command.txt\u0000docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/stderr.log\u0000docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/stdout.log\u0000docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/cleanup-verification.txt\u0000docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/command.txt\u0000docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/stderr.log\u0000docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/stdout.log\u0000docs/remediation/stage4-evidence/audit-regression-command.txt\u0000docs/remediation/stage4-evidence/broader-regression-command.txt\u0000docs/remediation/stage4-evidence/broader-regression-output.txt\u0000docs/remediation/stage4-evidence/final-broader-regression-command.txt\u0000docs/remediation/stage4-evidence/final-broader-regression-output.txt\u0000docs/remediation/stage4-evidence/final-lint-command.txt\u0000docs/remediation/stage4-evidence/final-lint-output.txt\u0000docs/remediation/stage4-evidence/final-typecheck-command.txt\u0000docs/remediation/stage4-evidence/final-typecheck-output.txt\u0000docs/remediation/stage4-evidence/final-unit-regression-command.txt\u0000docs/remediation/stage4-evidence/final-unit-regression-output.txt\u0000docs/remediation/stage4-evidence/focused-unit-regression-command.txt\u0000docs/remediation/stage4-evidence/focused-unit-regression-output.txt\u0000docs/remediation/stage4-evidence/git-status-final-complete.txt\u0000docs/remediation/stage4-evidence/git-status-final-s4-03.txt\u0000docs/remediation/stage4-evidence/git-status-final.txt\u0000docs/remediation/stage4-evidence/lint-command.txt\u0000docs/remediation/stage4-evidence/lint-output.txt\u0000docs/remediation/stage4-evidence/postgres-run-command-final.txt\u0000docs/remediation/stage4-evidence/postgres-run-command-s4-03-final.txt\u0000docs/remediation/stage4-evidence/postgres-run-command-s4-03.txt\u0000docs/remediation/stage4-evidence/postgres-run-command.txt\u0000docs/remediation/stage4-evidence/postgres-run-output-final.txt\u0000docs/remediation/stage4-evidence/postgres-run-output-s4-03-final.txt\u0000docs/remediation/stage4-evidence/postgres-run-output-s4-03.txt\u0000docs/remediation/stage4-evidence/postgres-run-output.txt\u0000docs/remediation/stage4-evidence/s4-03-broader-regression-command.txt\u0000docs/remediation/stage4-evidence/s4-03-broader-regression-output.txt\u0000docs/remediation/stage4-evidence/s4-03-lint-command.txt\u0000docs/remediation/stage4-evidence/s4-03-lint-output.txt\u0000docs/remediation/stage4-evidence/s4-03-typecheck-command.txt\u0000docs/remediation/stage4-evidence/s4-03-typecheck-output.txt\u0000docs/remediation/stage4-evidence/s4-03-unit-regression-command.txt\u0000docs/remediation/stage4-evidence/s4-03-unit-regression-output.txt\u0000docs/remediation/stage4-evidence/stage4-manifest.md\u0000docs/remediation/stage4-evidence/typecheck-command.txt\u0000docs/remediation/stage4-evidence/typecheck-output.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/01-schema-parity-and-index-extraction.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/01-schema-parity-and-index-extraction.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/01-schema-parity-and-index-extraction.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/01-schema-parity-and-index-extraction.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/02-verifier-self-validation.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/02-verifier-self-validation.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/02-verifier-self-validation.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/02-verifier-self-validation.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/03-forward-upgrade.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/03-forward-upgrade.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/03-forward-upgrade.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/03-forward-upgrade.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/04-migration-runner-proof.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/04-migration-runner-proof.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/04-migration-runner-proof.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/04-migration-runner-proof.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/05-stage4-regression.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/05-stage4-regression.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/05-stage4-regression.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/05-stage4-regression.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/06-typecheck.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/06-typecheck.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/06-typecheck.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/06-typecheck.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/07-lint.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/07-lint.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/07-lint.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/07-lint.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/08-broader-regression-run-1.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/08-broader-regression-run-1.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/08-broader-regression-run-1.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/08-broader-regression-run-1.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/09-broader-regression-run-2.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/09-broader-regression-run-2.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/09-broader-regression-run-2.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/09-broader-regression-run-2.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/10-broader-regression-run-3.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/10-broader-regression-run-3.status.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/10-broader-regression-run-3.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/10-broader-regression-run-3.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/campaign-summary.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/changed-path-list-after.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/changed-path-list-before.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/git-tracked-changed-raw-after.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/git-tracked-changed-raw-before.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/git-untracked-raw-after.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/git-untracked-raw-before.txt\u0000docs/remediation/stage5-evidence/authoritative-final-v2/source-freeze-after.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/source-freeze-drift.json\u0000docs/remediation/stage5-evidence/authoritative-final-v2/source-freeze.json\u0000docs/remediation/stage5-evidence/authoritative-final/01-schema-parity-and-index-extraction.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/01-schema-parity-and-index-extraction.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/01-schema-parity-and-index-extraction.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/01-schema-parity-and-index-extraction.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/02-verifier-self-validation.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/02-verifier-self-validation.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/02-verifier-self-validation.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/02-verifier-self-validation.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/03-forward-upgrade.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/03-forward-upgrade.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/03-forward-upgrade.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/03-forward-upgrade.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/04-migration-runner-proof.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/04-migration-runner-proof.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/04-migration-runner-proof.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/04-migration-runner-proof.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/05-stage4-regression.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/05-stage4-regression.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/05-stage4-regression.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/05-stage4-regression.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/06-typecheck.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/06-typecheck.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/06-typecheck.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/06-typecheck.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/07-lint.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/07-lint.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/07-lint.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/07-lint.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/08-broader-regression-run-1.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/08-broader-regression-run-1.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/08-broader-regression-run-1.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/08-broader-regression-run-1.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/09-broader-regression-run-2.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/09-broader-regression-run-2.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/09-broader-regression-run-2.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/09-broader-regression-run-2.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/10-broader-regression-run-3.command.txt\u0000docs/remediation/stage5-evidence/authoritative-final/10-broader-regression-run-3.status.json\u0000docs/remediation/stage5-evidence/authoritative-final/10-broader-regression-run-3.stderr.txt\u0000docs/remediation/stage5-evidence/authoritative-final/10-broader-regression-run-3.stdout.txt\u0000docs/remediation/stage5-evidence/authoritative-final/adversarial-preflight.md\u0000docs/remediation/stage5-evidence/authoritative-final/campaign-summary.json\u0000docs/remediation/stage5-evidence/authoritative-final/deployment-ordering.md\u0000docs/remediation/stage5-evidence/authoritative-final/manifest.json\u0000docs/remediation/stage5-evidence/authoritative-final/manifest.md\u0000docs/remediation/stage5-evidence/authoritative-final/pre-push-inventory-git-status.txt\u0000docs/remediation/stage5-evidence/authoritative-final/provider-boundary-check.txt\u0000docs/remediation/stage5-evidence/authoritative-final/source-freeze-after.json\u0000docs/remediation/stage5-evidence/authoritative-final/source-freeze-drift.json\u0000docs/remediation/stage5-evidence/authoritative-final/source-freeze.json\u0000docs/remediation/stage5-evidence/final-campaign-2-full-output.txt\u0000docs/remediation/stage5-evidence/final-campaign-2-git-status.txt\u0000docs/remediation/stage5-evidence/final-campaign-full-output.txt\u0000docs/remediation/stage5-evidence/final-campaign-git-status.txt\u0000docs/remediation/stage5-evidence/final-git-status.txt\u0000docs/remediation/stage5-evidence/final-lint-output.txt\u0000docs/remediation/stage5-evidence/final-npm-test-output.txt\u0000docs/remediation/stage5-evidence/final-stage4-regression-output.txt\u0000docs/remediation/stage5-evidence/final-stage5-postgres-output.txt\u0000docs/remediation/stage5-evidence/final-typecheck-output.txt\u0000docs/remediation/stage5-evidence/forward-upgrade-command.txt\u0000docs/remediation/stage5-evidence/forward-upgrade-output.txt\u0000docs/remediation/stage5-evidence/fresh-build-schema-parity-command.txt\u0000docs/remediation/stage5-evidence/fresh-build-schema-parity-output.txt\u0000docs/remediation/stage5-evidence/index-extraction-catalog-probe.txt\u0000docs/remediation/stage5-evidence/index-parity-fix-verification-output.txt\u0000docs/remediation/stage5-evidence/index-predicate-normalization-probe.txt\u0000docs/remediation/stage5-evidence/migration-runner-proof-output.txt\u0000docs/remediation/stage5-evidence/provider-boundary-check.txt\u0000docs/remediation/stage5-evidence/semantic-schema-parity-output.txt\u0000docs/remediation/stage5-evidence/stage5-manifest.md\u0000docs/remediation/stage5-evidence/status/db09-applied-state-run-a.json\u0000docs/remediation/stage5-evidence/status/db09-applied-state-run-b.json\u0000docs/remediation/stage5-evidence/status/failure-run.json\u0000docs/remediation/stage5-evidence/status/final-campaign-01-migration-runner-proof.json\u0000docs/remediation/stage5-evidence/status/final-campaign-01-schema-parity-and-index-extraction.json\u0000docs/remediation/stage5-evidence/status/final-campaign-02-schema-parity.json\u0000docs/remediation/stage5-evidence/status/final-campaign-02-verifier-self-validation.json\u0000docs/remediation/stage5-evidence/status/final-campaign-03-forward-upgrade.json\u0000docs/remediation/stage5-evidence/status/final-campaign-03-verifier-self-validation.json\u0000docs/remediation/stage5-evidence/status/final-campaign-04-forward-upgrade.json\u0000docs/remediation/stage5-evidence/status/final-campaign-04-migration-runner-proof.json\u0000docs/remediation/stage5-evidence/status/final-campaign-05-stage4-regression.json\u0000docs/remediation/stage5-evidence/status/final-campaign-06-typecheck.json\u0000docs/remediation/stage5-evidence/status/final-campaign-07-lint.json\u0000docs/remediation/stage5-evidence/status/final-campaign-08-npm-test-first-attempt-flaky.md\u0000docs/remediation/stage5-evidence/status/final-campaign-08-npm-test.json\u0000docs/remediation/stage5-evidence/status/final-campaign-summary.json\u0000docs/remediation/stage5-evidence/status/pending-only-partial-state-proof.json\u0000docs/remediation/stage5-evidence/status/pending-only-run-a.json\u0000docs/remediation/stage5-evidence/status/pending-only-run-b.json\u0000docs/remediation/stage5-evidence/status/retry-rerun-idempotent.json\u0000docs/remediation/stage5-evidence/status/retry-run.json\u0000docs/remediation/stage5-evidence/status/stage5-migration-runner-proof-summary.json\u0000scripts/check-no-adyen-dependency.mjs\u0000scripts/check-no-adyen-dependency.test.mjs\u0000scripts/check-no-sandbox-runtime.mjs\u0000scripts/check-no-sandbox-runtime.test.mjs\u0000scripts/lib/freezeDiscovery.mjs\u0000scripts/lib/statusSidecar.mjs\u0000scripts/stage5-authoritative-campaign.mjs\u0000scripts/stage5-authoritative-manifest-and-check.mjs\u0000scripts/stage5-final-campaign.mjs\u0000scripts/stage5-forward-upgrade-test.mjs\u0000scripts/stage5-freeze-discovery.test.mjs\u0000scripts/stage5-migration-runner-proof.mjs\u0000src/db/indexExtraction.postgres.test.ts\u0000src/db/schema/payoutAttempt.ts\u0000src/db/schemaParity.postgres.test.ts\u0000src/db/schemaParityComparators.self-validation.test.ts\u0000src/db/schemaParityComparators.ts\u0000src/lib/failedPayments/failedPaymentRetryCoordinatorActivationGate.test.ts\u0000src/lib/failedPayments/getPaymentRetryService.test.ts\u0000src/lib/ledger/drizzleSettlementBalanceReader.ts\u0000src/lib/ledger/reconciliationDrift.postgres.test.ts\u0000src/lib/ledger/refundCorrection.postgres.test.ts\u0000src/lib/ledger/settlementBalanceReader.postgres.test.ts\u0000src/lib/notify/consoleEmailSender.test.ts\u0000src/lib/notify/consoleSmsSender.test.ts\u0000src/lib/notify/getEmailSender.test.ts\u0000src/lib/notify/getSmsSender.test.ts\u0000src/lib/notify/productionFailClosed.test.ts\u0000src/lib/payments/correctiveEventAccounting.postgres.test.ts\u0000src/lib/payments/getPaymentWebhookService.test.ts\u0000src/lib/payments/paymentInitiationEligibilityService.test.ts\u0000src/lib/payouts/atomicPayoutConfirmer.ts\u0000src/lib/payouts/atomicPayoutReturner.ts\u0000src/lib/payouts/drizzlePayoutAttemptRepository.ts\u0000src/lib/payouts/getPayoutService.ts\u0000src/lib/payouts/payoutAtomicity.postgres.test.ts\u0000src/lib/payouts/payoutAttemptRepository.ts\u0000src/lib/payouts/payoutService.ts\u0000src/lib/payouts/testFakes.ts\u0000src/test-support/payments/perKeyProviderCallCounter.test.ts\u0000src/test-support/payments/perKeyProviderCallCounter.ts\u0000supabase/migrations/20260922000000_payout_attempt.sql\u0000supabase/migrations/20260928000000_ledger_entry_type_stage4_parity.sql\u0000supabase/migrations/20260929000000_payment_attempt_status_stage5_parity.sql\u0000test/postgres/outboundTransportGuard.mjs\u0000test/postgres/outboundTransportGuard.test.mjs\u0000",
+  "rawUntrackedStderr": "",
+  "changedPaths": [
+    ".github/workflows/ci.yml",
+    "CLAUDE.md",
+    "docs/remediation/CONTROL_ORDER_004-B_SV-007_FACTORY_TEST_CORRECTION.md",
+    "docs/remediation/Paid2You_Codex_Stage01_Final_Acceptance_Addendum.md",
+    "docs/remediation/Paid2You_Codex_Stage01_Final_Verification.md",
+    "docs/remediation/Paid2You_Codex_Stage02_Evidence_Addendum.md",
+    "docs/remediation/Paid2You_Codex_Stage02_Final_Acceptance_Addendum.md",
+    "docs/remediation/Paid2You_Codex_Stage02_Independent_Acceptance_Report.md",
+    "docs/remediation/Paid2You_Codex_Stage03_Final_Acceptance_Addendum.md",
+    "docs/remediation/Paid2You_Codex_Stage03_Final_Technical_Acceptance.md",
+    "docs/remediation/Paid2You_Codex_Stage03_Independent_Acceptance_Report.md",
+    "docs/remediation/STAGE_01_FINAL_IMPLEMENTATION_AND_EXIT_REPORT.md",
+    "docs/remediation/STAGE_02_008I_EXACT_ASSERTION_FIX.md",
+    "docs/remediation/STAGE_02_FINAL_PREAUTHORIZATION_CLARIFICATION.md",
+    "docs/remediation/STAGE_02_FOUR_FINDINGS_REMEDIATION_AND_GATE_B_READINESS.md",
+    "docs/remediation/STAGE_02_PHASE_A_ARCHITECTURE_AND_ISOLATION_REPORT.md",
+    "docs/remediation/STAGE_02_PHASE_B_ISOLATION_AND_HARNESS_EVIDENCE.md",
+    "docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EVIDENCE_AND_AUTHORIZATION.md",
+    "docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EXECUTION_REPORT.md",
+    "docs/remediation/STAGE_02_PHASE_C_008I_FINAL_FAILURE_DIAGNOSIS.md",
+    "docs/remediation/STAGE_02_PHASE_C_FAILURE_DIAGNOSIS.md",
+    "docs/remediation/STAGE_02_PHASE_C_FINAL_COMPLETION_REPORT.md",
+    "docs/remediation/STAGE_02_PHASE_C_REM008_POSTGRESQL_EXECUTION_REPORT.md",
+    "docs/remediation/STAGE_02_PHASE_C_TWO_FAILURES_REMEDIATION_AND_EXECUTION_READINESS.md",
+    "docs/remediation/STAGE_02_REPORTER_ONLY_CONFIGURATION_CHANGE.md",
+    "docs/remediation/STAGE_02_ROLE_OWNERSHIP_FINAL_CORRECTION_AND_PHASE_B_APPROVAL.md",
+    "docs/remediation/STAGE_03_G01_G12_EXECUTION_AND_ACCEPTANCE_REPORT.md",
+    "docs/remediation/STAGE_03_PROJECT_OWNER_FINAL_ACCEPTANCE_AND_CARRY_FORWARD.md",
+    "docs/remediation/STAGE_05_CODEX_INDEPENDENT_ACCEPTANCE_REPORT.md",
+    "docs/remediation/STAGE_05_DATABASE_MIGRATION_READINESS_CLOSURE_REPORT.md",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260921-155419/command.txt",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260921-155419/stderr.log",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260921-155419/stdout.log",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/cleanup-verification.txt",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/command.txt",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/stderr.log",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/stdout.log",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/cleanup-verification.txt",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/command.txt",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/stderr.log",
+    "docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/stdout.log",
+    "docs/remediation/stage4-evidence/audit-regression-command.txt",
+    "docs/remediation/stage4-evidence/broader-regression-command.txt",
+    "docs/remediation/stage4-evidence/broader-regression-output.txt",
+    "docs/remediation/stage4-evidence/final-broader-regression-command.txt",
+    "docs/remediation/stage4-evidence/final-broader-regression-output.txt",
+    "docs/remediation/stage4-evidence/final-lint-command.txt",
+    "docs/remediation/stage4-evidence/final-lint-output.txt",
+    "docs/remediation/stage4-evidence/final-typecheck-command.txt",
+    "docs/remediation/stage4-evidence/final-typecheck-output.txt",
+    "docs/remediation/stage4-evidence/final-unit-regression-command.txt",
+    "docs/remediation/stage4-evidence/final-unit-regression-output.txt",
+    "docs/remediation/stage4-evidence/focused-unit-regression-command.txt",
+    "docs/remediation/stage4-evidence/focused-unit-regression-output.txt",
+    "docs/remediation/stage4-evidence/git-status-final-complete.txt",
+    "docs/remediation/stage4-evidence/git-status-final-s4-03.txt",
+    "docs/remediation/stage4-evidence/git-status-final.txt",
+    "docs/remediation/stage4-evidence/lint-command.txt",
+    "docs/remediation/stage4-evidence/lint-output.txt",
+    "docs/remediation/stage4-evidence/postgres-run-command-final.txt",
+    "docs/remediation/stage4-evidence/postgres-run-command-s4-03-final.txt",
+    "docs/remediation/stage4-evidence/postgres-run-command-s4-03.txt",
+    "docs/remediation/stage4-evidence/postgres-run-command.txt",
+    "docs/remediation/stage4-evidence/postgres-run-output-final.txt",
+    "docs/remediation/stage4-evidence/postgres-run-output-s4-03-final.txt",
+    "docs/remediation/stage4-evidence/postgres-run-output-s4-03.txt",
+    "docs/remediation/stage4-evidence/postgres-run-output.txt",
+    "docs/remediation/stage4-evidence/s4-03-broader-regression-command.txt",
+    "docs/remediation/stage4-evidence/s4-03-broader-regression-output.txt",
+    "docs/remediation/stage4-evidence/s4-03-lint-command.txt",
+    "docs/remediation/stage4-evidence/s4-03-lint-output.txt",
+    "docs/remediation/stage4-evidence/s4-03-typecheck-command.txt",
+    "docs/remediation/stage4-evidence/s4-03-typecheck-output.txt",
+    "docs/remediation/stage4-evidence/s4-03-unit-regression-command.txt",
+    "docs/remediation/stage4-evidence/s4-03-unit-regression-output.txt",
+    "docs/remediation/stage4-evidence/stage4-manifest.md",
+    "docs/remediation/stage4-evidence/typecheck-command.txt",
+    "docs/remediation/stage4-evidence/typecheck-output.txt",
+    "package.json",
+    "scripts/check-no-adyen-dependency.mjs",
+    "scripts/check-no-adyen-dependency.test.mjs",
+    "scripts/check-no-sandbox-runtime.mjs",
+    "scripts/check-no-sandbox-runtime.test.mjs",
+    "scripts/lib/freezeDiscovery.mjs",
+    "scripts/lib/statusSidecar.mjs",
+    "scripts/postgres-test-db.mjs",
+    "scripts/postgres-test-db.test.mjs",
+    "scripts/stage5-authoritative-campaign.mjs",
+    "scripts/stage5-authoritative-manifest-and-check.mjs",
+    "scripts/stage5-final-campaign.mjs",
+    "scripts/stage5-forward-upgrade-test.mjs",
+    "scripts/stage5-freeze-discovery.test.mjs",
+    "scripts/stage5-migration-runner-proof.mjs",
+    "src/app/api/admin/sandbox/simulate-settlement/route.test.ts",
+    "src/app/api/admin/sandbox/simulate-settlement/route.ts",
+    "src/app/api/payments/by-agreement/route.test.ts",
+    "src/app/api/payments/by-agreement/route.ts",
+    "src/app/api/payments/detail/route.test.ts",
+    "src/app/api/payments/detail/route.ts",
+    "src/app/api/relationships/accounts/bank/connect/route.test.ts",
+    "src/components/PaymentDetail.test.tsx",
+    "src/components/PaymentDetail.tsx",
+    "src/components/PaymentsList.test.tsx",
+    "src/components/PaymentsList.tsx",
+    "src/config/env.ts",
+    "src/db/indexExtraction.postgres.test.ts",
+    "src/db/schema/enums.ts",
+    "src/db/schema/index.ts",
+    "src/db/schema/payoutAttempt.ts",
+    "src/db/schemaParity.postgres.test.ts",
+    "src/db/schemaParityComparators.self-validation.test.ts",
+    "src/db/schemaParityComparators.ts",
+    "src/lib/ach/achPaymentService.ts",
+    "src/lib/ach/getAchPaymentService.ts",
+    "src/lib/ach/testFakes.ts",
+    "src/lib/admin/environmentStatus.test.ts",
+    "src/lib/admin/environmentStatus.ts",
+    "src/lib/admin/testFakes.ts",
+    "src/lib/agreements/agreementProgressService.ts",
+    "src/lib/audit/auditService.ts",
+    "src/lib/audit/drizzleAuditEventRepository.ts",
+    "src/lib/cards/getCardIssuingProvider.ts",
+    "src/lib/cards/testFakes.ts",
+    "src/lib/debitCard/debitCardPaymentService.test.ts",
+    "src/lib/debitCard/debitCardPaymentService.ts",
+    "src/lib/debitCard/getDebitCardPaymentService.ts",
+    "src/lib/debitCard/testFakes.ts",
+    "src/lib/errors.ts",
+    "src/lib/failedPayments/failedPaymentRetryCoordinator.ts",
+    "src/lib/failedPayments/failedPaymentRetryCoordinatorActivationGate.test.ts",
+    "src/lib/failedPayments/getFailedPaymentRetryCoordinator.ts",
+    "src/lib/failedPayments/getPaymentRetryService.test.ts",
+    "src/lib/failedPayments/getPaymentRetryService.ts",
+    "src/lib/failedPayments/productionFactoryRecursion.test.ts",
+    "src/lib/kyc/getKycProvider.ts",
+    "src/lib/kyc/testFakes.ts",
+    "src/lib/ledger/agreementCompletionService.ts",
+    "src/lib/ledger/balanceService.test.ts",
+    "src/lib/ledger/balanceService.ts",
+    "src/lib/ledger/concurrencyAndIdempotency.test.ts",
+    "src/lib/ledger/drizzleReconciliationExceptionRepository.ts",
+    "src/lib/ledger/drizzleSettlementBalanceReader.ts",
+    "src/lib/ledger/getBalanceService.ts",
+    "src/lib/ledger/installmentAmountAwareness.postgres.test.ts",
+    "src/lib/ledger/ledgerService.ts",
+    "src/lib/ledger/paymentLedgerIntegration.test.ts",
+    "src/lib/ledger/reconciliationDrift.postgres.test.ts",
+    "src/lib/ledger/reconciliationService.ts",
+    "src/lib/ledger/refundCorrection.postgres.test.ts",
+    "src/lib/ledger/settlementBalanceReader.postgres.test.ts",
+    "src/lib/ledger/testFakes.ts",
+    "src/lib/notify/consoleEmailSender.test.ts",
+    "src/lib/notify/consoleEmailSender.ts",
+    "src/lib/notify/consoleSmsSender.test.ts",
+    "src/lib/notify/consoleSmsSender.ts",
+    "src/lib/notify/getEmailSender.test.ts",
+    "src/lib/notify/getEmailSender.ts",
+    "src/lib/notify/getSmsSender.test.ts",
+    "src/lib/notify/getSmsSender.ts",
+    "src/lib/notify/productionFailClosed.test.ts",
+    "src/lib/payments/correctiveEventAccounting.postgres.test.ts",
+    "src/lib/payments/drizzlePaymentAttemptRepository.ts",
+    "src/lib/payments/getPaymentProvider.ts",
+    "src/lib/payments/getPaymentService.ts",
+    "src/lib/payments/getPaymentWebhookService.test.ts",
+    "src/lib/payments/getPaymentWebhookService.ts",
+    "src/lib/payments/paymentInitiationEligibilityService.test.ts",
+    "src/lib/payments/paymentInitiationEligibilityService.ts",
+    "src/lib/payments/paymentService.test.ts",
+    "src/lib/payments/paymentService.ts",
+    "src/lib/payments/paymentWebhookRecovery.postgres.test.ts",
+    "src/lib/payments/paymentWebhookService.test.ts",
+    "src/lib/payments/paymentWebhookService.ts",
+    "src/lib/payments/testFakes.ts",
+    "src/lib/payouts/atomicPayoutConfirmer.ts",
+    "src/lib/payouts/atomicPayoutReturner.ts",
+    "src/lib/payouts/drizzlePayoutAttemptRepository.ts",
+    "src/lib/payouts/getPayoutService.ts",
+    "src/lib/payouts/payoutAtomicity.postgres.test.ts",
+    "src/lib/payouts/payoutAttemptRepository.ts",
+    "src/lib/payouts/payoutService.ts",
+    "src/lib/payouts/testFakes.ts",
+    "src/lib/providers/providerCapabilities.test.ts",
+    "src/lib/providers/providerCapabilities.ts",
+    "src/lib/relationships/bankConnectionService.test.ts",
+    "src/lib/settlements/settlementBinding.postgres.test.ts",
+    "src/lib/ui/statusLabels.test.ts",
+    "src/lib/ui/statusLabels.ts",
+    "src/test-support/cards/sandboxCardIssuingProvider.ts",
+    "src/test-support/kyc/sandboxKycProvider.test.ts",
+    "src/test-support/kyc/sandboxKycProvider.ts",
+    "src/test-support/payments/perKeyProviderCallCounter.test.ts",
+    "src/test-support/payments/perKeyProviderCallCounter.ts",
+    "src/test-support/payments/sandboxPaymentProvider.test.ts",
+    "src/test-support/payments/sandboxPaymentProvider.ts",
+    "supabase/migrations/20260922000000_payout_attempt.sql",
+    "supabase/migrations/20260928000000_ledger_entry_type_stage4_parity.sql",
+    "supabase/migrations/20260929000000_payment_attempt_status_stage5_parity.sql",
+    "test/postgres/outboundTransportGuard.mjs",
+    "test/postgres/outboundTransportGuard.test.mjs",
+    "vitest.postgres.config.ts",
+    "vitest.postgres.setup.ts"
+  ],
+  "entries": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "exists": true,
+      "state": "file",
+      "sha256": "16809df98f6a29b4ea31d732da89d6ff34683806badb87022767605280bb10a9",
+      "size": 8127
+    },
+    {
+      "path": "CLAUDE.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "ae3a5e0c166e3b83bfa7318afbce1d4a268ca3f6f8c85012ce9e15e4cef59261",
+      "size": 1488
+    },
+    {
+      "path": "docs/remediation/CONTROL_ORDER_004-B_SV-007_FACTORY_TEST_CORRECTION.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "161f4200f5f3c912046650996f1cd54ab83fab4bd0baed5787f1db24c6f1f2ec",
+      "size": 15815
+    },
+    {
+      "path": "docs/remediation/Paid2You_Codex_Stage01_Final_Acceptance_Addendum.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "d26a8171a8e44e2738171f37057f7c8be4261fbb8c90e14da9f616e40e2e61b8",
+      "size": 16065
+    },
+    {
+      "path": "docs/remediation/Paid2You_Codex_Stage01_Final_Verification.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "6f4dc85548717c66600a708fb7d67d773920f5dabbbdc69c8b7a84061db4015f",
+      "size": 13905
+    },
+    {
+      "path": "docs/remediation/Paid2You_Codex_Stage02_Evidence_Addendum.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "6382ef2a84c9ea43f3e02582b5d0a1182f872a56423186924a30b90e62c4ff28",
+      "size": 5605
+    },
+    {
+      "path": "docs/remediation/Paid2You_Codex_Stage02_Final_Acceptance_Addendum.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "bfe7593277507ff5561a8a80719ef6a6fd4669b963b54a8e7af8c4707cef4ed6",
+      "size": 11460
+    },
+    {
+      "path": "docs/remediation/Paid2You_Codex_Stage02_Independent_Acceptance_Report.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "9b036e5ba1c5edf28231f7da290612df075b01f31d4843c14d5fc6554d2862bc",
+      "size": 13951
+    },
+    {
+      "path": "docs/remediation/Paid2You_Codex_Stage03_Final_Acceptance_Addendum.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "9904fd58f89e646c87d779c850b77c9ea5e17f03d2b253cc6945d10e9c50bea4",
+      "size": 27446
+    },
+    {
+      "path": "docs/remediation/Paid2You_Codex_Stage03_Final_Technical_Acceptance.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "cba57ccaa2a0cf6968082cdc14e39c1f4ecc32c270417401ae35f2f9f3da19cc",
+      "size": 32362
+    },
+    {
+      "path": "docs/remediation/Paid2You_Codex_Stage03_Independent_Acceptance_Report.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "7fa09d015ed9f81fecd7b444d71c79c62ab6c615ec88b5a5f0f4b49e0876b2ea",
+      "size": 29186
+    },
+    {
+      "path": "docs/remediation/STAGE_01_FINAL_IMPLEMENTATION_AND_EXIT_REPORT.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "26e6cadda2ba1df8de468f22039dbb231669da12b88d8fda351f688a6d6a85e3",
+      "size": 41397
+    },
+    {
+      "path": "docs/remediation/STAGE_02_008I_EXACT_ASSERTION_FIX.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "99797b0812295b976caf9da12f5e1d697c9d5cbab872d2b0ccedf1f45953a943",
+      "size": 13514
+    },
+    {
+      "path": "docs/remediation/STAGE_02_FINAL_PREAUTHORIZATION_CLARIFICATION.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "80dc82be41be3a9de207abac04bcbd2ffeeb6728ca2468d0e9840021a24d6a58",
+      "size": 10644
+    },
+    {
+      "path": "docs/remediation/STAGE_02_FOUR_FINDINGS_REMEDIATION_AND_GATE_B_READINESS.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "fdc70c32897a6f0519b73f42754dfedb4ee67a1b619d4c3c5a564f30571c6337",
+      "size": 31813
+    },
+    {
+      "path": "docs/remediation/STAGE_02_PHASE_A_ARCHITECTURE_AND_ISOLATION_REPORT.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "beaba130d55dbe751bba48f7b4c796c1c5a74c0646fd849740b54093faf24044",
+      "size": 35104
+    },
+    {
+      "path": "docs/remediation/STAGE_02_PHASE_B_ISOLATION_AND_HARNESS_EVIDENCE.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "f66dfa2c0b5044719effd64704f41fc0549b6a56e73fcb24879b01abee3e4ecc",
+      "size": 10443
+    },
+    {
+      "path": "docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EVIDENCE_AND_AUTHORIZATION.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "e9e35da29c6f7e4f476fccc2c2a87e6c4af5d1c40fb0974bb3558065a57ce46a",
+      "size": 16269
+    },
+    {
+      "path": "docs/remediation/STAGE_02_PHASE_B_SUPPLEMENTAL_EXECUTION_REPORT.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "c08404c4aeeaab784dead686ec918c7c678314a8a1e5c966534a3e351b45de72",
+      "size": 12875
+    },
+    {
+      "path": "docs/remediation/STAGE_02_PHASE_C_008I_FINAL_FAILURE_DIAGNOSIS.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "9d92c17eee70e3ae34f763732a36939f7ca4bad7fccafbb775740b3c633aa92f",
+      "size": 16607
+    },
+    {
+      "path": "docs/remediation/STAGE_02_PHASE_C_FAILURE_DIAGNOSIS.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "2bfbf9e6a4746ea0171661c2b3a4761d5174cc5cee8e01fd6ad5c600897f840e",
+      "size": 19098
+    },
+    {
+      "path": "docs/remediation/STAGE_02_PHASE_C_FINAL_COMPLETION_REPORT.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "e0707a48714e1c317b7b2cd166ad26f933cef1c5cef5c80433a702e6a9c7beac",
+      "size": 11482
+    },
+    {
+      "path": "docs/remediation/STAGE_02_PHASE_C_REM008_POSTGRESQL_EXECUTION_REPORT.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "3c3609ed2213d30633cf85ad9f2bc561c6b02c58d210bdd6e3dcff79c22f4dfa",
+      "size": 12609
+    },
+    {
+      "path": "docs/remediation/STAGE_02_PHASE_C_TWO_FAILURES_REMEDIATION_AND_EXECUTION_READINESS.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "89573a71b8c2e4cde364809932f85e05dfa29d46460d8ef0afdc0201852bbd0b",
+      "size": 19425
+    },
+    {
+      "path": "docs/remediation/STAGE_02_REPORTER_ONLY_CONFIGURATION_CHANGE.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "2bdfd199f75c4eb6075c7c8b115013cf63b17b55aa7abe665e5d6592096cbd69",
+      "size": 7840
+    },
+    {
+      "path": "docs/remediation/STAGE_02_ROLE_OWNERSHIP_FINAL_CORRECTION_AND_PHASE_B_APPROVAL.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "b919f2364ad071a39009f4fdbdd8c27defbc135ceb105f338bc1b83f9aa75e33",
+      "size": 17899
+    },
+    {
+      "path": "docs/remediation/STAGE_03_G01_G12_EXECUTION_AND_ACCEPTANCE_REPORT.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "20fd1a532ec78af1cb0ed56978fa5a461d1c68983f9b47b32f1d0b70ec27ec9c",
+      "size": 58034
+    },
+    {
+      "path": "docs/remediation/STAGE_03_PROJECT_OWNER_FINAL_ACCEPTANCE_AND_CARRY_FORWARD.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "63f90ea2c225c46775a286c2a47d995c3cbfab465f23ce988c28068d340289bc",
+      "size": 10094
+    },
+    {
+      "path": "docs/remediation/STAGE_05_CODEX_INDEPENDENT_ACCEPTANCE_REPORT.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "b4e1e3bbceef0419b6a51a914d51d52160296c7882e8b2f810718ac8e1f2d5d8",
+      "size": 22498
+    },
+    {
+      "path": "docs/remediation/STAGE_05_DATABASE_MIGRATION_READINESS_CLOSURE_REPORT.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "d9f358409afe2277b723676eb65e8b487682108a58a16c79145db49c880ae368",
+      "size": 15593
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260921-155419/command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "6b54b16ea89e86ca2a0dab28693a095ee660bcd67e398c89147aaa155d84984e",
+      "size": 187
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260921-155419/stderr.log",
+      "exists": true,
+      "state": "file",
+      "sha256": "2b797a95691fce589099142c43558d204306b507b670b53a933a245640bb0a76",
+      "size": 400
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260921-155419/stdout.log",
+      "exists": true,
+      "state": "file",
+      "sha256": "d2e1b1551842960643f7870501d39b2878ab094043026616e657611ee0336215",
+      "size": 11216
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/cleanup-verification.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "78587e10de384a520b428e6cd9f96646c0f868068e295b64b53094f712ed0245",
+      "size": 398
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "eedfb88c31c01be7d29c88b568d970d862ed33e6707a7eaff64f7e12cf6fbb3c",
+      "size": 297
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/stderr.log",
+      "exists": true,
+      "state": "file",
+      "sha256": "62b1ada3252cf5c700fed7fe8e7068f7f6e84418d2ae74ede8272b4f3f36258a",
+      "size": 2054
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260921-160500-corrected/stdout.log",
+      "exists": true,
+      "state": "file",
+      "sha256": "3755900e351bc33745606f6e23a8a70710fb371256496faa3d5929477330948d",
+      "size": 73277
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/cleanup-verification.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "5e7d7fc482378dcc2b8316a5db8d2fc84ded8e9c4f1f2973543a7e9f47513ce1",
+      "size": 401
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "98659b7b3d855ea675b55c0aa59de0c3c0dbdf6f6907bb3671820497082998ba",
+      "size": 367
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/stderr.log",
+      "exists": true,
+      "state": "file",
+      "sha256": "392000507b39b82645c51a1099e89c099c7d1e224a2a8d4c67326754b1286280",
+      "size": 263
+    },
+    {
+      "path": "docs/remediation/stage03-g03-g04-evidence/run-20260922-migration-fix/stdout.log",
+      "exists": true,
+      "state": "file",
+      "sha256": "ad683db755b10d66092278d6fef86af0693903c2b59781bb9fe6e2992bfe2803",
+      "size": 74802
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/audit-regression-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "392835b468f8eade4dd6851af813ac373152007d55fab06d5d0a4de875f7572d",
+      "size": 122
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/broader-regression-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "8cfbb9cbf6aea2cdff2578b7ed9429b58c93c77db7ed10e248a14177b545b6e0",
+      "size": 120
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/broader-regression-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "cad6b8ff7e0d3b2d7421745fa09224c40440fabb9cf390ea6b7c5433b15e394c",
+      "size": 375573
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/final-broader-regression-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "bc0234bcadfc3ce2aa8e27bf69ce551ccc65985c5109f7fe8f87469eef43e71d",
+      "size": 120
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/final-broader-regression-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "f6cc2743adddb2c7b51c77bea3834540c2eb2d8379b8cede4419ccef8b569d4b",
+      "size": 394193
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/final-lint-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "589af1b1aea0b99e27c9ec69d94100ffe82a6b12057e34ad31478197369e9283",
+      "size": 40
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/final-lint-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "3eb79d896e12d05c027a67b983000b81162f564551228e0be9a4240b924422be",
+      "size": 1787
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/final-typecheck-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "e3b973763ccf4d8059f2ab2f52fee3005c9b236b294d450d0fe637b87cad68c5",
+      "size": 45
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/final-typecheck-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "de3e7f0e48200d643370aa0007d12fa4a43e0a543d2a4f86c66cb7266486df5c",
+      "size": 50
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/final-unit-regression-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "86af75988d978447f9f9feae79f75ecdd699e1ecfad9def784090abc7f222721",
+      "size": 184
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/final-unit-regression-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "0c4739535193612ec2d56236ea7805872a3968812217598d37a0a7113dbd422b",
+      "size": 5258
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/focused-unit-regression-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "50c7bfc27acddfe116607d710e433b81a3717cee3a031b0e2e8da746e04bd280",
+      "size": 168
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/focused-unit-regression-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "c97ee78f3f3064ff07f591ec5b78246558eb964dacd074291e4da66ded51c15d",
+      "size": 5148
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/git-status-final-complete.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "2dcd9f405fce9cb5fe80ceab8bf1b404a7b798aa8f87a44122d7905bc73fc957",
+      "size": 7134
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/git-status-final-s4-03.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "2dcd9f405fce9cb5fe80ceab8bf1b404a7b798aa8f87a44122d7905bc73fc957",
+      "size": 7134
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/git-status-final.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "bbad58418a34aa62e91843626d99e84af5e697be1955ab1df2d66c82655a651a",
+      "size": 7051
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/lint-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "589af1b1aea0b99e27c9ec69d94100ffe82a6b12057e34ad31478197369e9283",
+      "size": 40
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/lint-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "3eb79d896e12d05c027a67b983000b81162f564551228e0be9a4240b924422be",
+      "size": 1787
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/postgres-run-command-final.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "6482ac2b591fa60de8bc9bd4b702d33a44868294a5ca11eb2c71580f037ab973",
+      "size": 171
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/postgres-run-command-s4-03-final.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "1c5503c2587a015172c3d1ebccb76fa70b32a58f6b56d945f3d92acfd5009c4c",
+      "size": 171
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/postgres-run-command-s4-03.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "aedbbe133b6ea44fa34ffd7d5457d743b2382fdfb1c434662dc76640ce6ebf8b",
+      "size": 171
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/postgres-run-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "0aaa9daadaf9da6ebaac8925b939701e2717bd488faf07881b089a5a82d8d975",
+      "size": 171
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/postgres-run-output-final.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "699cd82058263f168cc789f336c12976673e6967a18093056d14ed05f06a04aa",
+      "size": 25792
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/postgres-run-output-s4-03-final.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "46d549f5e8045d784b5c27ee0cf24d5c35cc0930bffc02a0effe0ec234ca06e4",
+      "size": 25101
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/postgres-run-output-s4-03.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "15b5babae220f84c21810b622dd8db7d5927a58a5c841c4b21daedab2f2faae8",
+      "size": 24212
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/postgres-run-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "55bc997d760227d7fd171d1c53498ab9696d863950ff43ef5827924af26ab47b",
+      "size": 23513
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/s4-03-broader-regression-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "5f2d42a3ba457097f9574a469a38969b7e93a63575e07e7cd844617f3ca2edeb",
+      "size": 120
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/s4-03-broader-regression-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "daee241e14a78f8852eacfbfffe868521ba61a4b47aea9c7b5bfd2a07644b457",
+      "size": 375413
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/s4-03-lint-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "589af1b1aea0b99e27c9ec69d94100ffe82a6b12057e34ad31478197369e9283",
+      "size": 40
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/s4-03-lint-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "3eb79d896e12d05c027a67b983000b81162f564551228e0be9a4240b924422be",
+      "size": 1787
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/s4-03-typecheck-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "e3b973763ccf4d8059f2ab2f52fee3005c9b236b294d450d0fe637b87cad68c5",
+      "size": 45
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/s4-03-typecheck-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "de3e7f0e48200d643370aa0007d12fa4a43e0a543d2a4f86c66cb7266486df5c",
+      "size": 50
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/s4-03-unit-regression-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "e95eaea5ebb4303e2351b54ee3a8837bc8509ea325e18095666508206cb3d2d3",
+      "size": 110
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/s4-03-unit-regression-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "b5b94b7ce5e419d52109a3a7c7980a7ecd8c60fe74dc3defa2032f1a70cd5ad2",
+      "size": 345
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/stage4-manifest.md",
+      "exists": true,
+      "state": "file",
+      "sha256": "a5f64ec919a6c4bea44e18a6d7f331181466b4864567139d64aba1d29e104c19",
+      "size": 16536
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/typecheck-command.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "e3b973763ccf4d8059f2ab2f52fee3005c9b236b294d450d0fe637b87cad68c5",
+      "size": 45
+    },
+    {
+      "path": "docs/remediation/stage4-evidence/typecheck-output.txt",
+      "exists": true,
+      "state": "file",
+      "sha256": "de3e7f0e48200d643370aa0007d12fa4a43e0a543d2a4f86c66cb7266486df5c",
+      "size": 50
+    },
+    {
+      "path": "package.json",
+      "exists": true,
+      "state": "file",
+      "sha256": "5a6d93c86662d2b1c92b413537d932ebab1f47f1e85b9f8dca0c2f80d6792dbd",
+      "size": 1761
+    },
+    {
+      "path": "scripts/check-no-adyen-dependency.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "751a2316e5aea2bd8e99b3650e8a2dcedc96286c5ecd82cd4f628160089cf03f",
+      "size": 10512
+    },
+    {
+      "path": "scripts/check-no-adyen-dependency.test.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "35807273f585087a187912a1bc3e58a44f2ff9ffbe832adbbdbea1208c78b4da",
+      "size": 10783
+    },
+    {
+      "path": "scripts/check-no-sandbox-runtime.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "ded2ed1e9a39b7c548c3e0dfc73d4bd3d1fc7886349d2e413f03655139844e45",
+      "size": 18047
+    },
+    {
+      "path": "scripts/check-no-sandbox-runtime.test.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "c226e76057d6fc1e4cb941728788996f8398eba20aedd02eac1831dc9c7ad9ff",
+      "size": 17174
+    },
+    {
+      "path": "scripts/lib/freezeDiscovery.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "7ae01c84a4db0945239e3e8f9eb9511520010b5ffa1cbe003c5716d308cb3a28",
+      "size": 4331
+    },
+    {
+      "path": "scripts/lib/statusSidecar.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "7b5450e230d10c4b5c9a4636f26ba293e0087a321699a5ad099981bbc44d109b",
+      "size": 1803
+    },
+    {
+      "path": "scripts/postgres-test-db.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "b296aa8c8b31aa81248592445fdcef9a0e80c4ec4e79c3313f00988bc59aa0ee",
+      "size": 57892
+    },
+    {
+      "path": "scripts/postgres-test-db.test.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "57288abdf03db498240931575d64dfc351e21af0feaa11c0abb18c54b095f283",
+      "size": 41968
+    },
+    {
+      "path": "scripts/stage5-authoritative-campaign.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "fdd2eb64c39ff3c3cb422f193a61c14446ee60313d449d0305be35d219fd7079",
+      "size": 16882
+    },
+    {
+      "path": "scripts/stage5-authoritative-manifest-and-check.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "6a53d7207ef60a009d2dbe732329b60f3389fc3caf4f2602285ab8bdc32d535c",
+      "size": 5567
+    },
+    {
+      "path": "scripts/stage5-final-campaign.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "1db1fc82f72083dd74355fdc29b56cdeea752a2214dbc766db3a8f52eb68c811",
+      "size": 5631
+    },
+    {
+      "path": "scripts/stage5-forward-upgrade-test.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "3c2d2864984349056d3110e26a55430d4ad21fb7945711ab7462afb29c6dea6a",
+      "size": 9259
+    },
+    {
+      "path": "scripts/stage5-freeze-discovery.test.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "3f60865626b496ba2e48e9177abac7117ea1fac69309a2ad1c18df478fc262f8",
+      "size": 4798
+    },
+    {
+      "path": "scripts/stage5-migration-runner-proof.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "3d566a45e2c32784a8891352d8f88a7775782cd9c8b54628400e6543d39f3769",
+      "size": 17484
+    },
+    {
+      "path": "src/app/api/admin/sandbox/simulate-settlement/route.test.ts",
+      "exists": false,
+      "state": "deleted",
+      "sha256": null,
+      "size": null
+    },
+    {
+      "path": "src/app/api/admin/sandbox/simulate-settlement/route.ts",
+      "exists": false,
+      "state": "deleted",
+      "sha256": null,
+      "size": null
+    },
+    {
+      "path": "src/app/api/payments/by-agreement/route.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "8e80d591f616dd9b548467ed0f4ccbd8bf225c767ab50a21461f63b6fa1e826b",
+      "size": 9707
+    },
+    {
+      "path": "src/app/api/payments/by-agreement/route.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "8cd14f48c36327484666f84faa3d0f774fcabf8a4bbbbcc7d5e97015124bf497",
+      "size": 3825
+    },
+    {
+      "path": "src/app/api/payments/detail/route.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "7c50fb71bdf32edc9eb9d7fee78cf52279c29a9ce8998448b9b14ec0dac0d3df",
+      "size": 6065
+    },
+    {
+      "path": "src/app/api/payments/detail/route.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "ec3626a087e0c22503458ac512e74d081f30a6368f7266049e85f242129b5a58",
+      "size": 3153
+    },
+    {
+      "path": "src/app/api/relationships/accounts/bank/connect/route.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "666737750380364c4d7c27ca916fd0a9eaf76c615a3085ceeeae60eabef5e9e4",
+      "size": 5081
+    },
+    {
+      "path": "src/components/PaymentDetail.test.tsx",
+      "exists": true,
+      "state": "file",
+      "sha256": "b650ad79a1cf0058ab7c8cbbee02f8e4866884465bc93202c06a67db1dedd198",
+      "size": 6970
+    },
+    {
+      "path": "src/components/PaymentDetail.tsx",
+      "exists": true,
+      "state": "file",
+      "sha256": "d2b0228eee075be97f9f1c02afefa15f6511695bebf82af3e8ce047f55bcc16e",
+      "size": 14249
+    },
+    {
+      "path": "src/components/PaymentsList.test.tsx",
+      "exists": true,
+      "state": "file",
+      "sha256": "6164a211aa04457c54c461dc100692182c7f7a8967209a83040bfeb515294d08",
+      "size": 7006
+    },
+    {
+      "path": "src/components/PaymentsList.tsx",
+      "exists": true,
+      "state": "file",
+      "sha256": "9881b56246173236a6a83c8cee17ba9ef7ac7bf658d3f026d6cbc60a68fbb7bf",
+      "size": 6802
+    },
+    {
+      "path": "src/config/env.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "7c37cd1487e5b486fbd5bd715352753e2d4076a0ac8cb6a76a48787b626f8543",
+      "size": 20794
+    },
+    {
+      "path": "src/db/indexExtraction.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "85f12cac3cf4c738fa14012a34c3d3de8c327f726021eda6f7f27d22d1281c98",
+      "size": 9199
+    },
+    {
+      "path": "src/db/schema/enums.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "ccacaefc7eb9877f6aff11a80368c01162ddeb2845d1d7b7d9bd45f93ffdb2a6",
+      "size": 46628
+    },
+    {
+      "path": "src/db/schema/index.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "2cbc11a7939844ba73489a0185c0dc6221440f9197a0ba82f49214a7481f6a1c",
+      "size": 1251
+    },
+    {
+      "path": "src/db/schema/payoutAttempt.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "9c2650715ce1e190eb61f87187a12e925455acda4042788e8a4d647dfb35cfa1",
+      "size": 3373
+    },
+    {
+      "path": "src/db/schemaParity.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "794f4f60cfe7895919d915fcc25a83c5dc8db328080b7100e3ca0c2194e2d374",
+      "size": 20811
+    },
+    {
+      "path": "src/db/schemaParityComparators.self-validation.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "2570778c75d4ad4324a803b1cb1e9999f30432e14fcf1b7b799773fc3b3c6551",
+      "size": 23548
+    },
+    {
+      "path": "src/db/schemaParityComparators.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "ffe351731147d70295e374dfd4b2ffdd4d9e3ac2e8073207623b0087622709ac",
+      "size": 20148
+    },
+    {
+      "path": "src/lib/ach/achPaymentService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "7ab6f561663b43ff2c7b9e022aff50ca8741556cc9a9a492efdf98f49ea38baa",
+      "size": 10175
+    },
+    {
+      "path": "src/lib/ach/getAchPaymentService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "1095d1b44afe8686baec042a9f83095132c37ed41010e90a8c81c2f5f00de8c1",
+      "size": 893
+    },
+    {
+      "path": "src/lib/ach/testFakes.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "d24a87a73e86018f12cbdafac348de07f090d4e314184d74fdcd2fca303d6807",
+      "size": 5579
+    },
+    {
+      "path": "src/lib/admin/environmentStatus.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "190a925d4168ca69e9cd0e5728e0d975b20bfaa763d42f3eaeebc7743a363991",
+      "size": 8741
+    },
+    {
+      "path": "src/lib/admin/environmentStatus.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "054dc936d0847df5f29de72692aa50131bd8336a2ed4761b3bdb82ebcb9f2293",
+      "size": 5031
+    },
+    {
+      "path": "src/lib/admin/testFakes.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "6f6a93f6df295b882f862347a29729b81b52ddcdf094ad1366e3b3d4c8b6df11",
+      "size": 11422
+    },
+    {
+      "path": "src/lib/agreements/agreementProgressService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "d2c452549629519dde9efdf7843cbdb1e031510804413d8edf3a80157436a244",
+      "size": 45303
+    },
+    {
+      "path": "src/lib/audit/auditService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "6fac7def0cd31ef57d085367b318a399915b0816b4f0b5f84fab40aa5499173f",
+      "size": 7008
+    },
+    {
+      "path": "src/lib/audit/drizzleAuditEventRepository.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "03279215c3a077d3cf62c7e868c054c8129e78c72898fd3b0efdd660efca4408",
+      "size": 14634
+    },
+    {
+      "path": "src/lib/cards/getCardIssuingProvider.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "d226365c576382d6832bc31cbec04703e01361692d427689a80b579ac87be81f",
+      "size": 1237
+    },
+    {
+      "path": "src/lib/cards/testFakes.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "80ad9031b503610bc9baf7ba43229249ff9c8f512bbde1c1afe1636c48d35c31",
+      "size": 8280
+    },
+    {
+      "path": "src/lib/debitCard/debitCardPaymentService.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "9b6a3458c5add62046e59743e9a268421332116dbde919eba588569870d36b84",
+      "size": 16794
+    },
+    {
+      "path": "src/lib/debitCard/debitCardPaymentService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "6d4d08dfeaa8e6565210d17733d34e14093fd855d8fdac7b71dfdc5f52a1e4a0",
+      "size": 10585
+    },
+    {
+      "path": "src/lib/debitCard/getDebitCardPaymentService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "5868d1dc15649ab56404a9dc60338cd70a3d01d983f61b77defde2824b220cff",
+      "size": 1106
+    },
+    {
+      "path": "src/lib/debitCard/testFakes.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "d7df83ebb6ac993b101848a9c96bd2f1be6e0748e8affa7880bb0d13c38adb96",
+      "size": 7027
+    },
+    {
+      "path": "src/lib/errors.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "f92726629ec25821ec9fe75cf853941a5568330bef397f35475f6480b5b89161",
+      "size": 11413
+    },
+    {
+      "path": "src/lib/failedPayments/failedPaymentRetryCoordinator.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "c3944ac0201586244f4ed597837f42ef52df80dd1de81da6f24118708aa081f3",
+      "size": 156695
+    },
+    {
+      "path": "src/lib/failedPayments/failedPaymentRetryCoordinatorActivationGate.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "b0a1ef24af324bbad2e5453ae8b58a1e0db40c8e239e2cb8fb6f9e293576a137",
+      "size": 48565
+    },
+    {
+      "path": "src/lib/failedPayments/getFailedPaymentRetryCoordinator.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "5cfb1c41efa52aac454db8c17d679b9f3ea30cac8f2be7d7567021a942226ffb",
+      "size": 2055
+    },
+    {
+      "path": "src/lib/failedPayments/getPaymentRetryService.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "0fc59953389ec7ba8ec126149a89bc502535307462fc9325fb5b6f8356c69140",
+      "size": 4666
+    },
+    {
+      "path": "src/lib/failedPayments/getPaymentRetryService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "8956ec0b73e5d325360d29a31f8f413c5c48b1a50b70422318ec0e8913f16228",
+      "size": 6046
+    },
+    {
+      "path": "src/lib/failedPayments/productionFactoryRecursion.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "3770cbc83dddd65aaa2d1550ddb490507634b6b29e8e053a0a6eb84c729ed54d",
+      "size": 12712
+    },
+    {
+      "path": "src/lib/kyc/getKycProvider.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "96ea23293d96074c155d34fe69fb978802025b5d2b5fb161bb155eb9ed726d9b",
+      "size": 1178
+    },
+    {
+      "path": "src/lib/kyc/testFakes.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "46ce24746a9ec63f1753db098e2ccbee5b61bfe1e92f27a1033f37522991c043",
+      "size": 2422
+    },
+    {
+      "path": "src/lib/ledger/agreementCompletionService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "c631aaeaaac613d71e4d006ebb6ce6efd08153a633e9e82d4b310548e1b93b08",
+      "size": 24685
+    },
+    {
+      "path": "src/lib/ledger/balanceService.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "7e0d18a4b69ff5ec91105b3a16d6db2cb1c13537201639e5c840159c8ea4b3e1",
+      "size": 13720
+    },
+    {
+      "path": "src/lib/ledger/balanceService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "f3048ae399d4f0fe3d3243f12ff020684a24b1ebe7ad0d0886974c9c33d77bbc",
+      "size": 12316
+    },
+    {
+      "path": "src/lib/ledger/concurrencyAndIdempotency.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "82aad019ef6e8c59dc77ab61437fb062a4c4c0513571190f70c4c40f7fcbcb07",
+      "size": 21357
+    },
+    {
+      "path": "src/lib/ledger/drizzleReconciliationExceptionRepository.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "1600c819a12d4e3c104d83cf6213eb8b625a1832959230cdaf6b216dad50c98c",
+      "size": 9887
+    },
+    {
+      "path": "src/lib/ledger/drizzleSettlementBalanceReader.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "410c80cf5e1806c3e4e800e4f8460764dee0ad415c345f07b655a8d9b014df1f",
+      "size": 3816
+    },
+    {
+      "path": "src/lib/ledger/getBalanceService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "d062da24bee17cc33abd77befb2f0a63ef8e412bfdea7b42c79fd691976156dc",
+      "size": 613
+    },
+    {
+      "path": "src/lib/ledger/installmentAmountAwareness.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "ce2fe1647e1c54a7a5b439a349814efa5460234057c0b83f37ce18b7fba7d7b8",
+      "size": 362306
+    },
+    {
+      "path": "src/lib/ledger/ledgerService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "f1ebc466af4ce8b08d32ed25fe99a76a608893e06777c41bec028f012030d0bd",
+      "size": 25008
+    },
+    {
+      "path": "src/lib/ledger/paymentLedgerIntegration.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "a83f4ff36262c1529b75a6aeb38334bab1b80b3c32d7ae45565c3ee81340236c",
+      "size": 22063
+    },
+    {
+      "path": "src/lib/ledger/reconciliationDrift.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "9a516d86c2db2b43dba356521d30667cbc07f3dab4ad5e23545ca0396da101f5",
+      "size": 8752
+    },
+    {
+      "path": "src/lib/ledger/reconciliationService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "ceac52cb7b2d45f63f48bcdfe8b973bc2bb3013a685f3f07190641672082eb98",
+      "size": 42477
+    },
+    {
+      "path": "src/lib/ledger/refundCorrection.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "4ff59e86df4a94a8905907d58b0590fd968ad29b60b7a2d413a4dbbcea456db6",
+      "size": 7219
+    },
+    {
+      "path": "src/lib/ledger/settlementBalanceReader.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "2291456b3841e214d07aae83cbb5578f169d619a52cf17cb11f11a8087407e26",
+      "size": 9669
+    },
+    {
+      "path": "src/lib/ledger/testFakes.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "e33f4c572a3c87f56d303191f990026d012f43b9ce496fb974d52bb46c1e67e1",
+      "size": 10822
+    },
+    {
+      "path": "src/lib/notify/consoleEmailSender.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "026bec5b327562859da97c5343b2d80646660b1c8a46b233811e37897037bce2",
+      "size": 1288
+    },
+    {
+      "path": "src/lib/notify/consoleEmailSender.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "0463552584aedf6b9f8bb1e613b6e9d9d4be9e3994efea95ffcff9874e8f92da",
+      "size": 2349
+    },
+    {
+      "path": "src/lib/notify/consoleSmsSender.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "06683d03a73cbcf81171a29842223eea5537abd20f9c45365e4f8acc4c754c5c",
+      "size": 1201
+    },
+    {
+      "path": "src/lib/notify/consoleSmsSender.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "ed2d5fa430e6c9155471a2b85a0e9645455b05d7a58e2d43f0e6db9eec3d51c1",
+      "size": 1726
+    },
+    {
+      "path": "src/lib/notify/getEmailSender.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "63194fb9888b7bd717219e4cc05080287642242fd459f0ecad3feab7ceecd48b",
+      "size": 3233
+    },
+    {
+      "path": "src/lib/notify/getEmailSender.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "2ef6b57980fb54a78ccf2f3fcd7e6bf81f7bb7df7e99fe6ba455a86f4f7e5cf0",
+      "size": 1578
+    },
+    {
+      "path": "src/lib/notify/getSmsSender.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "6c36ad7218d4d207222ca9af860e76066dca26d744445c78e1189166532fc7e3",
+      "size": 2846
+    },
+    {
+      "path": "src/lib/notify/getSmsSender.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "279378dcfd8b1f2f996117840014f567f6c8b1a695b89cf9404f821a706d3c4f",
+      "size": 1761
+    },
+    {
+      "path": "src/lib/notify/productionFailClosed.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "eb20d88ae44f65cc18b987627b254bb66e521a78ad82c0db1024407c09738f00",
+      "size": 30238
+    },
+    {
+      "path": "src/lib/payments/correctiveEventAccounting.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "1318dbb3f085462bac488c3693ccd793f8d322af845e74cf17c3e2e8a0e5cb13",
+      "size": 11091
+    },
+    {
+      "path": "src/lib/payments/drizzlePaymentAttemptRepository.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "cb8a55b5d139c6a37b4cd113184c1c9c8a4dd4e3f440358976baf5ddd3d68ffb",
+      "size": 16575
+    },
+    {
+      "path": "src/lib/payments/getPaymentProvider.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "12e82f7b9603fa72ddbc7a866b8b3179be1595d1dae4ac17f880b2568da65928",
+      "size": 2133
+    },
+    {
+      "path": "src/lib/payments/getPaymentService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "8191a8d94deaa4bf3e93057829dced877692fe76a770be84d34460ea81abd9e3",
+      "size": 5591
+    },
+    {
+      "path": "src/lib/payments/getPaymentWebhookService.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "39a99c4dc37ae674c617c1a3346fd00356f8cb5b5e4428c9810a881be62b5aa0",
+      "size": 4364
+    },
+    {
+      "path": "src/lib/payments/getPaymentWebhookService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "fa9590993c0d335d1a91c96cbb92d796cde1ba474b5369ec53cf30b4981e1ef5",
+      "size": 3873
+    },
+    {
+      "path": "src/lib/payments/paymentInitiationEligibilityService.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "c22cebae3271a91bb5318f918526feadfed22a5c84971eec40cf8b5e674ecfec",
+      "size": 3606
+    },
+    {
+      "path": "src/lib/payments/paymentInitiationEligibilityService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "f7adb4c87573a17de95e79ca51d93d767abf4c3c35b9fc91862eb4726f0040b8",
+      "size": 9069
+    },
+    {
+      "path": "src/lib/payments/paymentService.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "f44818d7d44aa9fe648583f0b05612c6f8c7e9a8176818b0162afd3be230fd96",
+      "size": 37938
+    },
+    {
+      "path": "src/lib/payments/paymentService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "931ea2cd7932b2e176108195830d9a8faf9412588e2d964dff741af4fa25a580",
+      "size": 87309
+    },
+    {
+      "path": "src/lib/payments/paymentWebhookRecovery.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "cb99fba2b5faac96a6f177a06647008497956b43cdf1561e228431b8bc585766",
+      "size": 512878
+    },
+    {
+      "path": "src/lib/payments/paymentWebhookService.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "4782ff5321011090925ce30c59bc1653c13d131857cd440954fc6520625c64fc",
+      "size": 20328
+    },
+    {
+      "path": "src/lib/payments/paymentWebhookService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "0e764a5eca33cd1e7180c03bcd4e7aa2d8760fcbee9362c1c470ead33afa9576",
+      "size": 101358
+    },
+    {
+      "path": "src/lib/payments/testFakes.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "8f4fc7d60dd541ae78414bc5ef4bc9523c5e0ee8141418fb1644d348d1706f7d",
+      "size": 26231
+    },
+    {
+      "path": "src/lib/payouts/atomicPayoutConfirmer.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "d897b681bf825a738d8572b633c66a20094297ccfd8248a828cc6998e9040d2f",
+      "size": 13477
+    },
+    {
+      "path": "src/lib/payouts/atomicPayoutReturner.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "3159d12803525236e8c8ba360975bc7913611095c966e40ee615dd7f0cc56e98",
+      "size": 9793
+    },
+    {
+      "path": "src/lib/payouts/drizzlePayoutAttemptRepository.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "3effecc53c204d142cd6aaabc0e4004144e2f147f0ef22d139e81ff628e37c3d",
+      "size": 3635
+    },
+    {
+      "path": "src/lib/payouts/getPayoutService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "4c859fa86a0e24b2c7b2971b2e84e06e4e5f5d4b6d8883127203d530670eac80",
+      "size": 3074
+    },
+    {
+      "path": "src/lib/payouts/payoutAtomicity.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "28d0218bcb668d09bf37c5adc7bac8073e777501326131b9353a4fe3fae74e23",
+      "size": 41916
+    },
+    {
+      "path": "src/lib/payouts/payoutAttemptRepository.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "7556547d059a2f2c74ee5f2fd8fd3aa67f7540cf3615abdaea1ca8c339c8c609",
+      "size": 1819
+    },
+    {
+      "path": "src/lib/payouts/payoutService.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "09999b9f364d4ef2a00a2fac409562a96b5736a7cc6d341aa1d81ea73b008e83",
+      "size": 23772
+    },
+    {
+      "path": "src/lib/payouts/testFakes.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "ebaf53dcd7bee69f6ee8a4911d38202b4e164354f0af5aadf54340a1a61f8dba",
+      "size": 7021
+    },
+    {
+      "path": "src/lib/providers/providerCapabilities.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "f2add4eee417233fa8867f5f03d1fef63e23cbeac9c6ac83b61e95056edd2851",
+      "size": 3821
+    },
+    {
+      "path": "src/lib/providers/providerCapabilities.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "f59c6d0b7cb3807e2f0783043fc6f46ebbbfa51a5ab9a22a031ce3ff2464f265",
+      "size": 6021
+    },
+    {
+      "path": "src/lib/relationships/bankConnectionService.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "39fb3966e6c92ab62d5b1cbd828713d3f9989c80d6f192b7c3ab34e24da634b2",
+      "size": 9860
+    },
+    {
+      "path": "src/lib/settlements/settlementBinding.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "6385c4d9463d0c4f9faddac37bc129ddecedd4eceeb5efcc4443fdda1770e980",
+      "size": 37337
+    },
+    {
+      "path": "src/lib/ui/statusLabels.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "f85025a8b3007c079db1dd7b25280d5e77c20e8d8a1038b18852e0614014a291",
+      "size": 5887
+    },
+    {
+      "path": "src/lib/ui/statusLabels.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "4e0eb361ab10355a4a7868cdeb3ce915ceee76483472df4e4f6409428a3b6552",
+      "size": 21782
+    },
+    {
+      "path": "src/test-support/cards/sandboxCardIssuingProvider.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "c558635f5be5fadef468c72f7a1d4fe966ef00dfb6838737552c185ae43fddc3",
+      "size": 4419
+    },
+    {
+      "path": "src/test-support/kyc/sandboxKycProvider.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "86e1f06e8c2c5fa17763a307996087e41edd084b704e804d5952c235af515457",
+      "size": 3240
+    },
+    {
+      "path": "src/test-support/kyc/sandboxKycProvider.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "008461863ab6a22502d2cd3d1dfd5bf614d9e6b0fae9d7f472b1cffc46a05aca",
+      "size": 3494
+    },
+    {
+      "path": "src/test-support/payments/perKeyProviderCallCounter.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "84eef781cab9f5f8348028b54147bd2c91d38c81b0ac4fdb236eb35ec8bceac3",
+      "size": 3076
+    },
+    {
+      "path": "src/test-support/payments/perKeyProviderCallCounter.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "e8c37688da116d44004607cf281eebb18215cac141faa750c6d1c0df7ab9b331",
+      "size": 2387
+    },
+    {
+      "path": "src/test-support/payments/sandboxPaymentProvider.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "7816bded333631bd0c38b777fed31da303732b3b833c967c4fc580e5402c3107",
+      "size": 15106
+    },
+    {
+      "path": "src/test-support/payments/sandboxPaymentProvider.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "5fba9fd2729cf4ef89288f0d144f230e7b7d8f82990d2ca6dd6ffce063984832",
+      "size": 11084
+    },
+    {
+      "path": "supabase/migrations/20260922000000_payout_attempt.sql",
+      "exists": true,
+      "state": "file",
+      "sha256": "db4dc1012dd438f1a40a3e0ed2f162213e705addd81ff0abec9e3f46fac3205a",
+      "size": 1329
+    },
+    {
+      "path": "supabase/migrations/20260928000000_ledger_entry_type_stage4_parity.sql",
+      "exists": true,
+      "state": "file",
+      "sha256": "7f33fe16ee4f89f14d047516c92c3dda47dd4e940d6fa76214f38a29cbe1fe05",
+      "size": 192
+    },
+    {
+      "path": "supabase/migrations/20260929000000_payment_attempt_status_stage5_parity.sql",
+      "exists": true,
+      "state": "file",
+      "sha256": "54992251bb5ba66ce567d3347f439628e380a22a3a7e5a5ee49fb8f1a7a776bf",
+      "size": 198
+    },
+    {
+      "path": "test/postgres/outboundTransportGuard.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "1549195da78883bdb20fc975e65ed22be8fd50148e5e0e00a4ef1d06da6711d9",
+      "size": 5332
+    },
+    {
+      "path": "test/postgres/outboundTransportGuard.test.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "a2b7cefa609fab5c8015b63460b6e1bc5af228ee46360ac4d6442654b8ad932b",
+      "size": 4737
+    },
+    {
+      "path": "vitest.postgres.config.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "b5013c7d470362ac70b6e95cbcfd62f5d9706b5740bbccc8050cfabd69f33186",
+      "size": 2473
+    },
+    {
+      "path": "vitest.postgres.setup.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "a74575c2caa6837ddc053b0164192bc8df9bfd0c5cc2ec93378dbddb71d02eb0",
+      "size": 2622
+    }
+  ],
+  "ciWorkflowEntry": {
+    "path": ".github/workflows/ci.yml",
+    "exists": true,
+    "state": "file",
+    "sha256": "16809df98f6a29b4ea31d732da89d6ff34683806badb87022767605280bb10a9",
+    "size": 8127
+  },
+  "curatedStage5Files": [
+    "src/db/schemaParityComparators.ts",
+    "src/db/schemaParity.postgres.test.ts",
+    "src/db/schemaParityComparators.self-validation.test.ts",
+    "src/db/indexExtraction.postgres.test.ts",
+    "scripts/stage5-forward-upgrade-test.mjs",
+    "scripts/stage5-migration-runner-proof.mjs",
+    "scripts/lib/statusSidecar.mjs",
+    "scripts/postgres-test-db.mjs",
+    "supabase/migrations/20260929000000_payment_attempt_status_stage5_parity.sql"
+  ],
+  "curatedStage5Entries": [
+    {
+      "path": "src/db/schemaParityComparators.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "ffe351731147d70295e374dfd4b2ffdd4d9e3ac2e8073207623b0087622709ac",
+      "size": 20148
+    },
+    {
+      "path": "src/db/schemaParity.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "794f4f60cfe7895919d915fcc25a83c5dc8db328080b7100e3ca0c2194e2d374",
+      "size": 20811
+    },
+    {
+      "path": "src/db/schemaParityComparators.self-validation.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "2570778c75d4ad4324a803b1cb1e9999f30432e14fcf1b7b799773fc3b3c6551",
+      "size": 23548
+    },
+    {
+      "path": "src/db/indexExtraction.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "85f12cac3cf4c738fa14012a34c3d3de8c327f726021eda6f7f27d22d1281c98",
+      "size": 9199
+    },
+    {
+      "path": "scripts/stage5-forward-upgrade-test.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "3c2d2864984349056d3110e26a55430d4ad21fb7945711ab7462afb29c6dea6a",
+      "size": 9259
+    },
+    {
+      "path": "scripts/stage5-migration-runner-proof.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "3d566a45e2c32784a8891352d8f88a7775782cd9c8b54628400e6543d39f3769",
+      "size": 17484
+    },
+    {
+      "path": "scripts/lib/statusSidecar.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "7b5450e230d10c4b5c9a4636f26ba293e0087a321699a5ad099981bbc44d109b",
+      "size": 1803
+    },
+    {
+      "path": "scripts/postgres-test-db.mjs",
+      "exists": true,
+      "state": "file",
+      "sha256": "b296aa8c8b31aa81248592445fdcef9a0e80c4ec4e79c3313f00988bc59aa0ee",
+      "size": 57892
+    },
+    {
+      "path": "supabase/migrations/20260929000000_payment_attempt_status_stage5_parity.sql",
+      "exists": true,
+      "state": "file",
+      "sha256": "54992251bb5ba66ce567d3347f439628e380a22a3a7e5a5ee49fb8f1a7a776bf",
+      "size": 198
+    }
+  ],
+  "curatedStage4Files": [
+    "supabase/migrations/20260928000000_ledger_entry_type_stage4_parity.sql",
+    "src/lib/payouts/payoutAtomicity.postgres.test.ts",
+    "src/lib/ledger/refundCorrection.postgres.test.ts",
+    "src/lib/payments/correctiveEventAccounting.postgres.test.ts",
+    "src/lib/ledger/reconciliationDrift.postgres.test.ts",
+    "src/lib/settlements/settlementBinding.postgres.test.ts",
+    "src/lib/ledger/settlementBalanceReader.postgres.test.ts",
+    "src/lib/audit/auditService.postgres.test.ts"
+  ],
+  "curatedStage4Entries": [
+    {
+      "path": "supabase/migrations/20260928000000_ledger_entry_type_stage4_parity.sql",
+      "exists": true,
+      "state": "file",
+      "sha256": "7f33fe16ee4f89f14d047516c92c3dda47dd4e940d6fa76214f38a29cbe1fe05",
+      "size": 192
+    },
+    {
+      "path": "src/lib/payouts/payoutAtomicity.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "28d0218bcb668d09bf37c5adc7bac8073e777501326131b9353a4fe3fae74e23",
+      "size": 41916
+    },
+    {
+      "path": "src/lib/ledger/refundCorrection.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "4ff59e86df4a94a8905907d58b0590fd968ad29b60b7a2d413a4dbbcea456db6",
+      "size": 7219
+    },
+    {
+      "path": "src/lib/payments/correctiveEventAccounting.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "1318dbb3f085462bac488c3693ccd793f8d322af845e74cf17c3e2e8a0e5cb13",
+      "size": 11091
+    },
+    {
+      "path": "src/lib/ledger/reconciliationDrift.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "9a516d86c2db2b43dba356521d30667cbc07f3dab4ad5e23545ca0396da101f5",
+      "size": 8752
+    },
+    {
+      "path": "src/lib/settlements/settlementBinding.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "6385c4d9463d0c4f9faddac37bc129ddecedd4eceeb5efcc4443fdda1770e980",
+      "size": 37337
+    },
+    {
+      "path": "src/lib/ledger/settlementBalanceReader.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "2291456b3841e214d07aae83cbb5578f169d619a52cf17cb11f11a8087407e26",
+      "size": 9669
+    },
+    {
+      "path": "src/lib/audit/auditService.postgres.test.ts",
+      "exists": true,
+      "state": "file",
+      "sha256": "e365bbe837b58785da56fb96d8569b1046f40acbd6efe3c818317a1da64e88d8",
+      "size": 10786
+    }
+  ],
+  "migrationFileList": [
+    "20260811130000_phase0_sprint1_foundation.sql",
+    "20260811130100_sprint2_authentication.sql",
+    "20260811130200_sprint3_profiles_verification_pricing.sql",
+    "20260811130300_sprint3_drop_placeholder_verification_tier.sql",
+    "20260811130400_sprint4_business_staff_permissions.sql",
+    "20260811130500_sprint5_agreement_engine.sql",
+    "20260811130600_sprint6_signatures_pdf.sql",
+    "20260811130700_sprint6a_platform_administration.sql",
+    "20260811130800_sprint7_evidence_witnesses.sql",
+    "20260811130900_sprint8_b2b_csv_import.sql",
+    "20260811131000_sprint9_payment_provider_kyc.sql",
+    "20260811131100_sprint10_ledger_reconciliation.sql",
+    "20260811131200_storage_buckets.sql",
+    "20260811131300_audit_event_revoke_gap_fix.sql",
+    "20260811140000_sprint11_ach_sandbox.sql",
+    "20260815090000_sprint12_debit_card_sandbox.sql",
+    "20260815090100_sprint13_failed_payments_retry.sql",
+    "20260815090200_sprint14_amendments_hardship.sql",
+    "20260815090300_sprint15_partial_payments_settlement.sql",
+    "20260815090400_sprint16_disputes.sql",
+    "20260815090500_sprint17_notification_preferences.sql",
+    "20260815090600_sprint18a_relationship_architecture.sql",
+    "20260815090700_sprint18a_card_columns.sql",
+    "20260815090800_sprint18_adminsupport_appeals.sql",
+    "20260815090900_sprint18b_notification_read_at.sql",
+    "20260815091000_prsprint02_audit_event_rls_gap_fix.sql",
+    "20260815092000_prsprint03_integrity_hardening.sql",
+    "20260816090000_prsprint05_rate_limit_bucket.sql",
+    "20260817090000_prsprint14_email_delivery_evidence.sql",
+    "20260818090000_prsprint15_sms_opt_out.sql",
+    "20260818120000_prsprint18_manual_payments.sql",
+    "20260819030000_prsprint24_card_issuance.sql",
+    "20260819090000_phase6a_bank_connection_ledger.sql",
+    "20260819100000_prsprint32_consent_records.sql",
+    "20260819110000_prsprint33_beta_invite_codes.sql",
+    "20260822090000_sprint19_risk_events.sql",
+    "20260824133103_closed_beta_remediation_invitation_link.sql",
+    "20260824140000_closed_beta_remediation_public_reference.sql",
+    "20260824205020_manual_uat_relationship_public_reference.sql",
+    "20260825142601_agreement_lifecycle_v2_agreement_invitation_table.sql",
+    "20260825205031_notification_archive_column.sql",
+    "20260827010000_mutual_cancellation_request.sql",
+    "20260901020000_agreement_party_snapshot_personal_profile_identity.sql",
+    "20260901020100_preferred_email_verification_token.sql",
+    "20260903210238_signup_onboarding_redesign_identity_columns.sql",
+    "20260906120000_r06_payment_webhook_processing_state.sql",
+    "20260906130000_r06_r09_codex_corrective_pass.sql",
+    "20260906140000_r06_r09_remaining_blockers.sql",
+    "20260906150000_r06_r09_pre_codex_final_correction.sql",
+    "20260906160000_codex_final_remaining_blockers.sql",
+    "20260907120000_payment_webhook_event_source.sql",
+    "20260908090000_reconciliation_exception_conflict_identity.sql",
+    "20260908100000_stage6_provider_identity_mismatch.sql",
+    "20260913090000_r11_pass_b2_settlement_binding.sql",
+    "20260915030000_sms_consent.sql",
+    "20260922000000_payout_attempt.sql",
+    "20260928000000_ledger_entry_type_stage4_parity.sql",
+    "20260929000000_payment_attempt_status_stage5_parity.sql"
+  ],
+  "migrationFileCount": 58,
+  "freezeId": "4c43880d2516055e"
+}

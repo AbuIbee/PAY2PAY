@@ -1,0 +1,68 @@
+Stage 5 — empirical basis for the partial-index predicate normalization rule used by
+src/db/schemaParityComparators.ts (normalizePredicateSql) and exercised by
+src/db/schemaParityComparators.self-validation.test.ts.
+
+=== Probe 1: drizzle-side rendering (no real DB needed) ===
+
+Command: throwaway vitest test, printing `new PgDialect().sqlToQuery(idx.config.where)` for
+every partial index's `.where(...)` clause across the whole accepted schema (temporary probe
+file, deleted immediately after capture — not committed).
+
+Output (table key | index name | rendered SQL | params):
+businessStaffMember business_staff_member_active_business_user_unique SQL: "\"business_staff_member\".\"removed_at\" IS NULL" params: []
+auditEvent audit_event_provider_event_action_unique SQL: "\"audit_event\".\"provider_event_id\" IS NOT NULL" params: []
+businessStaffInvitation business_staff_invitation_business_email_pending_unique SQL: "\"business_staff_invitation\".\"status\" = 'pending'" params: []
+reconciliationException reconciliation_exception_open_identity_unique SQL: "\"reconciliation_exception\".\"status\" = 'open'" params: []
+relationshipFinancialAccount relationship_financial_account_active_slot_unique SQL: "\"relationship_financial_account\".\"status\" = 'active'" params: []
+adminRoleAssignment admin_role_assignment_active_user_unique SQL: "\"admin_role_assignment\".\"revoked_at\" IS NULL" params: []
+adminRestriction admin_restriction_active_target_unique SQL: "\"admin_restriction\".\"lifted_at\" IS NULL" params: []
+
+=== Probe 2: real-PostgreSQL-side rendering ===
+
+Container: disposable postgres:17-alpine, all 58 supabase/migrations applied via
+scripts/apply-migrations-fresh.mjs (raw SQL, superuser connection) — no manual SQL beyond the
+established anon/authenticated/storage.buckets bootstrap stub.
+
+Command:
+  SELECT i.relname, pg_get_expr(ix.indpred, ix.indrelid) AS predicate
+  FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid
+  WHERE i.relname IN (
+    'business_staff_invitation_business_email_pending_unique',
+    'reconciliation_exception_open_identity_unique',
+    'relationship_financial_account_active_slot_unique'
+  );
+
+Output:
+                         relname                         |                               predicate
+-----------------------------------------------------------+-------------------------------------------------------------------------
+ business_staff_invitation_business_email_pending_unique | (status = 'pending'::staff_invitation_status)
+ relationship_financial_account_active_slot_unique       | (status = 'active'::relationship_financial_account_assignment_status)
+ reconciliation_exception_open_identity_unique           | (status = 'open'::reconciliation_exception_status)
+(3 rows)
+
+Separate probe for the two IS [NOT] NULL predicates:
+  SELECT c.relname AS table_name, i.relname AS index_name, ix.indisunique,
+         pg_get_expr(ix.indpred, ix.indrelid) AS predicate
+  FROM pg_index ix
+  JOIN pg_class c ON c.oid = ix.indrelid
+  JOIN pg_class i ON i.oid = ix.indexrelid
+  WHERE i.relname IN ('business_staff_member_active_business_user_unique','audit_event_provider_event_action_unique');
+
+Output:
+      table_name       |                    index_name                     | indisunique |            predicate
+-----------------------+-----------------------------------------------------+-------------+----------------------------------
+ business_staff_member | business_staff_member_active_business_user_unique | t           | (removed_at IS NULL)
+ audit_event           | audit_event_provider_event_action_unique          | t           | (provider_event_id IS NOT NULL)
+
+=== Conclusion ===
+
+Two, and only two, rendering differences observed between drizzle's own predicate SQL and
+PostgreSQL's pg_get_expr() rendering of the same stored predicate:
+  1. Table-qualification + quoting: `"table"."column"` (drizzle) vs. `column` (PostgreSQL).
+  2. An explicit `::enum_type_name` cast PostgreSQL adds to every literal compared against a
+     custom enum column (drizzle never emits this cast). No `::text` cast was observed for any
+     predicate in this schema — every literal comparison here is against a custom enum column,
+     never a plain text column.
+Both differences are stripped by normalizePredicateSql's two explicit, narrow regex rules
+(quoting/qualification, and `::identifier` casts), verified against all 5 distinct partial-index
+predicates this schema defines. No other normalization was found necessary or applied.

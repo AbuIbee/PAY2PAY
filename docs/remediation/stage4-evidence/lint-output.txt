@@ -1,0 +1,33 @@
+﻿
+> pay2pay@0.1.0 lint
+> eslint
+
+
+C:\Development\PAY2PAY-bank-v3\src\components\admin\AdminVerificationQueue.test.tsx
+  26:62  warning  '_init' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Development\PAY2PAY-bank-v3\src\lib\disputes\testFakes.ts
+  278:50  warning  '_paymentMethod' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Development\PAY2PAY-bank-v3\src\lib\payments\paymentWebhookRecovery.postgres.test.ts
+  4617:41  warning  '_omitted' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  4667:33  warning  '_omitted' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+C:\Development\PAY2PAY-bank-v3\src\lib\payments\platformFeePolicy.ts
+  52:34  warning  '_context' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Development\PAY2PAY-bank-v3\src\lib\security\challengeProvider.ts
+  31:16  warning  '_request' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Development\PAY2PAY-bank-v3\src\test-support\kyc\sandboxKycProvider.ts
+  29:38  warning  '_input' is defined but never used  @typescript-eslint/no-unused-vars
+  33:36  warning  '_input' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Development\PAY2PAY-bank-v3\src\test-support\payments\sandboxPaymentProvider.ts
+   59:32  warning  '_input' is defined but never used             @typescript-eslint/no-unused-vars
+   63:25  warning  '_input' is defined but never used             @typescript-eslint/no-unused-vars
+   67:34  warning  '_input' is defined but never used             @typescript-eslint/no-unused-vars
+  173:50  warning  '_amountMinorUnits' is defined but never used  @typescript-eslint/no-unused-vars
+
+✖ 12 problems (0 errors, 12 warnings)
+

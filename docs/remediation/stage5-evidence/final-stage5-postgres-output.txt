@@ -1,0 +1,306 @@
+﻿[test:postgres] starting disposable Postgres container "pay2pay-pgtest-18412-7fdc98a4" (image postgres:17-alpine, run token b8ccc909-28fb-444d-b683-deac1c1dcff4)
+[test:postgres] Postgres will be reachable at 127.0.0.1:59716 (container "pay2pay-pgtest-18412-7fdc98a4")
+[test:postgres] verifying host-side container identity via `docker inspect` (independent of the name this process itself generated)...
+[test:postgres] host-side identity confirmed (container id a07b41fb6780..., image postgres:17-alpine, running)
+[test:postgres] waiting for Postgres to accept connections...
+[test:postgres] verifying in-database identity before any schema/data write...
+[test:postgres] in-database identity confirmed (current_database=postgres, current_user=postgres, server reports internal port 5432 — this need not equal the published host port 59716)
+[test:postgres] bootstrapping and immediately verifying the run-ownership marker (before any migration)...
+[test:postgres] run-ownership marker verified.
+[test:postgres] applying repository migrations to the disposable database...
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "business_staff_member_business_profile_id_business_profile_id_fk" will be truncated to "business_staff_member_business_profile_id_business_profile_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "identity_verification_record_reviewer_user_id_user_account_id_fk" will be truncated to "identity_verification_record_reviewer_user_id_user_account_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "business_approval_policy_business_profile_id_business_profile_id_fk" will be truncated to "business_approval_policy_business_profile_id_business_profile_i"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "business_staff_invitation_business_profile_id_business_profile_id_fk" will be truncated to "business_staff_invitation_business_profile_id_business_profile_"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "business_staff_invitation_accepted_by_user_id_user_account_id_fk" will be truncated to "business_staff_invitation_accepted_by_user_id_user_account_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "staff_approval_request_business_profile_id_business_profile_id_fk" will be truncated to "staff_approval_request_business_profile_id_business_profile_id_"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "staff_approval_request_proposed_by_staff_id_business_staff_member_id_fk" will be truncated to "staff_approval_request_proposed_by_staff_id_business_staff_memb"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "staff_approval_request_approved_by_staff_id_business_staff_member_id_fk" will be truncated to "staff_approval_request_approved_by_staff_id_business_staff_memb"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "installment_schedule_item_agreement_version_id_agreement_version_id_fk" will be truncated to "installment_schedule_item_agreement_version_id_agreement_versio"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "reconciliation_exception_payment_attempt_id_payment_attempt_id_fk" will be truncated to "reconciliation_exception_payment_attempt_id_payment_attempt_id_"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "payment_attempt_installment_schedule_item_id_installment_schedule_item_id_fk" will be truncated to "payment_attempt_installment_schedule_item_id_installment_schedu"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "notification_event_related_payment_attempt_id_payment_attempt_id_fk" will be truncated to "notification_event_related_payment_attempt_id_payment_attempt_i"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "payment_retry_installment_schedule_item_id_installment_schedule_item_id_fk" will be truncated to "payment_retry_installment_schedule_item_id_installment_schedule"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "payment_retry_resulting_payment_attempt_id_payment_attempt_id_fk" will be truncated to "payment_retry_resulting_payment_attempt_id_payment_attempt_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "reschedule_request_installment_schedule_item_id_installment_schedule_item_id_fk" will be truncated to "reschedule_request_installment_schedule_item_id_installment_sch"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "partial_payment_request_installment_schedule_item_id_installment_schedule_item_id_fk" will be truncated to "partial_payment_request_installment_schedule_item_id_installmen"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "partial_payment_request_payment_attempt_id_payment_attempt_id_fk" will be truncated to "partial_payment_request_payment_attempt_id_payment_attempt_id_f"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "settlement_payment_settlement_proposal_id_settlement_proposal_id_fk" will be truncated to "settlement_payment_settlement_proposal_id_settlement_proposal_i"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_invitation_resolved_invitee_user_id_user_account_id_fk" will be truncated to "relationship_invitation_resolved_invitee_user_id_user_account_i"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_participant_individual_profile_id_personal_profile_id_fk" will be truncated to "relationship_participant_individual_profile_id_personal_profile"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_participant_represented_by_user_id_user_account_id_fk" will be truncated to "relationship_participant_represented_by_user_id_user_account_id"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_financial_account_relationship_id_relationship_id_fk" will be truncated to "relationship_financial_account_relationship_id_relationship_id_"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_financial_account_relationship_participant_id_relationship_participant_id_fk" will be truncated to "relationship_financial_account_relationship_participant_id_rela"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_financial_account_financial_account_id_financial_account_id_fk" will be truncated to "relationship_financial_account_financial_account_id_financial_a"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "relationship_financial_account_selected_by_user_id_user_account_id_fk" will be truncated to "relationship_financial_account_selected_by_user_id_user_account"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "notification_event_related_invitation_id_relationship_invitation_id_fk" will be truncated to "notification_event_related_invitation_id_relationship_invitatio"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "agreement_party_snapshot_agreement_version_id_agreement_version_id_fk" will be truncated to "agreement_party_snapshot_agreement_version_id_agreement_version"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42622',
+  message: 'identifier "preferred_email_verification_token_personal_profile_id_personal_profile_id_fk" will be truncated to "preferred_email_verification_token_personal_profile_id_personal"',
+  file: 'scansup.c',
+  line: '99',
+  routine: 'truncate_identifier'
+}
+[fresh-migration-test] OK — all 58 migrations applied cleanly to an empty database.
+[test:postgres] creating reduced-privilege runtime role "pay2pay_test_runtime" for actual test execution...
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '00000',
+  message: 'role "pay2pay_test_runtime" does not exist, skipping',
+  file: 'user.c',
+  line: '1139',
+  routine: 'DropRole'
+}
+[test:postgres] creating harmless scratch-verification table...
+[test:postgres] verifying the runtime role's actual effective identity and privileges...
+[test:postgres] runtime role identity, attributes, marker protection, and application-table privileges all verified.
+[test:postgres] performing harmless scratch write-and-rollback verification...
+[test:postgres] harmless scratch write-and-rollback verification succeeded — no persistent row remains.
+[test:postgres] STAGE 5 — running ONLY the fixed Stage 5 postgres test files: src/db/schemaParity.postgres.test.ts...
+
+ RUN  v3.2.7 C:/Development/PAY2PAY-bank-v3
+
+ ✓ src/db/schemaParity.postgres.test.ts > Stage 5: schema parity between src/db/schema/** and migration-built PostgreSQL (real Postgres) > 1/2 — every accepted table and column exists in the real, migrated database 110ms
+ ✓ src/db/schemaParity.postgres.test.ts > Stage 5: schema parity between src/db/schema/** and migration-built PostgreSQL (real Postgres) > 3/4 — column nullability matches for every accepted column 16ms
+ ✓ src/db/schemaParity.postgres.test.ts > Stage 5: schema parity between src/db/schema/** and migration-built PostgreSQL (real Postgres) > 5 — every accepted enum's full value set exists in the migrated database, in order 8ms
+ ✓ src/db/schemaParity.postgres.test.ts > Stage 5: schema parity between src/db/schema/** and migration-built PostgreSQL (real Postgres) > 6 — every accepted primary key exists in the migrated database 88ms
+ ✓ src/db/schemaParity.postgres.test.ts > Stage 5: schema parity between src/db/schema/** and migration-built PostgreSQL (real Postgres) > 7 — every accepted foreign key exists in the migrated database 22ms
+ ✓ src/db/schemaParity.postgres.test.ts > Stage 5: schema parity between src/db/schema/** and migration-built PostgreSQL (real Postgres) > 8/9 — every accepted unique constraint/index exists in the migrated database 7ms
+ ✓ src/db/schemaParity.postgres.test.ts > Stage 5: schema parity between src/db/schema/** and migration-built PostgreSQL (real Postgres) > 10/11 — RLS enabled state and policy set match for every accepted table 8ms
+ ✓ src/db/schemaParity.postgres.test.ts > Stage 5: schema parity between src/db/schema/** and migration-built PostgreSQL (real Postgres) > 12 — no database function or trigger exists (none accepted by this schema's design) 6ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  22:49:50
+   Duration  2.78s (transform 564ms, setup 178ms, collect 1.78s, tests 268ms, environment 0ms, prepare 171ms)
+
+[test:postgres] stopping and removing this run's own container "pay2pay-pgtest-18412-7fdc98a4" (if it exists)
+node : (node:18412) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only 
+concatenated.
+At line:1 char:478
++ ... ).Path)" }; node scripts/postgres-test-db.mjs --stage5-only --run-tes ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ((node:18412) [D...y concatenated.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+(Use `node --trace-deprecation ...` to show where the warning was created)

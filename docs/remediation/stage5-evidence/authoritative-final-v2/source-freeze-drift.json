@@ -1,0 +1,16 @@
+{
+  "pathSetDrift": {
+    "added": [],
+    "removed": [],
+    "count": 0
+  },
+  "existenceStateDrift": [],
+  "contentHashDrift": [],
+  "curatedDrift": [],
+  "migrationDrift": null,
+  "ciWorkflowDrift": {
+    "count": 0,
+    "note": "CI WORKFLOW CAMPAIGN DRIFT: 0 (before.sha256=16809df98f6a29b4ea31d732da89d6ff34683806badb87022767605280bb10a9 after.sha256=16809df98f6a29b4ea31d732da89d6ff34683806badb87022767605280bb10a9)"
+  },
+  "totalSourceDrift": 0
+}

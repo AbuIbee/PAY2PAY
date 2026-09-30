@@ -1,0 +1,9 @@
+{
+  "command": "node scripts/postgres-test-db.mjs --stage5-only --run-tests",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "startTimestamp": "2026-09-29T15:19:56.698Z",
+  "finishTimestamp": "2026-09-29T15:20:05.745Z",
+  "exitCode": 0,
+  "spawnError": null,
+  "sourceFreezeId": "46b0df49ecafd499"
+}

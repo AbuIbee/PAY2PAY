@@ -1,0 +1,5 @@
+﻿POST_RUN_DOCKER_PS_FILTER_pay2pay-test-harness=true (captured immediately after the run):
+CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
+
+Container this run generated: pay2pay-pgtest-4704-6389f02c (per stdout.log line 1 and 454).
+Result: zero rows returned -- no harness-labeled container remains. Pre-run baseline (captured separately, this round) was also zero rows.

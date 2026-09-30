@@ -1,0 +1,11 @@
+﻿
+ RUN  v3.2.7 C:/Development/PAY2PAY-bank-v3
+
+ ✓ src/lib/audit/hash.test.ts (5 tests) 3ms
+ ✓ src/lib/audit/auditService.test.ts (3 tests) 5ms
+
+ Test Files  2 passed (2)
+      Tests  8 passed (8)
+   Start at  18:41:13
+   Duration  1.70s (transform 249ms, setup 1.62s, collect 33ms, tests 9ms, environment 790ms, prepare 329ms)
+

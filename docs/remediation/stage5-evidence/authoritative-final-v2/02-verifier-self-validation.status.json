@@ -1,0 +1,8 @@
+{
+  "command": "npx vitest run src/db/schemaParityComparators.self-validation.test.ts",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "startTimestamp": "2026-09-30T01:16:27.392Z",
+  "finishTimestamp": "2026-09-30T01:16:31.601Z",
+  "exitCode": 0,
+  "spawnError": null
+}

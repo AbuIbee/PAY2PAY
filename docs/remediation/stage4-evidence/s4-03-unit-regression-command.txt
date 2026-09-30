@@ -1,0 +1,2 @@
+﻿COMMAND: npx vitest run "src/lib/payouts" "src/lib/audit" --exclude "**/*.postgres.test.ts"
+EXIT CODE: 0

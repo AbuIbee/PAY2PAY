@@ -1,0 +1,10 @@
+{
+  "name": "final-campaign-03-verifier-self-validation",
+  "command": "npx vitest run src/db/schemaParityComparators.self-validation.test.ts",
+  "cwd": "C:\\Development\\PAY2PAY-bank-v3",
+  "timestamp": "2026-09-29T13:27:19.933Z",
+  "exitCode": 0,
+  "stdout": "\n RUN  v3.2.7 C:/Development/PAY2PAY-bank-v3\n\n ✓ src/db/schemaParityComparators.self-validation.test.ts (30 tests) 15ms\n\n Test Files  1 passed (1)\n      Tests  30 passed (30)\n   Start at  09:27:20\n   Duration  1.60s (transform 270ms, setup 775ms, collect 29ms, tests 15ms, environment 347ms, prepare 148ms)\n\n",
+  "stderr": "",
+  "spawnError": null
+}

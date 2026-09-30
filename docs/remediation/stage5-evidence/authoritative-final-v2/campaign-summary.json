@@ -1,0 +1,50 @@
+{
+  "freezeId": "4c43880d2516055e",
+  "startedAt": "2026-09-30T01:16:17.405Z",
+  "finishedAt": "2026-09-30T01:21:29.251Z",
+  "steps": [
+    {
+      "name": "01-schema-parity-and-index-extraction",
+      "exitCode": 0
+    },
+    {
+      "name": "02-verifier-self-validation",
+      "exitCode": 0
+    },
+    {
+      "name": "03-forward-upgrade",
+      "exitCode": 0
+    },
+    {
+      "name": "04-migration-runner-proof",
+      "exitCode": 0
+    },
+    {
+      "name": "05-stage4-regression",
+      "exitCode": 0
+    },
+    {
+      "name": "06-typecheck",
+      "exitCode": 0
+    },
+    {
+      "name": "07-lint",
+      "exitCode": 0
+    },
+    {
+      "name": "08-broader-regression-run-1",
+      "exitCode": 0
+    },
+    {
+      "name": "09-broader-regression-run-2",
+      "exitCode": 0
+    },
+    {
+      "name": "10-broader-regression-run-3",
+      "exitCode": 0
+    }
+  ],
+  "allPassed": true,
+  "totalSourceDrift": 0,
+  "status": "COMPLETE"
+}

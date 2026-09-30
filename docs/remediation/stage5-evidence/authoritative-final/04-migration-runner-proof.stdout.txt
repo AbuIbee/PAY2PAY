@@ -1,0 +1,9 @@
+[stage5-runner-proof] prefix set: 57 migrations (through 20260928000000_ledger_entry_type_stage4_parity.sql). full set: 58 migrations. newest: 20260929000000_payment_attempt_status_stage5_parity.sql.
+[stage5-runner-proof] starting disposable Postgres container "pay2pay-s5-runner-16528-740c1bcf"
+[stage5-runner-proof] Postgres reachable at 127.0.0.1:60921
+[stage5-runner-proof] container identity confirmed (id 74e3b1efdb22...)
+[stage5-runner-proof] PHASE 1 (DB-09 applied-state persistence): PASS — 58 migrations tracked, unchanged across a no-op rerun.
+[stage5-runner-proof] PHASE 2 (pending-only application): PASS — 57 pre-applied migrations untouched, 1 pending migration applied exactly once, further rerun applied zero.
+[stage5-runner-proof] PHASE 3 (failure/retry semantics): PASS — failed migration's DDL did not persist and was not marked applied; retry applied it exactly once; further rerun applied zero.
+[stage5-runner-proof] MIGRATION RUNNER PROOF: PASS (DB-09, pending-only, failure/retry all verified against the authoritative supabase CLI runner)
+[stage5-runner-proof] stopping and removing container "pay2pay-s5-runner-16528-740c1bcf"
