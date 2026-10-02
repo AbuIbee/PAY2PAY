@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+﻿import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withErrorHandling } from "@/lib/api-handler";
@@ -37,7 +37,7 @@ describe("POST /api/staff/invite", () => {
     });
     ownerToken = owner.token;
     ownerUserId = owner.user.id;
-    staffCtx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: ownerUserId, role: "owner" });
+    staffCtx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: ownerUserId, role: "OWNER" });
   });
 
   function handlerFor() {
@@ -46,7 +46,7 @@ describe("POST /api/staff/invite", () => {
 
   it("invites successfully within the per-target-email limit", async () => {
     const response = await handlerFor()(
-      postWithCookie({ businessProfileId: BUSINESS_A, email: "candidate@example.com", role: "manager" }, ownerToken),
+      postWithCookie({ businessProfileId: BUSINESS_A, email: "candidate@example.com", role: "FINANCE_ADMIN" }, ownerToken),
     );
     expect(response.status).toBe(201);
   });
@@ -63,16 +63,16 @@ describe("POST /api/staff/invite", () => {
       // "one pending invitation per email" ConflictError rule is ever triggered.
       for (let i = 0; i < 5; i += 1) {
         const business = randomUUID();
-        staffCtx.staffMembers.seed({ businessProfileId: business, userId: ownerUserId, role: "owner" });
+        staffCtx.staffMembers.seed({ businessProfileId: business, userId: ownerUserId, role: "OWNER" });
         const response = await handlerFor()(
-          postWithCookie({ businessProfileId: business, email: targetEmail, role: "manager" }, ownerToken),
+          postWithCookie({ businessProfileId: business, email: targetEmail, role: "FINANCE_ADMIN" }, ownerToken),
         );
         expect(response.status).toBe(201);
       }
       const sixthBusiness = randomUUID();
-      staffCtx.staffMembers.seed({ businessProfileId: sixthBusiness, userId: ownerUserId, role: "owner" });
+      staffCtx.staffMembers.seed({ businessProfileId: sixthBusiness, userId: ownerUserId, role: "OWNER" });
       const sixth = await handlerFor()(
-        postWithCookie({ businessProfileId: sixthBusiness, email: targetEmail, role: "manager" }, ownerToken),
+        postWithCookie({ businessProfileId: sixthBusiness, email: targetEmail, role: "FINANCE_ADMIN" }, ownerToken),
       );
       expect(sixth.status).toBe(429);
     },
@@ -81,13 +81,13 @@ describe("POST /api/staff/invite", () => {
   it("target-email limiting is case-insensitive", async () => {
     for (let i = 0; i < 5; i += 1) {
       const business = randomUUID();
-      staffCtx.staffMembers.seed({ businessProfileId: business, userId: ownerUserId, role: "owner" });
-      await handlerFor()(postWithCookie({ businessProfileId: business, email: "Case@Example.com", role: "manager" }, ownerToken));
+      staffCtx.staffMembers.seed({ businessProfileId: business, userId: ownerUserId, role: "OWNER" });
+      await handlerFor()(postWithCookie({ businessProfileId: business, email: "Case@Example.com", role: "FINANCE_ADMIN" }, ownerToken));
     }
     const lastBusiness = randomUUID();
-    staffCtx.staffMembers.seed({ businessProfileId: lastBusiness, userId: ownerUserId, role: "owner" });
+    staffCtx.staffMembers.seed({ businessProfileId: lastBusiness, userId: ownerUserId, role: "OWNER" });
     const sixth = await handlerFor()(
-      postWithCookie({ businessProfileId: lastBusiness, email: "case@example.com", role: "manager" }, ownerToken),
+      postWithCookie({ businessProfileId: lastBusiness, email: "case@example.com", role: "FINANCE_ADMIN" }, ownerToken),
     );
     expect(sixth.status).toBe(429);
   });

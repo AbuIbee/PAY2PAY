@@ -8,7 +8,7 @@ import {
   paymentFrequencyEnum,
   profileKindEnum,
 } from "./enums";
-import { userAccount } from "./identity";
+import { businessProfile, userAccount } from "./identity";
 import { relationship } from "./relationship";
 
 /**
@@ -43,6 +43,14 @@ export const agreement = pgTable("agreement", {
   // assumptions" is satisfied by leaving pre-existing rows null rather than fabricating a backfilled
   // relationship history that never actually happened.
   relationshipId: uuid("relationship_id").references(() => relationship.id),
+  // "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE" (2026-10-02): a pure
+  // TENANCY/WORKSPACE scope — which organization's AR pipeline owns this agreement, if any. NULL =
+  // Personal Agreement (every existing row stays NULL automatically; no backfill UPDATE is run or
+  // needed). This is deliberately NOT a second source of creditor/debtor identity — the
+  // creditor/debtor profileKind+profileId pair above remains the sole authority for who owes whom
+  // and who pays whom; this column only answers "does a business's receivables workspace track
+  // this," entirely independent of which profile is the legal creditor or debtor party.
+  organizationId: uuid("organization_id").references(() => businessProfile.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   closedAt: timestamp("closed_at", { withTimezone: true }),
 }).enableRLS();

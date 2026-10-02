@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { PricingPlanEntitlementRecord, PricingPlanEntitlementRepository } from "./pricingPlanEntitlementRepository";
 import { PricingService } from "./pricingService";
 import type {
   PricingPlanKind,
@@ -83,4 +84,34 @@ export function createTestPricingService() {
   const subscriptions = new InMemorySubscriptionRepository();
   const pricingService = new PricingService(plans, subscriptions);
   return { pricingService, plans, subscriptions };
+}
+
+/** "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE", Phase 2 (2026-10-02). */
+export class InMemoryPricingPlanEntitlementRepository implements PricingPlanEntitlementRepository {
+  private byId = new Map<string, PricingPlanEntitlementRecord>();
+
+  seed(input: { pricingPlanId: string; featureKey: string; enabled?: boolean; limitValue?: number | null }): PricingPlanEntitlementRecord {
+    const record: PricingPlanEntitlementRecord = {
+      id: randomUUID(),
+      enabled: true,
+      limitValue: null,
+      ...input,
+    };
+    this.byId.set(record.id, record);
+    return record;
+  }
+
+  async findByPlanAndFeature(pricingPlanId: string, featureKey: string): Promise<PricingPlanEntitlementRecord | null> {
+    return [...this.byId.values()].find((r) => r.pricingPlanId === pricingPlanId && r.featureKey === featureKey) ?? null;
+  }
+
+  async listByPlan(pricingPlanId: string): Promise<PricingPlanEntitlementRecord[]> {
+    return [...this.byId.values()].filter((r) => r.pricingPlanId === pricingPlanId);
+  }
+}
+
+export function createTestPricingServiceWithEntitlements() {
+  const { pricingService, plans, subscriptions } = createTestPricingService();
+  const entitlements = new InMemoryPricingPlanEntitlementRepository();
+  return { pricingService, plans, subscriptions, entitlements };
 }

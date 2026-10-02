@@ -81,6 +81,12 @@ export interface AgreementRecord {
    * flow) — callers must treat null as "not applicable," never as "missing."
    */
   relationshipId: string | null;
+  /**
+   * "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE", Phase 8 (2026-10-02):
+   * pure tenancy/workspace scope — see CreateDraftInput.organizationId's own doc comment. NULL for
+   * every pre-existing agreement and every personal agreement created going forward.
+   */
+  organizationId: string | null;
   createdByUserId: string;
   createdAt: Date;
   closedAt: Date | null;
@@ -112,8 +118,19 @@ export interface AgreementRepository {
     debtorProfileId: string;
     currency: string;
     createdByUserId: string;
+    /** Trusted internal field — see CreateDraftInput.organizationId's own doc comment. */
+    organizationId?: string | null;
   }): Promise<AgreementRecord>;
   findById(id: string): Promise<AgreementRecord | null>;
+  /**
+   * "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE", Phase 8 (2026-10-02):
+   * tenant-scoped by construction, mirroring businessCustomerRepository.ts/
+   * businessObligationRepository.ts's identical contract (see those files' own doc comments) — an
+   * agreement id belonging to a different organization (or to no organization at all, i.e. a
+   * personal agreement) returns null here, never the row. Business Workspace agreement operations
+   * must use this, never the bare `findById` above.
+   */
+  findOrganizationAgreement(organizationId: string, agreementId: string): Promise<AgreementRecord | null>;
   updateStatus(id: string, status: AgreementStatus): Promise<void>;
   /**
    * R05 (DB integrity & concurrency hardening): the conditional counterpart to `updateStatus` —
@@ -510,6 +527,17 @@ export interface CreateDraftInput {
   creatorUserId: string;
   creditor: ProfileRef;
   debtor: ProfileRef;
+  /**
+   * "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE", Phase 8 (2026-10-02):
+   * pure tenancy/workspace scope — NULL (the default, every existing caller's current behavior) for
+   * a personal agreement; a validated business_profile.id for an organization agreement. This is a
+   * TRUSTED INTERNAL field: it must never be populated directly from a public HTTP request body —
+   * only AgreementWorkspaceService.createDraftForWorkspace (src/lib/organizations/
+   * agreementWorkspaceService.ts), after resolving workspace + membership + capability + entitlement
+   * server-side, may set it to a non-null value. Does not replace or interact with the
+   * creditor/debtor identity fields above in any way.
+   */
+  organizationId?: string | null;
   currency?: string;
   category: string;
   description: string;
@@ -655,6 +683,10 @@ export class AgreementService {
       debtorProfileId: input.debtor.id,
       currency: input.currency ?? "USD",
       createdByUserId: input.creatorUserId,
+      // Phase 8: NULL unless the caller is AgreementWorkspaceService.createDraftForWorkspace, which
+      // has already validated workspace + membership + capability + entitlement before reaching
+      // here — every other existing caller omits this field entirely and gets NULL, unchanged.
+      organizationId: input.organizationId ?? null,
     });
 
     const version = await this.deps.versions.insert({

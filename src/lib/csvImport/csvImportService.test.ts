@@ -204,8 +204,8 @@ describe("CsvImportService", () => {
       const { businessId } = await seedBusiness();
       const authorizedStaff = randomUUID();
       const unauthorizedStaff = randomUUID();
-      ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: businessId, userId: authorizedStaff, role: "manager" });
-      ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: businessId, userId: unauthorizedStaff, role: "accountant_viewer" });
+      ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: businessId, userId: authorizedStaff, role: "AR_MANAGER" });
+      ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: businessId, userId: unauthorizedStaff, role: "VIEWER" });
 
       await expect(
         ctx.csvImportService.uploadBatch({ businessProfileId: businessId, actingUserId: unauthorizedStaff, fileName: "x.csv", csvContent: VALID_CSV }),

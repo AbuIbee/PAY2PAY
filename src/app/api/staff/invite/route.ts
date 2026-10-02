@@ -23,7 +23,7 @@ const INVITE_WINDOW_MS = 60 * 60 * 1000;
 const inviteSchema = z.object({
   businessProfileId: z.string().uuid(),
   email: z.string().trim().email(),
-  role: z.enum(["owner", "manager", "receivables_staff", "accountant_viewer", "custom"]),
+  role: z.enum(["OWNER", "FINANCE_ADMIN", "AR_MANAGER", "AR_AGENT", "VIEWER"]),
   customRoleId: z.string().uuid().optional(),
 });
 

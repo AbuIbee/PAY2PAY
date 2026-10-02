@@ -73,7 +73,7 @@ describe("RelationshipService", () => {
       await ctx.staffCtx.staffMembers.insert({
         businessProfileId: businessId,
         userId: staffUserId,
-        role: "manager",
+        role: "FINANCE_ADMIN",
         customRoleId: null,
         isAuthorizedRepresentative: true,
       });

@@ -207,11 +207,11 @@ describe("AgreementInvitationService", () => {
         ctx.invitationService.acceptPlan({ rawToken, actingUserId: staffUserId, actingProfile: { kind: "business", id: BUSINESS_A } }),
       ).rejects.toThrow(ForbiddenError);
 
-      // Grant staff membership with create_agreement capability (manager role includes it) and retry.
+      // Grant staff membership with create_agreement capability (AR_MANAGER role includes it) and retry.
       await ctx.agreementCtx.staffCtx.staffMembers.insert({
         businessProfileId: BUSINESS_A,
         userId: staffUserId,
-        role: "manager",
+        role: "AR_MANAGER",
         customRoleId: null,
         isAuthorizedRepresentative: true,
       });

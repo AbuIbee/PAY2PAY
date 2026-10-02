@@ -4,6 +4,8 @@ import { AdminRoleService } from "@/lib/admin/adminRoleService";
 import type { AdminRoleAssignmentRecord, AdminRoleAssignmentRepository } from "@/lib/admin/adminRoleService";
 import type { InternalAdminRole } from "@/lib/admin/adminCapabilities";
 import { InMemoryPersonalProfileRepository } from "@/lib/auth/testFakes";
+import { InMemoryBusinessStaffMemberRepository } from "@/lib/staff/testFakes";
+import type { AtomicBusinessProfileCreator, AtomicBusinessProfileCreatorInput, AtomicBusinessProfileCreatorResult } from "./atomicBusinessProfileCreator";
 import { BusinessProfileService } from "./businessProfileService";
 import type { BusinessProfileRecord, BusinessProfileRepository, BusinessProfileStatus } from "./businessProfileService";
 import { ProfileAccessService } from "./profileAccessService";
@@ -192,12 +194,40 @@ export class InMemoryBusinessProfileRepository implements BusinessProfileReposit
   }
 }
 
+/**
+ * Test double for AtomicBusinessProfileCreator. In-memory Map writes are synchronous and cannot
+ * partially fail the way the real Drizzle transaction can, so true atomicity isn't under test
+ * here — this exists so `createTestBusinessProfileService()` exercises the exact same
+ * profile+membership-together contract real callers rely on, sharing state with the `repo` and
+ * `staffMembers` doubles returned alongside it (so assertions against either see the result).
+ */
+export class InMemoryAtomicBusinessProfileCreator implements AtomicBusinessProfileCreator {
+  constructor(
+    private readonly profiles: InMemoryBusinessProfileRepository,
+    private readonly staffMembers: InMemoryBusinessStaffMemberRepository,
+  ) {}
+
+  async createAtomically(input: AtomicBusinessProfileCreatorInput): Promise<AtomicBusinessProfileCreatorResult> {
+    const profile = await this.profiles.insert(input);
+    const ownerMembership = await this.staffMembers.insert({
+      businessProfileId: profile.id,
+      userId: input.ownerUserId,
+      role: "OWNER",
+      customRoleId: null,
+      isAuthorizedRepresentative: true,
+    });
+    return { profile, ownerMembership };
+  }
+}
+
 export function createTestBusinessProfileService() {
   const repo = new InMemoryBusinessProfileRepository();
+  const staffMembers = new InMemoryBusinessStaffMemberRepository();
   const auditRepo = new InMemoryAuditEventRepositoryForProfiles();
   const audit = new AuditService(auditRepo);
-  const businessProfileService = new BusinessProfileService(repo, audit);
-  return { businessProfileService, repo, auditRepo };
+  const profileCreator = new InMemoryAtomicBusinessProfileCreator(repo, staffMembers);
+  const businessProfileService = new BusinessProfileService(repo, audit, profileCreator);
+  return { businessProfileService, repo, staffMembers, auditRepo };
 }
 
 export function createTestProfileAccessService() {

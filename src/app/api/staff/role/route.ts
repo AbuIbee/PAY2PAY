@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 const updateRoleSchema = z.object({
   businessProfileId: z.string().uuid(),
   targetStaffId: z.string().uuid(),
-  newRole: z.enum(["owner", "manager", "receivables_staff", "accountant_viewer", "custom"]),
+  newRole: z.enum(["OWNER", "FINANCE_ADMIN", "AR_MANAGER", "AR_AGENT", "VIEWER"]),
   newCustomRoleId: z.string().uuid().optional(),
 });
 

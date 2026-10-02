@@ -19,9 +19,9 @@ describe("ApprovalService", () => {
     ownerUserId = randomUUID();
     managerUserId = randomUUID();
     secondManagerUserId = randomUUID();
-    staffCtx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: ownerUserId, role: "owner" });
-    staffCtx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: managerUserId, role: "manager" });
-    staffCtx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: secondManagerUserId, role: "manager" });
+    staffCtx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: ownerUserId, role: "OWNER" });
+    staffCtx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: managerUserId, role: "FINANCE_ADMIN" });
+    staffCtx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: secondManagerUserId, role: "FINANCE_ADMIN" });
 
     await grantStepUp(staffCtx, ownerUserId, "owner-session");
     await approvalCtx.approvalService.setApprovalPolicy({

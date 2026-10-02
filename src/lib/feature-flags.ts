@@ -47,6 +47,16 @@ export const FEATURE_FLAGS = {
   // (src/app/api/auth/signup/route.ts), never inside AuthService.signup itself — see
   // BetaInviteService's own doc comment for why.
   closedBetaEnabled: false,
+  // "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE", Phase 2 (2026-10-02),
+  // Phase 9: controls EXPOSURE of the Business Workspace UI only (nav/shell visibility) — it is
+  // never the security boundary. Default false: the database architecture (organizationRoleEnum,
+  // business_customer/business_obligation tables, agreement.organizationId) may exist and be
+  // migrated while ordinary production users see no Business Workspace surface at all. Every
+  // organization-scoped authorization decision still goes through
+  // OrganizationAuthorizationService/EntitlementService regardless of this flag's value — flipping
+  // it on does not bypass, and flipping it off does not substitute for, membership/capability/
+  // entitlement checks. Set FEATURE_B2B_ORGANIZATIONS_ENABLED=true to expose the UI.
+  b2bOrganizationsEnabled: false,
 } as const satisfies Record<string, boolean>;
 
 export type FeatureFlagName = keyof typeof FEATURE_FLAGS;

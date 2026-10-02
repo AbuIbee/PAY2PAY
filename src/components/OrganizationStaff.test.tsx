@@ -34,7 +34,7 @@ describe("OrganizationStaff", () => {
       "/api/auth/me": { id: "viewer-1" },
       "/api/staff?businessProfileId=biz-1": {
         staff: [
-          { id: "member-1", userId: "viewer-1", name: "Val Viewer", email: "viewer@example.com", role: "accountant_viewer", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+          { id: "member-1", userId: "viewer-1", name: "Val Viewer", email: "viewer@example.com", role: "VIEWER", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
         ],
       },
       "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -50,7 +50,7 @@ describe("OrganizationStaff", () => {
       "/api/auth/me": { id: "owner-1" },
       "/api/staff?businessProfileId=biz-1": {
         staff: [
-          { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
+          { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "OWNER", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
         ],
       },
       "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -65,8 +65,8 @@ describe("OrganizationStaff", () => {
       "/api/auth/me": { id: "owner-1" },
       "/api/staff?businessProfileId=biz-1": {
         staff: [
-          { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
-          { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+          { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "OWNER", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
+          { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "FINANCE_ADMIN", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
         ],
       },
       "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -92,8 +92,8 @@ describe("OrganizationStaff", () => {
       "/api/auth/me": { id: "viewer-1" },
       "/api/staff?businessProfileId=biz-1": {
         staff: [
-          { id: "member-1", userId: "viewer-1", name: "Val Viewer", email: "viewer@example.com", role: "accountant_viewer", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
-          { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+          { id: "member-1", userId: "viewer-1", name: "Val Viewer", email: "viewer@example.com", role: "VIEWER", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+          { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "FINANCE_ADMIN", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
         ],
       },
       "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -112,8 +112,8 @@ describe("OrganizationStaff", () => {
         "/api/auth/me": { id: "owner-1" },
         "/api/staff?businessProfileId=biz-1": {
           staff: [
-            { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
-            { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+            { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "OWNER", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
+            { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "FINANCE_ADMIN", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
           ],
         },
         "/api/staff/custom-roles?businessProfileId=biz-1": { customRoles: [] },
@@ -145,10 +145,10 @@ describe("OrganizationStaff", () => {
           status: 200,
           json: async () => ({
             staff: removed
-              ? [{ id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() }]
+              ? [{ id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "OWNER", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() }]
               : [
-                  { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "owner", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
-                  { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "manager", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
+                  { id: "member-1", userId: "owner-1", name: "Jane Owner", email: "owner@example.com", role: "OWNER", customRoleId: null, isAuthorizedRepresentative: true, createdAt: new Date().toISOString() },
+                  { id: "member-2", userId: "staffer-1", name: "Sam Staffer", email: "staffer@example.com", role: "FINANCE_ADMIN", customRoleId: null, isAuthorizedRepresentative: false, createdAt: new Date().toISOString() },
                 ],
           }),
         };

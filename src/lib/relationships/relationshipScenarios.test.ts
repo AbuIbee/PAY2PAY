@@ -131,20 +131,18 @@ describe("Sprint 18A relationship scenarios", () => {
     await ctx.staffCtx.staffMembers.insert({
       businessProfileId: creditorBusinessId,
       userId: creditorStaffId,
-      role: "manager",
+      role: "FINANCE_ADMIN",
       customRoleId: null,
       isAuthorizedRepresentative: true,
     });
-    const debtorTreasuryRole = await ctx.staffCtx.customRoles.insert({
-      businessProfileId: debtorBusinessId,
-      name: "Treasury",
-      permissions: ["send_invitation", "change_payout_configuration"],
-    });
+    // FINANCE_ADMIN holds both send_invitation and change_payout_configuration by default — custom-role
+    // assignment is deferred (see capabilities.ts's own doc comment), so this replaces the former
+    // custom-role grant with the real role that now covers both capabilities.
     await ctx.staffCtx.staffMembers.insert({
       businessProfileId: debtorBusinessId,
       userId: debtorStaffId,
-      role: "custom",
-      customRoleId: debtorTreasuryRole.id,
+      role: "FINANCE_ADMIN",
+      customRoleId: null,
       isAuthorizedRepresentative: true,
     });
 
@@ -275,26 +273,23 @@ describe("Sprint 18A relationship scenarios", () => {
     ctx.profileOwners.set("business", businessId, businessOwnerId);
     ctx.profileOwners.set("personal", janeProfileId, janeUserId);
     ctx.users.set("jane@example.com", janeUserId);
-    // A custom "Treasury" role, not the plain default "manager" role (which lacks change_payout_configuration by
-    // default, per Sprint 4's own capability list) — this employee is explicitly authorized for both invitation
-    // and financial-account actions, not merely a manager by title.
-    const treasuryRole = await ctx.staffCtx.customRoles.insert({
-      businessProfileId: businessId,
-      name: "Treasury",
-      permissions: ["send_invitation", "change_payout_configuration", "create_agreement"],
-    });
+    // FINANCE_ADMIN, not AR_MANAGER/AR_AGENT (neither of which has change_payout_configuration by
+    // default) — this employee is explicitly authorized for invitation, agreement, and
+    // financial-account actions alike (custom-role assignment is deferred; see capabilities.ts's own
+    // doc comment — this replaces the former custom "Treasury" role grant with the real role that
+    // now covers all three capabilities by default).
     await ctx.staffCtx.staffMembers.insert({
       businessProfileId: businessId,
       userId: staffUserId,
-      role: "custom",
-      customRoleId: treasuryRole.id,
+      role: "FINANCE_ADMIN",
+      customRoleId: null,
       isAuthorizedRepresentative: true,
     });
-    // A viewer-only staff member (accountant_viewer: view_reports/export_records only) exists but must never be able to perform this binding action.
+    // A VIEWER-only staff member (holds no capability at all) exists but must never be able to perform this binding action.
     await ctx.staffCtx.staffMembers.insert({
       businessProfileId: businessId,
       userId: viewerUserId,
-      role: "accountant_viewer",
+      role: "VIEWER",
       customRoleId: null,
       isAuthorizedRepresentative: false,
     });

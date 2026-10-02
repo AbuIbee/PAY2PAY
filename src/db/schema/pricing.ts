@@ -1,4 +1,4 @@
-import { boolean, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { pricingPlanKindEnum, profileKindEnum, subscriptionStatusEnum } from "./enums";
 
@@ -44,6 +44,16 @@ export const pricingPlan = pgTable("pricing_plan", {
  * active/canceled) — never updated in place, so history of what plan was in
  * effect when is preserved, mirroring identity_verification_record's
  * insert-per-decision pattern.
+ *
+ * "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE" (2026-10-02): this table IS
+ * the foundation for "Organization Subscription" — a business_profile's subscription is just a row
+ * here with `profileKind = 'business'`, `profileId = business_profile.id`, exactly like every other
+ * subscription. The subscription belongs to the profile (the organization), never to the owning
+ * user, which this table's shape already guaranteed before this change — nothing here was altered
+ * to achieve that. `currentPeriodStart`/`currentPeriodEnd` are new, nullable, additive columns for
+ * the billing-cycle concept the existing `startedAt`/`endedAt` lifecycle fields don't cover; they
+ * carry no interest/APR/time-based-balance-growth semantics of any kind — purely "which billing
+ * period is this subscription currently in," entirely separate from any agreement's own debt terms.
  */
 export const subscription = pgTable("subscription", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -55,5 +65,39 @@ export const subscription = pgTable("subscription", {
   status: subscriptionStatusEnum("status").notNull().default("active"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp("ended_at", { withTimezone: true }),
+  currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
+  currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }).enableRLS();
+
+/**
+ * B2B Organization architecture: the entitlement catalog — which features/limits come bundled with
+ * each `pricing_plan` row. Admin-managed catalog data (mirrors `pricing_plan` itself), never
+ * per-business data; a business's actual entitlements are resolved by joining its active
+ * `subscription` -> `pricing_plan` -> these rows (see src/lib/organizations/entitlements.ts).
+ *
+ * `enabled` and `limitValue` are deliberately independent, not a single overloaded field:
+ *   - `enabled = false` — the feature is off for this plan, `limitValue` is irrelevant.
+ *   - `enabled = true`, `limitValue IS NULL` — the feature is on with NO cap (unlimited/not
+ *     applicable). NULL is used for "unlimited" precisely so a real, deliberate cap of zero is
+ *     never confused with "no limit" — `limitValue = 0` means a hard cap of zero, not unlimited.
+ *   - `enabled = true`, `limitValue = N` (N > 0) — the feature is on with an explicit numeric cap
+ *     (e.g. `staff_seats` = 5).
+ * Exactly one row per (pricing_plan, feature_key) — never a second, competing source of truth for
+ * what a plan includes.
+ */
+export const pricingPlanEntitlement = pgTable(
+  "pricing_plan_entitlement",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    pricingPlanId: uuid("pricing_plan_id")
+      .notNull()
+      .references(() => pricingPlan.id),
+    featureKey: text("feature_key").notNull(), // e.g. 'business_dashboard', 'staff_seats', 'api_access'
+    enabled: boolean("enabled").notNull().default(true),
+    // NULL = unlimited/not applicable (see table doc comment); never use 0 to mean "unlimited".
+    limitValue: integer("limit_value"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("pricing_plan_entitlement_plan_feature_unique").on(table.pricingPlanId, table.featureKey)],
+).enableRLS();

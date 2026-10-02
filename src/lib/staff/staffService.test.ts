@@ -14,7 +14,7 @@ describe("StaffService", () => {
   beforeEach(() => {
     ctx = createTestStaffService();
     ownerUserId = randomUUID();
-    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: ownerUserId, role: "owner" });
+    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: ownerUserId, role: "OWNER" });
   });
 
   it("owner permissions: an owner has every capability, including manage_staff", async () => {
@@ -24,7 +24,7 @@ describe("StaffService", () => {
     expect(await ctx.staffService.hasCapability(owner!, "forgive_principal")).toBe(true);
     await expect(
       ctx.staffService.requireCapability(BUSINESS_A, ownerUserId, "manage_staff"),
-    ).resolves.toMatchObject({ role: "owner" });
+    ).resolves.toMatchObject({ role: "OWNER" });
   });
 
   describe("countActiveStaff — dashboard consistency fix", () => {
@@ -37,8 +37,8 @@ describe("StaffService", () => {
 
     it("counts every active staff member accurately once some exist", async () => {
       const memberUserId = randomUUID();
-      ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: memberUserId, role: "manager" });
-      // BUSINESS_A already has the owner seeded in beforeEach, plus this new manager = 2.
+      ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: memberUserId, role: "FINANCE_ADMIN" });
+      // BUSINESS_A already has the owner seeded in beforeEach, plus this new finance admin = 2.
       expect(await ctx.staffService.countActiveStaff(BUSINESS_A)).toBe(2);
     });
 
@@ -48,95 +48,83 @@ describe("StaffService", () => {
     });
   });
 
-  it("manager permissions: has day-to-day capabilities but not manage_staff or forgive_principal", async () => {
-    const managerUserId = randomUUID();
-    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: managerUserId, role: "manager" });
+  it("AR_MANAGER permissions: has day-to-day capabilities but not manage_staff or forgive_principal", async () => {
+    const arManagerUserId = randomUUID();
+    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: arManagerUserId, role: "AR_MANAGER" });
 
     await expect(
-      ctx.staffService.requireCapability(BUSINESS_A, managerUserId, "create_agreement"),
+      ctx.staffService.requireCapability(BUSINESS_A, arManagerUserId, "create_agreement"),
     ).resolves.toBeDefined();
-    await expect(ctx.staffService.requireCapability(BUSINESS_A, managerUserId, "manage_staff")).rejects.toThrow(
+    await expect(ctx.staffService.requireCapability(BUSINESS_A, arManagerUserId, "manage_staff")).rejects.toThrow(
       ForbiddenError,
     );
-    await expect(ctx.staffService.requireCapability(BUSINESS_A, managerUserId, "forgive_principal")).rejects.toThrow(
+    await expect(ctx.staffService.requireCapability(BUSINESS_A, arManagerUserId, "forgive_principal")).rejects.toThrow(
       ForbiddenError,
     );
   });
 
-  it("viewer denial: accountant_viewer can view/export but is denied create_agreement", async () => {
+  it("VIEWER denial: VIEWER holds no capability at all — read access comes from plain active membership, never a capability grant", async () => {
     const viewerUserId = randomUUID();
-    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: viewerUserId, role: "accountant_viewer" });
+    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: viewerUserId, role: "VIEWER" });
 
-    await expect(ctx.staffService.requireCapability(BUSINESS_A, viewerUserId, "view_reports")).resolves.toBeDefined();
+    const viewer = await ctx.staffMembers.findActiveByBusinessAndUser(BUSINESS_A, viewerUserId);
+    expect(viewer).not.toBeNull();
+    await expect(ctx.staffService.requireCapability(BUSINESS_A, viewerUserId, "view_reports")).rejects.toThrow(
+      ForbiddenError,
+    );
     await expect(ctx.staffService.requireCapability(BUSINESS_A, viewerUserId, "create_agreement")).rejects.toThrow(
       ForbiddenError,
     );
   });
 
-  it("custom permission: a custom role grants exactly its own permission set, nothing more", async () => {
+  it("custom roles deferred: \"custom\" is no longer an assignable organization role — a stale/legacy role string must be rejected, not silently coerced", async () => {
     const customRole = await ctx.customRoles.insert({
       businessProfileId: BUSINESS_A,
       name: "Settlement Reviewer",
       permissions: ["approve_agreement", "view_reports"],
     });
-    const customUserId = randomUUID();
-    ctx.staffMembers.seed({
+    const legacyInvite = {
       businessProfileId: BUSINESS_A,
-      userId: customUserId,
+      invitedByUserId: ownerUserId,
+      email: "custom-candidate@example.com",
       role: "custom",
       customRoleId: customRole.id,
-    });
+    } as unknown as Parameters<typeof ctx.staffService.inviteStaff>[0];
 
-    await expect(ctx.staffService.requireCapability(BUSINESS_A, customUserId, "approve_agreement")).resolves.toBeDefined();
-    await expect(ctx.staffService.requireCapability(BUSINESS_A, customUserId, "view_reports")).resolves.toBeDefined();
-    await expect(ctx.staffService.requireCapability(BUSINESS_A, customUserId, "manage_staff")).rejects.toThrow(
-      ForbiddenError,
-    );
-    await expect(ctx.staffService.requireCapability(BUSINESS_A, customUserId, "forgive_principal")).rejects.toThrow(
-      ForbiddenError,
-    );
+    await expect(ctx.staffService.inviteStaff(legacyInvite)).rejects.toThrow(ValidationError);
   });
 
-  it("privilege escalation attempt: a manager cannot invite/assign the owner role to anyone", async () => {
-    const managerUserId = randomUUID();
-    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: managerUserId, role: "manager" });
-    ctx.userEmails.set(managerUserId, "manager@example.com");
+  it("privilege escalation attempt: a FINANCE_ADMIN cannot invite/assign the OWNER role to anyone", async () => {
+    const financeAdminUserId = randomUUID();
+    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: financeAdminUserId, role: "FINANCE_ADMIN" });
+    ctx.userEmails.set(financeAdminUserId, "finance-admin@example.com");
 
     await expect(
       ctx.staffService.inviteStaff({
         businessProfileId: BUSINESS_A,
-        invitedByUserId: managerUserId,
+        invitedByUserId: financeAdminUserId,
         email: "wannabe-owner@example.com",
-        role: "owner",
+        role: "OWNER",
       }),
     ).rejects.toThrow(ForbiddenError);
   });
 
-  it("privilege escalation attempt: a manager cannot promote an existing staff member to owner", async () => {
-    // A non-owner who nonetheless holds manage_staff (via a custom role) —
-    // isolates the privilege-escalation guard from the plain capability gate.
-    const manageStaffRole = await ctx.customRoles.insert({
-      businessProfileId: BUSINESS_A,
-      name: "Staff Manager (non-owner)",
-      permissions: ["manage_staff"],
-    });
-    const managerUserId = randomUUID();
-    ctx.staffMembers.seed({
-      businessProfileId: BUSINESS_A,
-      userId: managerUserId,
-      role: "custom",
-      customRoleId: manageStaffRole.id,
-    });
-    const target = ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: randomUUID(), role: "receivables_staff" });
-    await grantStepUp(ctx, managerUserId, "session-1");
+  it("privilege escalation attempt: a FINANCE_ADMIN cannot promote an existing staff member to OWNER, even though FINANCE_ADMIN already holds manage_staff", async () => {
+    // FINANCE_ADMIN is a non-owner role that nonetheless holds manage_staff by default — this
+    // isolates the owner-escalation guard from the plain capability gate (replaces the former
+    // custom-role workaround now that custom-role assignment is deferred/unavailable).
+    const financeAdminUserId = randomUUID();
+    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: financeAdminUserId, role: "FINANCE_ADMIN" });
+    const target = ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: randomUUID(), role: "AR_MANAGER" });
+    await grantStepUp(ctx, financeAdminUserId, "session-1");
 
     await expect(
       ctx.staffService.updateStaffRole({
         businessProfileId: BUSINESS_A,
-        actingUserId: managerUserId,
+        actingUserId: financeAdminUserId,
         actingSessionId: "session-1",
         targetStaffId: target.id,
-        newRole: "owner",
+        newRole: "OWNER",
       }),
     ).rejects.toThrow(ForbiddenError);
   });
@@ -151,14 +139,49 @@ describe("StaffService", () => {
         actingUserId: ownerUserId,
         actingSessionId: "session-1",
         targetStaffId: self!.id,
-        newRole: "manager",
+        newRole: "FINANCE_ADMIN",
       }),
     ).rejects.toThrow(ForbiddenError);
   });
 
+  it("staff self-promotion attempt: a FINANCE_ADMIN cannot promote themselves to OWNER through updateStaffRole (the self-change guard fires regardless of the requested role)", async () => {
+    const financeAdminUserId = randomUUID();
+    const financeAdmin = ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: financeAdminUserId, role: "FINANCE_ADMIN" });
+    await grantStepUp(ctx, financeAdminUserId, "session-1");
+
+    await expect(
+      ctx.staffService.updateStaffRole({
+        businessProfileId: BUSINESS_A,
+        actingUserId: financeAdminUserId,
+        actingSessionId: "session-1",
+        targetStaffId: financeAdmin.id,
+        newRole: "OWNER",
+      }),
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it("duplicate membership rejected: a user who already holds an active membership cannot gain a second one by accepting another invitation to the same business", async () => {
+    const existingMemberUserId = randomUUID();
+    ctx.userEmails.set(existingMemberUserId, "already-staff@example.com");
+    ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: existingMemberUserId, role: "AR_MANAGER" });
+
+    await ctx.staffService.inviteStaff({
+      businessProfileId: BUSINESS_A,
+      invitedByUserId: ownerUserId,
+      email: "already-staff@example.com",
+      role: "FINANCE_ADMIN",
+    });
+    const rawToken = ctx.emailSender.lastTokenFor("already-staff@example.com")!;
+
+    await expect(ctx.staffService.acceptInvitation(rawToken, existingMemberUserId)).rejects.toThrow(ConflictError);
+  });
+
   it("removed staff: a removed staff member immediately loses access and their sessions are revoked", async () => {
     const managerUserId = randomUUID();
-    const target = ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: managerUserId, role: "manager" });
+    // AR_MANAGER, not FINANCE_ADMIN — FINANCE_ADMIN now holds manage_staff (a HIGH_RISK_CAPABILITY)
+    // by default, which would require a fresh step-up to remove (see the dedicated step-up test
+    // below); this test is specifically about the low-risk removal path.
+    const target = ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: managerUserId, role: "AR_MANAGER" });
     const session = await ctx.sessions.insert({
       userId: managerUserId,
       sessionTokenHash: "hash-1",
@@ -182,7 +205,7 @@ describe("StaffService", () => {
 
   it("removed staff: removing a staff member who holds a high-risk capability requires a fresh step-up", async () => {
     const anotherOwnerUserId = randomUUID();
-    const target = ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: anotherOwnerUserId, role: "owner" });
+    const target = ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: anotherOwnerUserId, role: "OWNER" });
 
     // No step-up granted for this session — high-risk removal (owner holds manage_staff) must be rejected.
     await expect(
@@ -197,7 +220,7 @@ describe("StaffService", () => {
 
   it("cross-business access: an owner of business A cannot remove or promote staff belonging to business B", async () => {
     const businessBOwnerId = randomUUID();
-    const targetInB = ctx.staffMembers.seed({ businessProfileId: BUSINESS_B, userId: businessBOwnerId, role: "manager" });
+    const targetInB = ctx.staffMembers.seed({ businessProfileId: BUSINESS_B, userId: businessBOwnerId, role: "FINANCE_ADMIN" });
     await grantStepUp(ctx, ownerUserId, "session-1");
 
     await expect(
@@ -215,7 +238,7 @@ describe("StaffService", () => {
         actingUserId: ownerUserId,
         actingSessionId: "session-1",
         targetStaffId: targetInB.id,
-        newRole: "manager",
+        newRole: "FINANCE_ADMIN",
       }),
     ).rejects.toThrow(ForbiddenError);
   });
@@ -232,14 +255,14 @@ describe("StaffService", () => {
       businessProfileId: BUSINESS_A,
       invitedByUserId: ownerUserId,
       email: "New-Hire@Example.com",
-      role: "manager",
+      role: "FINANCE_ADMIN",
     });
     expect(ctx.emailSender.sent).toHaveLength(1);
     const rawToken = ctx.emailSender.lastTokenFor("new-hire@example.com");
     expect(rawToken).toBeDefined();
 
     const member = await ctx.staffService.acceptInvitation(rawToken!, acceptingUserId);
-    expect(member.role).toBe("manager");
+    expect(member.role).toBe("FINANCE_ADMIN");
     expect(member.businessProfileId).toBe(BUSINESS_A);
     void invitation;
   });
@@ -259,7 +282,7 @@ describe("StaffService", () => {
         businessProfileId: BUSINESS_A,
         invitedByUserId: ownerUserId,
         email: "boomerang@example.com",
-        role: "manager",
+        role: "AR_MANAGER", // not FINANCE_ADMIN — removed below without a step-up grant; see the other test's own comment on why.
       });
       const firstToken = ctx.emailSender.lastTokenFor("boomerang@example.com")!;
       const firstMember = await ctx.staffService.acceptInvitation(firstToken, formerStaffUserId);
@@ -279,13 +302,13 @@ describe("StaffService", () => {
         businessProfileId: BUSINESS_A,
         invitedByUserId: ownerUserId,
         email: "boomerang@example.com",
-        role: "receivables_staff",
+        role: "AR_MANAGER",
       });
       const secondToken = ctx.emailSender.lastTokenFor("boomerang@example.com")!;
       const secondMember = await ctx.staffService.acceptInvitation(secondToken, formerStaffUserId);
 
       expect(secondMember.id).not.toBe(firstMember.id);
-      expect(secondMember.role).toBe("receivables_staff");
+      expect(secondMember.role).toBe("AR_MANAGER");
       await expect(ctx.staffService.requireActiveStaff(BUSINESS_A, formerStaffUserId)).resolves.toMatchObject({
         id: secondMember.id,
       });
@@ -300,7 +323,7 @@ describe("StaffService", () => {
       businessProfileId: BUSINESS_A,
       invitedByUserId: ownerUserId,
       email: "invitee@example.com",
-      role: "manager",
+      role: "FINANCE_ADMIN",
     });
     const rawToken = ctx.emailSender.lastTokenFor("invitee@example.com")!;
 
@@ -315,7 +338,7 @@ describe("StaffService", () => {
       businessProfileId: BUSINESS_A,
       invitedByUserId: ownerUserId,
       email: "late@example.com",
-      role: "manager",
+      role: "FINANCE_ADMIN",
     });
     const rawToken = ctx.emailSender.lastTokenFor("late@example.com")!;
     // Force expiry directly, rather than waiting out the real 7-day TTL.
@@ -330,14 +353,14 @@ describe("StaffService", () => {
       businessProfileId: BUSINESS_A,
       invitedByUserId: ownerUserId,
       email: "dup@example.com",
-      role: "manager",
+      role: "FINANCE_ADMIN",
     });
     await expect(
       ctx.staffService.inviteStaff({
         businessProfileId: BUSINESS_A,
         invitedByUserId: ownerUserId,
         email: "dup@example.com",
-        role: "manager",
+        role: "FINANCE_ADMIN",
       }),
     ).rejects.toThrow(ConflictError);
   });

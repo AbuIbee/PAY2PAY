@@ -847,3 +847,23 @@ export const cardTransactionEventTypeEnum = pgEnum("card_transaction_event_type"
  * own postings, mirroring `refund_correction`'s identical precedent.
  */
 export const payoutAttemptStatusEnum = pgEnum("payout_attempt_status", ["pending", "confirmed", "failed", "returned"]);
+
+/**
+ * "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE" (2026-10-02): the closed set
+ * of roles a `business_staff_member` may hold within a `business_profile` ("Organization," in this
+ * architecture's own vocabulary — the underlying table is deliberately NOT renamed; see that
+ * table's own doc comment in identity.ts for why). Replaces the prior free-text `role` column's ad
+ * hoc `owner | manager | receivables_staff | accountant_viewer | custom` vocabulary. "custom" is
+ * deliberately NOT carried forward — arbitrary custom roles are an explicit deferral for this phase
+ * (`custom_role`/`custom_role_id` remain in the schema, untouched and unreferenced by new code, in
+ * case a future phase revisits them). Authorization must always resolve through
+ * `(user_id, business_profile_id) -> this role -> a centralized permission policy` — never a bare
+ * role-string comparison scattered through the application (see src/lib/organizations/authorization.ts).
+ */
+export const organizationRoleEnum = pgEnum("organization_role", [
+  "OWNER",
+  "FINANCE_ADMIN",
+  "AR_MANAGER",
+  "AR_AGENT",
+  "VIEWER",
+]);

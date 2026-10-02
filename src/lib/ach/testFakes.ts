@@ -33,6 +33,7 @@ export function seedAgreementForMandateTest(
     country: "US",
     currentVersionId: null,
     relationshipId: null,
+    organizationId: null,
     createdByUserId: creditor.profileId,
     createdAt: new Date(),
     closedAt: null,

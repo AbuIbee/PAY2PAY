@@ -38,3 +38,4 @@ export * from "./riskSignal";
 export * from "./agreementPartySnapshot";
 export * from "./preferredEmailVerification";
 export * from "./payoutAttempt";
+export * from "./businessReceivables";

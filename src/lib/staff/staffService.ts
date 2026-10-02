@@ -102,7 +102,7 @@ export interface StaffServiceOptions {
 }
 
 const DEFAULT_INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const ASSIGNABLE_ROLES: readonly StaffRole[] = ["owner", "manager", "receivables_staff", "accountant_viewer", "custom"];
+const ASSIGNABLE_ROLES: readonly StaffRole[] = ["OWNER", "FINANCE_ADMIN", "AR_MANAGER", "AR_AGENT", "VIEWER"];
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -130,17 +130,13 @@ export class StaffService {
 
   /**
    * The single seam every capability-gated action in this service (and
-   * approvalService.ts) goes through. "owner" always has every capability;
-   * a custom role's capabilities come only from its own custom_role row
-   * (never a default set); every other role uses DEFAULT_ROLE_CAPABILITIES.
+   * approvalService.ts) goes through. "OWNER" always has every capability;
+   * every other role uses DEFAULT_ROLE_CAPABILITIES. Custom roles are
+   * deferred (see capabilities.ts's own doc comment) — a legacy
+   * `customRoleId` on a row is never consulted for authorization.
    */
   async hasCapability(member: BusinessStaffMemberRecord, capability: Capability): Promise<boolean> {
-    if (member.role === "owner") return true;
-    if (member.role === "custom") {
-      if (!member.customRoleId) return false;
-      const role = await this.customRoles.findById(member.customRoleId);
-      return role ? role.permissions.includes(capability) : false;
-    }
+    if (member.role === "OWNER") return true;
     return DEFAULT_ROLE_CAPABILITIES[member.role].includes(capability);
   }
 
@@ -197,7 +193,7 @@ export class StaffService {
     customRoleId?: string | null;
   }): Promise<StaffInvitationRecord> {
     const actor = await this.requireCapability(input.businessProfileId, input.invitedByUserId, "send_invitation");
-    await this.assertAssignableRole(input.businessProfileId, actor, input.role, input.customRoleId ?? null);
+    await this.assertAssignableRole(actor, input.role);
 
     const email = normalizeEmail(input.email);
     const existingPending = await this.invitations.findPendingByBusinessAndEmail(input.businessProfileId, email);
@@ -211,7 +207,7 @@ export class StaffService {
       businessProfileId: input.businessProfileId,
       email,
       role: input.role,
-      customRoleId: input.role === "custom" ? (input.customRoleId ?? null) : null,
+      customRoleId: null, // custom roles are deferred — see capabilities.ts's own doc comment.
       invitedByUserId: input.invitedByUserId,
       tokenHash: hashOpaqueToken(rawToken),
       expiresAt,
@@ -325,7 +321,7 @@ export class StaffService {
     if (target.userId === input.actingUserId) {
       throw new ForbiddenError("You cannot change your own role.");
     }
-    await this.assertAssignableRole(input.businessProfileId, actor, input.newRole, input.newCustomRoleId ?? null);
+    await this.assertAssignableRole(actor, input.newRole);
 
     const stepUpOk = await this.mfa.requireStepUp({
       userId: input.actingUserId,
@@ -336,8 +332,8 @@ export class StaffService {
       throw new StepUpRequiredError("Step-up verification is required to change a staff member's role.");
     }
 
-    const newCustomRoleId = input.newRole === "custom" ? (input.newCustomRoleId ?? null) : null;
-    await this.staffMembers.updateRole(target.id, { role: input.newRole, customRoleId: newCustomRoleId });
+    // Custom roles are deferred (see capabilities.ts's own doc comment) — never set going forward.
+    await this.staffMembers.updateRole(target.id, { role: input.newRole, customRoleId: null });
     await this.recordAudit(input.businessProfileId, input.actingUserId, "staff_role_updated", "step_up", {
       targetStaffId: target.id,
       previousRole: target.role,
@@ -436,28 +432,17 @@ export class StaffService {
   }
 
   /**
-   * Only an existing owner may grant the "owner" role — the privilege-
-   * escalation guard. "custom" requires a customRoleId that itself belongs
-   * to this business (cross-business guard reused for custom roles too).
+   * Only an existing OWNER may grant the OWNER role — the privilege-
+   * escalation guard (TEST requirement: AR_AGENT/VIEWER privilege escalation
+   * must fail). Custom roles are deferred (see capabilities.ts's own doc
+   * comment) — no custom-role-ownership branch exists anymore.
    */
-  private async assertAssignableRole(
-    businessProfileId: string,
-    actor: BusinessStaffMemberRecord,
-    role: StaffRole,
-    customRoleId: string | null,
-  ): Promise<void> {
+  private async assertAssignableRole(actor: BusinessStaffMemberRecord, role: StaffRole): Promise<void> {
     if (!ASSIGNABLE_ROLES.includes(role)) {
       throw new ValidationError(`"${role}" is not a recognized staff role.`);
     }
-    if (role === "owner" && actor.role !== "owner") {
+    if (role === "OWNER" && actor.role !== "OWNER") {
       throw new ForbiddenError("Only an existing owner can grant the owner role.");
-    }
-    if (role === "custom") {
-      if (!customRoleId) throw new ValidationError("A custom role must be specified for the \"custom\" role.");
-      const customRole = await this.customRoles.findById(customRoleId);
-      if (!customRole || customRole.businessProfileId !== businessProfileId) {
-        throw new ForbiddenError("This custom role does not belong to this business.");
-      }
     }
   }
 

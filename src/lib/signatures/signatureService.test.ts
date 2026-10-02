@@ -354,7 +354,7 @@ describe("SignatureService", () => {
       ctx.agreementCtx.staffCtx.staffMembers.seed({
         businessProfileId: setup.businessId,
         userId: staffUserId,
-        role: "manager",
+        role: "FINANCE_ADMIN",
         isAuthorizedRepresentative: false,
       });
       const sessionId = randomUUID();
@@ -382,7 +382,7 @@ describe("SignatureService", () => {
       ctx.agreementCtx.staffCtx.staffMembers.seed({
         businessProfileId: setup.businessId,
         userId: staffUserId,
-        role: "manager",
+        role: "FINANCE_ADMIN",
         isAuthorizedRepresentative: true,
       });
       const sessionId = randomUUID();
@@ -401,7 +401,7 @@ describe("SignatureService", () => {
         ipAddress: "203.0.113.10",
       });
       expect(result.signatureEvent.signingAuthority).toBe("authorized_representative");
-      expect(result.signatureEvent.signerTitle).toBe("manager");
+      expect(result.signatureEvent.signerTitle).toBe("FINANCE_ADMIN");
     });
   });
 

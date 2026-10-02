@@ -30,6 +30,7 @@ function toRecord(row: Row): AgreementRecord {
     country: row.country,
     currentVersionId: row.currentVersionId,
     relationshipId: row.relationshipId,
+    organizationId: row.organizationId,
     createdByUserId: row.createdByUserId,
     createdAt: row.createdAt,
     closedAt: row.closedAt,
@@ -64,9 +65,10 @@ export class DrizzleAgreementRepository implements AgreementRepository {
     debtorProfileId: string;
     currency: string;
     createdByUserId: string;
+    organizationId?: string | null;
   }): Promise<AgreementRecord> {
     const db = this.db;
-    const [row] = await db.insert(agreement).values(input).returning();
+    const [row] = await db.insert(agreement).values({ ...input, organizationId: input.organizationId ?? null }).returning();
     if (!row) throw new ConfigurationError("agreement insert returned no row");
     return toRecord(row);
   }
@@ -74,6 +76,18 @@ export class DrizzleAgreementRepository implements AgreementRepository {
   async findById(id: string): Promise<AgreementRecord | null> {
     const db = this.db;
     const rows = await db.select().from(agreement).where(eq(agreement.id, id)).limit(1);
+    const row = rows[0];
+    return row ? toRecord(row) : null;
+  }
+
+  /** Phase 8: tenant-scoped by construction — see AgreementRepository.findOrganizationAgreement's own doc comment. */
+  async findOrganizationAgreement(organizationId: string, agreementId: string): Promise<AgreementRecord | null> {
+    const db = this.db;
+    const rows = await db
+      .select()
+      .from(agreement)
+      .where(and(eq(agreement.id, agreementId), eq(agreement.organizationId, organizationId)))
+      .limit(1);
     const row = rows[0];
     return row ? toRecord(row) : null;
   }

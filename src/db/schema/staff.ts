@@ -10,7 +10,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { approvalRequestStatusEnum, staffInvitationStatusEnum } from "./enums";
+import { approvalRequestStatusEnum, organizationRoleEnum, staffInvitationStatusEnum } from "./enums";
 import { businessProfile, businessStaffMember, customRole, userAccount } from "./identity";
 
 /**
@@ -38,7 +38,7 @@ export const businessStaffInvitation = pgTable(
     // Normalization (lowercasing) is the caller's responsibility, matching
     // user_account.email's convention (see identity.ts's doc comment).
     email: text("email").notNull(),
-    role: text("role").notNull(), // owner | manager | receivables_staff | accountant_viewer | custom
+    role: organizationRoleEnum("role").notNull(), // OWNER | FINANCE_ADMIN | AR_MANAGER | AR_AGENT | VIEWER
     customRoleId: uuid("custom_role_id").references(() => customRole.id),
     invitedByUserId: uuid("invited_by_user_id")
       .notNull()

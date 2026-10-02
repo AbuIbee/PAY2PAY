@@ -73,6 +73,7 @@ export class InMemoryAgreementRepository implements AgreementRepository {
     debtorProfileId: string;
     currency: string;
     createdByUserId: string;
+    organizationId?: string | null;
   }): Promise<AgreementRecord> {
     const record: AgreementRecord = {
       id: randomUUID(),
@@ -82,6 +83,7 @@ export class InMemoryAgreementRepository implements AgreementRepository {
       relationshipId: null,
       createdAt: new Date(),
       closedAt: null,
+      organizationId: null,
       ...input,
     };
     this.byId.set(record.id, record);
@@ -90,6 +92,13 @@ export class InMemoryAgreementRepository implements AgreementRepository {
 
   async findById(id: string): Promise<AgreementRecord | null> {
     return this.byId.get(id) ?? null;
+  }
+
+  /** Phase 8: mirrors DrizzleAgreementRepository.findOrganizationAgreement's tenant-scoped contract. */
+  async findOrganizationAgreement(organizationId: string, agreementId: string): Promise<AgreementRecord | null> {
+    const record = this.byId.get(agreementId);
+    if (!record || record.organizationId !== organizationId) return null;
+    return record;
   }
 
   async updateStatus(id: string, status: AgreementStatus): Promise<void> {

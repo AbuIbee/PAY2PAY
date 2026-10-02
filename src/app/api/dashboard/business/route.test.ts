@@ -126,7 +126,7 @@ describe("GET /api/dashboard/business", () => {
     await agreementCtx.staffCtx.staffMembers.insert({
       businessProfileId: business.id,
       userId: "some-other-staff-user",
-      role: "manager",
+      role: "FINANCE_ADMIN",
       customRoleId: null,
       isAuthorizedRepresentative: false,
     });

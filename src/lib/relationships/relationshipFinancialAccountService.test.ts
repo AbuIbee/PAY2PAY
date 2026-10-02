@@ -170,7 +170,7 @@ describe("RelationshipFinancialAccountService", () => {
       ).rejects.toThrow(ForbiddenError);
     });
 
-    it("requires the change_payout_configuration capability for a business account, and rejects a manager who lacks it (default role set does not include it)", async () => {
+    it("requires the change_payout_configuration capability for a business account, and rejects an AR_MANAGER who lacks it (default role set does not include it); a FINANCE_ADMIN (who has it by default) succeeds", async () => {
       const ownerUserId = randomUUID();
       const businessId = randomUUID();
       const managerUserId = randomUUID();
@@ -178,7 +178,7 @@ describe("RelationshipFinancialAccountService", () => {
       await ctx.staffCtx.staffMembers.insert({
         businessProfileId: businessId,
         userId: managerUserId,
-        role: "manager",
+        role: "AR_MANAGER",
         customRoleId: null,
         isAuthorizedRepresentative: false,
       });
@@ -194,18 +194,15 @@ describe("RelationshipFinancialAccountService", () => {
         }),
       ).rejects.toThrow(ForbiddenError);
 
-      // A custom role explicitly granted the capability succeeds.
+      // FINANCE_ADMIN has change_payout_configuration by default (custom-role assignment is
+      // deferred — see capabilities.ts's own doc comment — so this replaces the former
+      // custom-role-grant demonstration with the real role that now covers this capability).
       const grantedUserId = randomUUID();
-      const customRole = await ctx.staffCtx.customRoles.insert({
-        businessProfileId: businessId,
-        name: "Treasury",
-        permissions: ["change_payout_configuration"],
-      });
       await ctx.staffCtx.staffMembers.insert({
         businessProfileId: businessId,
         userId: grantedUserId,
-        role: "custom",
-        customRoleId: customRole.id,
+        role: "FINANCE_ADMIN",
+        customRoleId: null,
         isAuthorizedRepresentative: false,
       });
       const account = await ctx.relationshipFinancialAccountService.addAccount({

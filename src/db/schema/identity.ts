@@ -9,7 +9,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { accountClassificationEnum, businessProfileStatusEnum, platformRoleEnum } from "./enums";
+import { accountClassificationEnum, businessProfileStatusEnum, organizationRoleEnum, platformRoleEnum } from "./enums";
 
 /**
  * Phase 0 identity/profile tables only — the exact set
@@ -113,6 +113,16 @@ export const personalProfile = pgTable("personal_profile", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }).enableRLS();
 
+/**
+ * "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE" (2026-10-02): this table IS
+ * the "Organization" in the new architecture's vocabulary — adapted in place rather than duplicated
+ * into a parallel `organizations` table (Phase 0 inventory found this table, `business_staff_member`,
+ * and the `subscription`/`pricing_plan` pair already model the required shape almost exactly; see
+ * that Phase 0 report for the full reasoning). `slug`/`updatedAt` are the only new columns this
+ * architecture adds here. `entityType` already serves as the architecture's "business_type";
+ * `status` already serves its required purpose; no `kyb_status` column is added, since no KYB
+ * subsystem exists anywhere in this codebase yet to populate one meaningfully.
+ */
 export const businessProfile = pgTable(
   "business_profile",
   {
@@ -143,7 +153,14 @@ export const businessProfile = pgTable(
     // stored column here either; it's derived via
     // src/lib/profiles/verificationService.ts.
     currency: text("currency").notNull().default("USD"),
+    // B2B Organization architecture: a stable, URL-safe workspace identifier (e.g. for a future
+    // /business/[slug] route segment). Nullable — existing rows (today: none; going forward: any
+    // profile created before a slug-generation step lands) have no slug until backfilled; uniqueness
+    // is enforced only among non-null values (see the partial unique index below), exactly mirroring
+    // this schema's own established "unique among the non-null/active subset" pattern elsewhere.
+    slug: text("slug"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     // Soft uniqueness guard (not a legal EIN constraint) — see docs/DATA_MODEL.md §4.
@@ -151,6 +168,7 @@ export const businessProfile = pgTable(
       table.ownerUserId,
       table.legalBusinessName,
     ),
+    uniqueIndex("business_profile_slug_unique").on(table.slug).where(sql`${table.slug} IS NOT NULL`),
   ],
 ).enableRLS();
 
@@ -165,6 +183,13 @@ export const customRole = pgTable("custom_role", {
   permissions: jsonb("permissions").notNull(),
 }).enableRLS();
 
+/**
+ * "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE" (2026-10-02): this table IS
+ * the "Organization Membership" in the new architecture's vocabulary (see businessProfile's own doc
+ * comment above). `role` is converted from free text to the closed `organizationRoleEnum` —
+ * verified read-only against the real target database before this change: zero existing rows in
+ * this table anywhere, so there was no live value to remap or risk misclassifying.
+ */
 export const businessStaffMember = pgTable(
   "business_staff_member",
   {
@@ -176,7 +201,7 @@ export const businessStaffMember = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => userAccount.id),
-    role: text("role").notNull(), // owner | manager | receivables_staff | accountant_viewer | custom
+    role: organizationRoleEnum("role").notNull(), // OWNER | FINANCE_ADMIN | AR_MANAGER | AR_AGENT | VIEWER
     customRoleId: uuid("custom_role_id").references(() => customRole.id),
     // B2B: verified authority to create/negotiate/approve/sign/amend/settle/
     // manage an agreement on the business's behalf (FR-B2B-002).
@@ -186,6 +211,7 @@ export const businessStaffMember = pgTable(
     // Non-destructive removal (FR-STAFF-005); NULL = active.
     removedAt: timestamp("removed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     // PRSprint 03 (docs/prsprints/PRSPRINT_03_DATABASE_INTEGRITY_STATE_MACHINES.md) fix: the

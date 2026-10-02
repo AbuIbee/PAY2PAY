@@ -234,7 +234,7 @@ export class ApprovalService {
     }
 
     const policy = await this.policies.findByBusinessAndCapability(input.businessProfileId, request.actionType);
-    if (policy?.requiresOwner && decider.role !== "owner") {
+    if (policy?.requiresOwner && decider.role !== "OWNER") {
       throw new ForbiddenError("Only an owner may decide this request.");
     }
 

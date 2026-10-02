@@ -139,7 +139,7 @@ describe("PartialPaymentService", () => {
     expect(accepted.status).toBe("awaiting_payment");
   });
 
-  it("unauthorized change blocked: a business-staff creditor without approve_partial_payment cannot decide, but a manager (who has it) can", async () => {
+  it("unauthorized change blocked: a business-staff creditor without approve_partial_payment cannot decide, but a FINANCE_ADMIN (who has it) can", async () => {
     const creditorBusinessId = randomUUID();
     const creditorOwnerId = randomUUID();
     const debtorProfileId = randomUUID();
@@ -148,8 +148,8 @@ describe("PartialPaymentService", () => {
     const creditorManagerUserId = randomUUID();
     ctx.agreementCtx.profileOwners.set("business", creditorBusinessId, creditorOwnerId);
     ctx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtorUserId2);
-    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorViewerUserId, role: "accountant_viewer" });
-    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorManagerUserId, role: "manager" });
+    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorViewerUserId, role: "VIEWER" });
+    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorManagerUserId, role: "FINANCE_ADMIN" });
 
     const b2c = await ctx.agreementCtx.agreementService.createDraft({
       creatorUserId: debtorUserId2,

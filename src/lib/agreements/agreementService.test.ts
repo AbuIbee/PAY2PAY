@@ -124,11 +124,11 @@ describe("AgreementService", () => {
       ctx.profileOwners.set("business", creditorBusinessId, creditorOwnerId);
       ctx.profileOwners.set("business", debtorBusinessId, debtorOwnerId);
       // Staff members, not the owners — exercises StaffService.requireCapability directly.
-      ctx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorStaffUserId, role: "manager" });
-      ctx.staffCtx.staffMembers.seed({ businessProfileId: debtorBusinessId, userId: debtorStaffUserId, role: "receivables_staff" });
+      ctx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorStaffUserId, role: "FINANCE_ADMIN" });
+      ctx.staffCtx.staffMembers.seed({ businessProfileId: debtorBusinessId, userId: debtorStaffUserId, role: "AR_AGENT" });
 
       const created = await ctx.agreementService.createDraft({
-        creatorUserId: creditorStaffUserId, // manager has create_agreement
+        creatorUserId: creditorStaffUserId, // FINANCE_ADMIN has create_agreement
         creditor: { kind: "business", id: creditorBusinessId },
         debtor: { kind: "business", id: debtorBusinessId },
         ...baseTerms(),
@@ -139,9 +139,9 @@ describe("AgreementService", () => {
       // Debtor-side acknowledgment has no dedicated capability — any active staff member may do it.
       await ctx.agreementService.acknowledgeDebt(created.agreement.id, debtorStaffUserId);
 
-      // A viewer-role staff member lacks approve_agreement.
+      // A VIEWER-role staff member lacks approve_agreement (VIEWER holds no capability at all).
       const debtorViewerUserId = randomUUID();
-      ctx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: debtorViewerUserId, role: "accountant_viewer" });
+      ctx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: debtorViewerUserId, role: "VIEWER" });
       await expect(
         ctx.agreementService.creditorDecide({
           agreementId: created.agreement.id,
@@ -150,8 +150,8 @@ describe("AgreementService", () => {
         }),
       ).rejects.toThrow(ForbiddenError);
 
-      // The manager who created the draft (create_agreement) also holds approve_agreement by
-      // default — a manager is trusted for both, so this succeeds directly rather than falling
+      // FINANCE_ADMIN, who created the draft (create_agreement), also holds approve_agreement by
+      // default — FINANCE_ADMIN is trusted for both, so this succeeds directly rather than falling
       // back to the owner.
       await ctx.agreementService.creditorDecide({
         agreementId: created.agreement.id,

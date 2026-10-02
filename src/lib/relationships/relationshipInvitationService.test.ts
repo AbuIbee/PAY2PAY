@@ -147,12 +147,12 @@ describe("RelationshipInvitationService", () => {
       await ctx.staffCtx.staffMembers.insert({
         businessProfileId: businessId,
         userId: managerUserId,
-        role: "manager",
+        role: "FINANCE_ADMIN",
         customRoleId: null,
         isAuthorizedRepresentative: false,
       });
 
-      // "manager" has send_invitation by default — succeeds.
+      // "FINANCE_ADMIN" has send_invitation by default — succeeds.
       const { relationship } = await ctx.relationshipInvitationService.createInvitation({
         actingUserId: managerUserId,
         actingParty: { kind: "business", id: businessId },
@@ -161,12 +161,12 @@ describe("RelationshipInvitationService", () => {
       });
       expect(relationship.status).toBe("invited");
 
-      // accountant_viewer lacks send_invitation — rejected.
+      // VIEWER lacks send_invitation (and every other capability) — rejected.
       const viewerUserId = randomUUID();
       await ctx.staffCtx.staffMembers.insert({
         businessProfileId: businessId,
         userId: viewerUserId,
-        role: "accountant_viewer",
+        role: "VIEWER",
         customRoleId: null,
         isAuthorizedRepresentative: false,
       });

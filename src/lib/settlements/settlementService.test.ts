@@ -287,7 +287,7 @@ describe("SettlementService", () => {
     });
   });
 
-  it("unauthorized change blocked: a business-staff creditor without approve_settlement cannot decide, but a manager needs it granted explicitly (not a default manager capability)", async () => {
+  it("unauthorized change blocked: a business-staff creditor without approve_settlement cannot decide, but an AR_MANAGER needs it granted explicitly (not a default AR_MANAGER capability)", async () => {
     const creditorBusinessId = randomUUID();
     const creditorOwnerId = randomUUID();
     const debtorProfileId = randomUUID();
@@ -295,7 +295,7 @@ describe("SettlementService", () => {
     const creditorViewerUserId = randomUUID();
     ctx.agreementCtx.profileOwners.set("business", creditorBusinessId, creditorOwnerId);
     ctx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtorUserId2);
-    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorViewerUserId, role: "accountant_viewer" });
+    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorViewerUserId, role: "VIEWER" });
 
     const b2c = await ctx.agreementCtx.agreementService.createDraft({
       creatorUserId: debtorUserId2,
@@ -334,9 +334,9 @@ describe("SettlementService", () => {
     const creditorManagerUserId = randomUUID();
     ctx.agreementCtx.profileOwners.set("business", creditorBusinessId, creditorOwnerId);
     ctx.agreementCtx.profileOwners.set("personal", debtorProfileId, debtorUserId2);
-    // approve_settlement is a HIGH_RISK_CAPABILITY, not in a manager's default set (unlike
-    // approve_agreement/approve_partial_payment) — a manager needs it granted explicitly.
-    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorManagerUserId, role: "manager" });
+    // approve_settlement is a HIGH_RISK_CAPABILITY, not in AR_MANAGER's default set (unlike
+    // FINANCE_ADMIN, which does have it by default) — an AR_MANAGER needs it granted explicitly.
+    ctx.agreementCtx.staffCtx.staffMembers.seed({ businessProfileId: creditorBusinessId, userId: creditorManagerUserId, role: "AR_MANAGER" });
 
     const b2c = await ctx.agreementCtx.agreementService.createDraft({
       creatorUserId: debtorUserId2,

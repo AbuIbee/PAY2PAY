@@ -9,14 +9,14 @@ import { StepUpChallenge } from "@/components/StepUpChallenge";
 import { useStepUpGuardedAction } from "@/lib/ui/useStepUpGuardedAction";
 
 const ROLE_LABEL: Record<string, string> = {
-  owner: "Owner",
-  manager: "Manager",
-  receivables_staff: "Receivables staff",
-  accountant_viewer: "Accountant / Viewer",
-  custom: "Custom role",
+  OWNER: "Owner",
+  FINANCE_ADMIN: "Finance Administrator",
+  AR_MANAGER: "AR Manager",
+  AR_AGENT: "AR Agent",
+  VIEWER: "Viewer",
 };
 
-const ASSIGNABLE_ROLES = ["owner", "manager", "receivables_staff", "accountant_viewer", "custom"] as const;
+const ASSIGNABLE_ROLES = ["OWNER", "FINANCE_ADMIN", "AR_MANAGER", "AR_AGENT", "VIEWER"] as const;
 
 interface StaffMember {
   id: string;
@@ -42,14 +42,16 @@ function memberLabel(member: Pick<StaffMember, "name" | "email">): string {
   return member.name ?? member.email ?? "Member";
 }
 
-/** Mirrors StaffService.hasCapability exactly (owner -> always; custom -> own role's permissions; else -> DEFAULT_ROLE_CAPABILITIES) — this is presentation-only, every mutating route independently re-checks server-side. */
-function hasCapability(member: StaffMember | undefined, customRoles: CustomRole[], capability: string): boolean {
+/**
+ * Mirrors StaffService.hasCapability exactly (OWNER -> always; else -> DEFAULT_ROLE_CAPABILITIES)
+ * — this is presentation-only, every mutating route independently re-checks server-side. Custom
+ * roles are deferred (see capabilities.ts's own doc comment); `customRoles` is accepted only so
+ * callers that still pass it (and any legacy row with a stale customRoleId) don't need updating,
+ * but it is never consulted for authorization anymore.
+ */
+function hasCapability(member: StaffMember | undefined, _customRoles: CustomRole[], capability: string): boolean {
   if (!member) return false;
-  if (member.role === "owner") return true;
-  if (member.role === "custom") {
-    const role = customRoles.find((r) => r.id === member.customRoleId);
-    return role ? role.permissions.includes(capability) : false;
-  }
+  if (member.role === "OWNER") return true;
   return (DEFAULT_ROLE_CAPABILITIES[member.role] as readonly string[]).includes(capability);
 }
 
@@ -121,9 +123,6 @@ export function OrganizationStaff() {
   }
 
   function roleLabel(member: StaffMember): string {
-    if (member.role === "custom" && member.customRoleId) {
-      return customRoles.find((r) => r.id === member.customRoleId)?.name ?? "Custom role";
-    }
     return ROLE_LABEL[member.role] ?? member.role;
   }
 
@@ -197,7 +196,6 @@ export function OrganizationStaff() {
 
 function InviteStaffCard({
   businessProfileId,
-  customRoles,
   onDone,
   onCancel,
 }: {
@@ -207,8 +205,7 @@ function InviteStaffCard({
   onCancel: () => void;
 }) {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<(typeof ASSIGNABLE_ROLES)[number]>("manager");
-  const [customRoleId, setCustomRoleId] = useState("");
+  const [role, setRole] = useState<(typeof ASSIGNABLE_ROLES)[number]>("FINANCE_ADMIN");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -219,12 +216,7 @@ function InviteStaffCard({
     try {
       await apiFetch("/api/staff/invite", {
         method: "POST",
-        body: JSON.stringify({
-          businessProfileId,
-          email,
-          role,
-          ...(role === "custom" && customRoleId ? { customRoleId } : {}),
-        }),
+        body: JSON.stringify({ businessProfileId, email, role }),
       });
       onDone();
     } catch {
@@ -252,17 +244,6 @@ function InviteStaffCard({
             ))}
           </select>
         </div>
-        {role === "custom" && (
-          <div className="field">
-            <label htmlFor="invite-custom-role">Custom role</label>
-            <select id="invite-custom-role" required value={customRoleId} onChange={(event) => setCustomRoleId(event.target.value)}>
-              <option value="">Select a custom role…</option>
-              {customRoles.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
         {errorMessage && <p className="field-error" role="alert">{errorMessage}</p>}
         <div style={{ display: "flex", gap: "0.75rem" }}>
           <button type="button" className="button button--ghost" onClick={onCancel}>Cancel</button>
@@ -292,7 +273,6 @@ function StaffMemberRow({
   member,
   isSelf,
   canManage,
-  customRoles,
   businessProfileId,
   roleLabel,
   onChanged,
@@ -307,20 +287,14 @@ function StaffMemberRow({
 }) {
   const [editingRole, setEditingRole] = useState(false);
   const [newRole, setNewRole] = useState<(typeof ASSIGNABLE_ROLES)[number]>(
-    ASSIGNABLE_ROLES.includes(member.role as (typeof ASSIGNABLE_ROLES)[number]) ? (member.role as (typeof ASSIGNABLE_ROLES)[number]) : "manager",
+    ASSIGNABLE_ROLES.includes(member.role as (typeof ASSIGNABLE_ROLES)[number]) ? (member.role as (typeof ASSIGNABLE_ROLES)[number]) : "FINANCE_ADMIN",
   );
-  const [newCustomRoleId, setNewCustomRoleId] = useState(member.customRoleId ?? "");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const roleChange = useStepUpGuardedAction(async () => {
     return apiFetch("/api/staff/role", {
       method: "POST",
-      body: JSON.stringify({
-        businessProfileId,
-        targetStaffId: member.id,
-        newRole,
-        ...(newRole === "custom" && newCustomRoleId ? { newCustomRoleId } : {}),
-      }),
+      body: JSON.stringify({ businessProfileId, targetStaffId: member.id, newRole }),
     });
   });
 
@@ -371,18 +345,6 @@ function StaffMemberRow({
                 <option key={r} value={r}>{ROLE_LABEL[r]}</option>
               ))}
             </select>
-            {newRole === "custom" && (
-              <select
-                aria-label="Custom role"
-                value={newCustomRoleId}
-                onChange={(event) => setNewCustomRoleId(event.target.value)}
-              >
-                <option value="">Select a custom role…</option>
-                {customRoles.map((r) => (
-                  <option key={r.id} value={r.id}>{r.name}</option>
-                ))}
-              </select>
-            )}
           </div>
         ) : (
           roleLabel(member)
@@ -398,12 +360,7 @@ function StaffMemberRow({
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
               {editingRole ? (
                 <>
-                  <button
-                    type="button"
-                    className="button button--primary"
-                    onClick={() => void handleSaveRole()}
-                    disabled={newRole === "custom" && !newCustomRoleId}
-                  >
+                  <button type="button" className="button button--primary" onClick={() => void handleSaveRole()}>
                     Save role
                   </button>
                   <button type="button" className="button button--ghost" onClick={() => setEditingRole(false)}>
