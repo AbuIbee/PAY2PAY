@@ -30,6 +30,21 @@ export class InMemoryPricingPlanRepository implements PricingPlanRepository {
     return record;
   }
 
+  async insert(input: {
+    kind: PricingPlanKind;
+    code: string;
+    name: string;
+    monthlyFeeMinorUnits: number | null;
+    annualFeeMinorUnits: number | null;
+    perAgreementFeeMinorUnits: number | null;
+    perSuccessfulPaymentFeeMinorUnits: number | null;
+    freeAgreementAllowance: number | null;
+    freeIncludedPaymentsAllowance: number | null;
+    isActive: boolean;
+  }): Promise<PricingPlanRecord> {
+    return this.seed(input);
+  }
+
   async findById(id: string): Promise<PricingPlanRecord | null> {
     return this.byId.get(id) ?? null;
   }
@@ -38,8 +53,11 @@ export class InMemoryPricingPlanRepository implements PricingPlanRepository {
     return [...this.byId.values()].find((p) => p.code === code) ?? null;
   }
 
+  /** Mirrors DrizzlePricingPlanRepository's ascending-price ordering. */
   async listActiveByKind(kind: PricingPlanKind): Promise<PricingPlanRecord[]> {
-    return [...this.byId.values()].filter((p) => p.kind === kind && p.isActive);
+    return [...this.byId.values()]
+      .filter((p) => p.kind === kind && p.isActive)
+      .sort((a, b) => (a.monthlyFeeMinorUnits ?? Infinity) - (b.monthlyFeeMinorUnits ?? Infinity));
   }
 }
 
@@ -56,10 +74,22 @@ export class InMemorySubscriptionRepository implements SubscriptionRepository {
       status: "active",
       startedAt: new Date(),
       endedAt: null,
+      currentPeriodStart: null,
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+      canceledAt: null,
+      providerCustomerReference: null,
+      providerSubscriptionReference: null,
+      negotiatedMonthlyFeeMinorUnits: null,
+      negotiatedNewArrangementsMonthlyLimit: null,
       ...input,
     };
     this.byId.set(record.id, record);
     return record;
+  }
+
+  async findById(id: string): Promise<SubscriptionRecord | null> {
+    return this.byId.get(id) ?? null;
   }
 
   async findActiveByProfile(profileKind: ProfileKind, profileId: string): Promise<SubscriptionRecord | null> {
@@ -70,12 +100,59 @@ export class InMemorySubscriptionRepository implements SubscriptionRepository {
     );
   }
 
+  async findByProviderSubscriptionReference(providerSubscriptionReference: string): Promise<SubscriptionRecord | null> {
+    return [...this.byId.values()].find((s) => s.providerSubscriptionReference === providerSubscriptionReference) ?? null;
+  }
+
+  async findByProviderCustomerReference(providerCustomerReference: string): Promise<SubscriptionRecord | null> {
+    return [...this.byId.values()].find((s) => s.providerCustomerReference === providerCustomerReference) ?? null;
+  }
+
   async cancel(id: string): Promise<void> {
     const record = this.byId.get(id);
     if (record) {
       record.status = "canceled";
       record.endedAt = new Date();
     }
+  }
+
+  async setProviderReferences(id: string, input: { providerCustomerReference: string | null; providerSubscriptionReference: string | null }): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) Object.assign(record, input);
+  }
+
+  async setBillingPeriod(id: string, input: { currentPeriodStart: Date; currentPeriodEnd: Date }): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) Object.assign(record, input);
+  }
+
+  async requestCancelAtPeriodEnd(id: string): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) {
+      record.cancelAtPeriodEnd = true;
+      record.canceledAt = new Date();
+    }
+  }
+
+  async reactivate(id: string): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) {
+      record.cancelAtPeriodEnd = false;
+      record.canceledAt = null;
+    }
+  }
+
+  async setNegotiatedTerms(
+    id: string,
+    input: { negotiatedMonthlyFeeMinorUnits: number | null; negotiatedNewArrangementsMonthlyLimit: number | null },
+  ): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) Object.assign(record, input);
+  }
+
+  async setPricingPlan(id: string, pricingPlanId: string): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) record.pricingPlanId = pricingPlanId;
   }
 }
 
@@ -99,6 +176,10 @@ export class InMemoryPricingPlanEntitlementRepository implements PricingPlanEnti
     };
     this.byId.set(record.id, record);
     return record;
+  }
+
+  async insert(input: { pricingPlanId: string; featureKey: string; enabled: boolean; limitValue: number | null }): Promise<PricingPlanEntitlementRecord> {
+    return this.seed(input);
   }
 
   async findByPlanAndFeature(pricingPlanId: string, featureKey: string): Promise<PricingPlanEntitlementRecord | null> {

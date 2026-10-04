@@ -85,7 +85,7 @@ describe("getPaymentProvider (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)", () 
     }
   });
 
-  describe("PAID2YOU — B0-D ADYEN PHASE 1", () => {
+  describe("PAID2YOU OWNER DIRECTIVE (2026-10-03) — ADYEN RETIRED", () => {
     const ADYEN_CONFIG: Record<string, string> = {
       PAYMENT_PROVIDER: "adyen",
       ADYEN_API_KEY: "test-key",
@@ -98,51 +98,20 @@ describe("getPaymentProvider (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)", () 
       for (const key of Object.keys(ADYEN_CONFIG)) delete process.env[key];
     });
 
-    it("PAYMENT_PROVIDER=adyen + full valid config -> constructs a real AdyenPaymentProvider", async () => {
-      setEnv(ADYEN_CONFIG);
-      const { getPaymentProvider } = await import("./getPaymentProvider");
-      const { AdyenPaymentProvider } = await import("./adyenPaymentProvider");
-      const provider = getPaymentProvider();
-      expect(provider).toBeInstanceOf(AdyenPaymentProvider);
-      expect(provider.providerName).toBe("adyen");
-      expect(provider.providerEnvironment).toBe("production");
-    });
-
-    it("PAYMENT_PROVIDER=adyen + missing ADYEN_API_KEY -> fails closed with ConfigurationError, not a silent construction", async () => {
-      setEnv({ ...ADYEN_CONFIG, ADYEN_API_KEY: undefined });
-      const { getPaymentProvider } = await import("./getPaymentProvider");
-      const { ConfigurationError } = await import("@/lib/errors");
-      expect(() => getPaymentProvider()).toThrow(ConfigurationError);
-    });
-
-    it("PAYMENT_PROVIDER=adyen + missing ADYEN_MERCHANT_ACCOUNT -> fails closed with ConfigurationError", async () => {
-      setEnv({ ...ADYEN_CONFIG, ADYEN_MERCHANT_ACCOUNT: undefined });
-      const { getPaymentProvider } = await import("./getPaymentProvider");
-      const { ConfigurationError } = await import("@/lib/errors");
-      expect(() => getPaymentProvider()).toThrow(ConfigurationError);
-    });
-
-    it("PAYMENT_PROVIDER=adyen + missing ADYEN_LIVE_PREFIX -> fails closed with ConfigurationError", async () => {
-      setEnv({ ...ADYEN_CONFIG, ADYEN_LIVE_PREFIX: undefined });
-      const { getPaymentProvider } = await import("./getPaymentProvider");
-      const { ConfigurationError } = await import("@/lib/errors");
-      expect(() => getPaymentProvider()).toThrow(ConfigurationError);
-    });
-
-    it("PAYMENT_PROVIDER=adyen + missing ADYEN_PAYMENTS_HMAC_KEY -> fails closed with ConfigurationError", async () => {
-      setEnv({ ...ADYEN_CONFIG, ADYEN_PAYMENTS_HMAC_KEY: undefined });
-      const { getPaymentProvider } = await import("./getPaymentProvider");
-      const { ConfigurationError } = await import("@/lib/errors");
-      expect(() => getPaymentProvider()).toThrow(ConfigurationError);
-    });
-
-    it("PAYMENT_PROVIDER=adyen outside a genuine production deployment -> ConfigurationError (a real, registered provider misplaced across environments), never silently constructed", async () => {
-      for (const appEnv of ["development", "test", "staging"]) {
+    it("PAYMENT_PROVIDER=adyen + otherwise-full, valid-looking config still fails closed with ProviderNotAvailableError — the registry has no 'adyen' entry, so a real AdyenPaymentProvider can never be constructed, in any environment", async () => {
+      for (const appEnv of ["development", "test", "staging", "production"]) {
         vi.resetModules();
         setEnv({ ...ADYEN_CONFIG, APP_ENV: appEnv });
         const { getPaymentProvider } = await import("./getPaymentProvider");
-        const { ConfigurationError } = await import("@/lib/errors");
-        expect(() => getPaymentProvider()).toThrow(ConfigurationError);
+        const { ProviderNotAvailableError } = await import("@/lib/errors");
+        let thrown: unknown;
+        try {
+          getPaymentProvider();
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(ProviderNotAvailableError);
+        expect((thrown as Error).constructor.name).not.toBe("AdyenPaymentProvider");
       }
     });
   });

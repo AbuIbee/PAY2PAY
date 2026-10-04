@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   jsonb,
   numeric,
   pgTable,
@@ -9,7 +10,15 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { accountClassificationEnum, businessProfileStatusEnum, organizationRoleEnum, platformRoleEnum } from "./enums";
+import {
+  accountClassificationEnum,
+  businessIndustryEnum,
+  businessOnboardingStepEnum,
+  businessProfileStatusEnum,
+  organizationRoleEnum,
+  platformRoleEnum,
+} from "./enums";
+import { organizationRole } from "./organizationRoles";
 
 /**
  * Phase 0 identity/profile tables only — the exact set
@@ -159,6 +168,26 @@ export const businessProfile = pgTable(
     // is enforced only among non-null values (see the partial unique index below), exactly mirroring
     // this schema's own established "unique among the non-null/active subset" pattern elsewhere.
     slug: text("slug"),
+    // "PAID2YOU PLATFORM EXPANSION" (2026-10-02), DB-2/Requirement 3: Business onboarding's required
+    // fields this table didn't already have. All nullable — a business_profile exists (so the user
+    // identity can resume onboarding) before any of these are necessarily filled in. Representative
+    // fields are flat columns, not a sub-table: Requirement 3 asks for exactly one authorized
+    // representative per business, never a list, so there is no "which one" ambiguity a child table
+    // would otherwise resolve.
+    dbaName: text("dba_name"),
+    industry: businessIndustryEnum("industry"),
+    formationJurisdiction: text("formation_jurisdiction"),
+    businessEmail: text("business_email"),
+    website: text("website"),
+    representativeFirstName: text("representative_first_name"),
+    representativeLastName: text("representative_last_name"),
+    representativeTitle: text("representative_title"),
+    representativeEmail: text("representative_email"),
+    representativePhone: text("representative_phone"),
+    representativeRelationship: text("representative_relationship"),
+    // Section 3: resumability marker only — see businessOnboardingStepEnum's own doc comment for why
+    // this is never read as the activation decision itself.
+    onboardingStep: businessOnboardingStepEnum("onboarding_step").notNull().default("details_pending"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -203,6 +232,16 @@ export const businessStaffMember = pgTable(
       .references(() => userAccount.id),
     role: organizationRoleEnum("role").notNull(), // OWNER | FINANCE_ADMIN | AR_MANAGER | AR_AGENT | VIEWER
     customRoleId: uuid("custom_role_id").references(() => customRole.id),
+    // "PAID2YOU PLATFORM EXPANSION" (2026-10-02), DB-3/Section 12, corrected by the Final RBAC
+    // Authorization Cutover: the canonical organization_role assignment and the ONLY thing
+    // `OrganizationPermissionService` reads for an authorization decision — the `role` enum column
+    // above is now display/historical-reporting only. NULL on an ACTIVE (removed_at IS NULL) row is
+    // an exception, enforced by the CHECK constraint below, never silently repaired at authorization
+    // time (`OrganizationPermissionService` is read-only). `StaffService.inviteStaff`/
+    // `acceptInvitation`/`updateStaffRole` resolve this explicitly at mutation time; any remaining
+    // pre-existing null is repaired only by the separate, explicit
+    // `LegacyRoleMigrationService.migrateOrganization` backfill.
+    roleId: uuid("role_id").references(() => organizationRole.id),
     // B2B: verified authority to create/negotiate/approve/sign/amend/settle/
     // manage an agreement on the business's behalf (FR-B2B-002).
     isAuthorizedRepresentative: boolean("is_authorized_representative")
@@ -229,6 +268,11 @@ export const businessStaffMember = pgTable(
     uniqueIndex("business_staff_member_active_business_user_unique")
       .on(table.businessProfileId, table.userId)
       .where(sql`${table.removedAt} IS NULL`),
+    // "Final RBAC Authorization Cutover", Step 6/32: a null role_id must be an EXCEPTION, never a
+    // silently-tolerated steady state, for any membership `OrganizationPermissionService` could still
+    // be asked to authorize — i.e. any row that is not (soft-)removed. A removed membership may keep
+    // a null role_id indefinitely (it holds no access either way).
+    check("business_staff_member_active_role_id_required", sql`${table.removedAt} IS NOT NULL OR ${table.roleId} IS NOT NULL`),
   ],
 ).enableRLS();
 

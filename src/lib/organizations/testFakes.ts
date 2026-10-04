@@ -7,7 +7,12 @@ import { AgreementWorkspaceService } from "./agreementWorkspaceService";
 import type { BusinessCustomerRecord, BusinessCustomerRepository, CounterpartyProfileKind } from "./businessCustomerRepository";
 import type { BusinessObligationRecord, BusinessObligationRepository } from "./businessObligationRepository";
 import { EntitlementService } from "./entitlementService";
+import { LegacyRoleMigrationService } from "./legacyRoleMigration";
+import { BridgingLegacyRoleMigrationRepository } from "./legacyRoleMigrationTestFakes";
 import { OrganizationAuthorizationService } from "./organizationAuthorizationService";
+import { OrganizationPermissionService } from "./organizationPermissionService";
+import { OrganizationRoleService } from "./organizationRoleService";
+import { InMemoryOrganizationRoleRepository } from "./organizationRoleTestFakes";
 import { WorkspaceContextService } from "./workspaceContext";
 
 /** Test-only in-memory wiring, mirroring the rest of this codebase's per-domain testFakes.ts pattern. */
@@ -21,14 +26,43 @@ export function createTestOrganizationAuthorizationService() {
 
 export function createTestWorkspaceContextService() {
   const authCtx = createTestOrganizationAuthorizationService();
-  const workspaceContext = new WorkspaceContextService(authCtx.orgAuth);
+  const workspaceContext = new WorkspaceContextService(authCtx.orgAuth, authCtx.staffMembers, authCtx.businessProfiles);
   return { workspaceContext, ...authCtx };
 }
 
-export function createTestEntitlementService() {
+/**
+ * "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Custom RBAC Runtime Cutover: the full dependency graph
+ * for `OrganizationPermissionService` in tests — reuses the existing `createTestOrganizationAuthorizationService`
+ * fakes for the membership/organization side, plus a fresh `InMemoryOrganizationRoleRepository` and a
+ * real `LegacyRoleMigrationService` (over its own in-memory repository) for the role/permission side,
+ * exactly mirroring the production wiring in getOrganizationPermissionService.ts.
+ */
+export function createTestOrganizationPermissionService() {
+  const authCtx = createTestOrganizationAuthorizationService();
+  const roles = new InMemoryOrganizationRoleRepository();
+  const roleService = new OrganizationRoleService(roles);
+  // Exposed for tests exercising the EXPLICIT, separate migration/backfill step — never consumed by
+  // OrganizationPermissionService itself (Final RBAC Authorization Cutover: no authorization-time
+  // self-healing). Bridges to the SAME staffMembers/invitations fakes `authCtx` already uses, so a
+  // migration run here is actually observable through `authCtx.staffMembers`/`authCtx.invitations`.
+  const legacyRepo = new BridgingLegacyRoleMigrationRepository(authCtx.staffMembers, authCtx.invitations);
+  const legacyMigration = new LegacyRoleMigrationService(legacyRepo, roles);
+  const permissions = new OrganizationPermissionService(authCtx.businessProfiles, authCtx.staffMembers, roles);
+  return { permissions, roles, roleService, legacyMigration, legacyRepo, ...authCtx };
+}
+
+/**
+ * "PAID2YOU — SURGICAL FINAL P0 REMEDIATION" (2026-10-04), P0-5: accepts an optional pre-existing
+ * `businessProfiles` fake so callers that already have one (e.g. `createTestAgreementWorkspaceService`,
+ * which also wires a membership-side `InMemoryBusinessProfileRepository`) can share the SAME
+ * in-memory organization record `EntitlementService` now reads `onboardingStep` from — exactly one
+ * `business_profile` table exists in production, so two independent fakes for the same organization
+ * id would silently disagree in a way no real deployment ever could.
+ */
+export function createTestEntitlementService(businessProfiles: InMemoryBusinessProfileRepository = new InMemoryBusinessProfileRepository()) {
   const { pricingService, plans, subscriptions, entitlements } = createTestPricingServiceWithEntitlements();
-  const entitlementService = new EntitlementService(pricingService, entitlements);
-  return { entitlementService, plans, subscriptions, entitlements };
+  const entitlementService = new EntitlementService(pricingService, entitlements, businessProfiles);
+  return { entitlementService, plans, subscriptions, entitlements, businessProfiles };
 }
 
 /** Tenant-scoped-by-construction in-memory doubles — see businessCustomerRepository.ts's own doc comment. */
@@ -122,8 +156,11 @@ export function createTestBusinessReceivablesRepositories() {
  */
 export function createTestAgreementWorkspaceService() {
   const agreementCtx = createTestAgreementService();
-  const orgAuthCtx = createTestOrganizationAuthorizationService();
-  const entitlementCtx = createTestEntitlementService();
-  const agreementWorkspaceService = new AgreementWorkspaceService(agreementCtx.agreementService, orgAuthCtx.orgAuth, entitlementCtx.entitlementService);
-  return { agreementWorkspaceService, agreementCtx, orgAuthCtx, entitlementCtx };
+  const permCtx = createTestOrganizationPermissionService();
+  const entitlementCtx = createTestEntitlementService(permCtx.businessProfiles);
+  const agreementWorkspaceService = new AgreementWorkspaceService(agreementCtx.agreementService, permCtx.permissions, entitlementCtx.entitlementService);
+  // `orgAuthCtx` kept as the return key name for backward compatibility with existing call sites —
+  // its shape is now `permCtx` (businessProfiles/staffMembers/permissions/roles/roleService), not the
+  // legacy `OrganizationAuthorizationService` wrapper.
+  return { agreementWorkspaceService, agreementCtx, orgAuthCtx: permCtx, entitlementCtx };
 }

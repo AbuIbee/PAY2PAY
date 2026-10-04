@@ -74,4 +74,30 @@ describe("WorkspaceContextService", () => {
     const result = await ctx.workspaceContext.resolveWorkspaceContext(ownerUserId, { kind: "personal" });
     expect(result).toEqual({ kind: "personal" });
   });
+
+  describe("listWorkspacesForUser (Section 7/8: workspace selector listing)", () => {
+    it("a user with one organization membership sees exactly that one organization", async () => {
+      const list = await ctx.workspaceContext.listWorkspacesForUser(ownerUserId);
+      expect(list).toEqual([{ organizationId: orgAId, displayName: "Org A", membershipRole: "OWNER" }]);
+    });
+
+    it("a user with memberships in multiple organizations sees all of them, and never another user's organization", async () => {
+      ctx.staffMembers.seed({ businessProfileId: orgBId, userId: ownerUserId, role: "VIEWER" });
+      const list = await ctx.workspaceContext.listWorkspacesForUser(ownerUserId);
+      expect(list.map((w) => w.organizationId).sort()).toEqual([orgAId, orgBId].sort());
+    });
+
+    it("a removed membership never appears in the listing", async () => {
+      const memberUserId = randomUUID();
+      const member = ctx.staffMembers.seed({ businessProfileId: orgAId, userId: memberUserId, role: "AR_MANAGER" });
+      await ctx.staffMembers.markRemoved(member.id, new Date());
+      const list = await ctx.workspaceContext.listWorkspacesForUser(memberUserId);
+      expect(list).toEqual([]);
+    });
+
+    it("a user with no organization memberships sees an empty list (Personal-only)", async () => {
+      const list = await ctx.workspaceContext.listWorkspacesForUser(randomUUID());
+      expect(list).toEqual([]);
+    });
+  });
 });

@@ -2,12 +2,40 @@
 
 **Path:** `docs/PRODUCTION_PROVIDER_READINESS.md`
 
+> ## ⚠ PAID2YOU OWNER DIRECTIVE (2026-10-03) — ADYEN RETIRED
+>
+> **Adyen is retired from the Paid2You architecture.** It may not be implemented, configured,
+> enabled, recommended, restored, used as a fallback, or routed through under any circumstance
+> without explicit written authorization from the Paid2You owner. Every reference to Adyen in the
+> rest of this document below is **historical record of a now-retired direction**, not the current
+> or future production direction — `PROVIDER_CAPABILITY_REGISTRY`
+> (`src/lib/providers/providerCapabilities.ts`) is empty again; `getPaymentProvider()` throws
+> `ProviderNotAvailableError` for `PAYMENT_PROVIDER=adyen` (or any other value) in every environment.
+> `AdyenPaymentProvider` and its surrounding adapter/webhook code remain in the repository as
+> retired/legacy material — never deleted outright by this directive alone — but are structurally
+> unreachable from any production code path.
+>
+> **The owner-approved direction going forward:**
+> - Repayment money movement (customer-to-customer, the actual agreement/arrangement rail): **Direct
+>   Banking Connectivity** — FedNow, RTP, and Request for Payment. Not yet implemented (Phase 3B).
+> - Paid2You's own subscription billing (a separate domain from the above): **Stripe Billing**. Not
+>   yet implemented (Phase 3A).
+> - Business verification: **Middesk**. Not yet implemented (Phase 3A).
+> - Transactional email: **Resend** (already implemented, production-fail-closed — unaffected).
+> - Agreement/document storage: **Supabase Storage** (already implemented, production-fail-closed —
+>   unaffected).
+> - SMS: deferred unless explicitly authorized for launch.
+>
+> Naming a vendor above is not itself an implementation directive — each requires its own explicit,
+> detailed kickoff before any adapter code, environment variable, or registry entry is created for it.
+
 PRSprint 21 (docs/prsprints/PRSPRINT_21_PRODUCTION_FINANCIAL_PROVIDER_ARCHITECTURE.md) requires "an
 architecture decision record documenting required capabilities, the abstraction layer, assumptions,
 unresolved provider selection, integration points, and migration/replacement strategy" whenever no
 production provider has yet been definitively selected — which is this project's current, actual
 state. This document is that record, plus the per-provider checklist SPRINT_18C_PRODUCTION_READY.md
-item 152 requires ("Production provider readiness should have its own checklist").
+item 152 requires ("Production provider readiness should have its own checklist"). **Everything below
+this point describes the since-retired Adyen-based direction — read it as history, not as the plan.**
 
 ## 1. Current state (as of this writing)
 

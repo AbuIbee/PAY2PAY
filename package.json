@@ -15,10 +15,15 @@
     "db:check-drift": "node scripts/check-schema-drift.mjs",
     "db:fresh-migration-test": "node scripts/apply-migrations-fresh.mjs",
     "db:check-migration-safety": "node scripts/check-migration-safety.mjs",
+    "db:backfill-legacy-roles": "tsx --conditions=react-server scripts/backfill-legacy-organization-roles.ts",
     "check-no-sandbox-runtime": "node scripts/check-no-sandbox-runtime.mjs",
+    "production-readiness": "node scripts/check-production-readiness.mjs",
     "smoke-test": "node scripts/smoke-test.mjs",
     "test:tooling": "node --test scripts/*.test.mjs test/postgres/*.test.mjs",
     "test:postgres": "node scripts/postgres-test-db.mjs",
+    "db:upgrade-rehearsal": "node scripts/run-production-upgrade-rehearsal.mjs",
+    "db:upgrade-orchestrator-rehearsal": "node scripts/run-production-upgrade-orchestrator-rehearsal.mjs",
+    "db:upgrade-production": "node scripts/run-production-upgrade.mjs",
     "e2e": "playwright test"
   },
   "dependencies": {
@@ -31,6 +36,7 @@
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "server-only": "^0.0.1",
+    "stripe": "^17.4.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

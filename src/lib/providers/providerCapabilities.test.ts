@@ -8,25 +8,25 @@ import {
 } from "./providerCapabilities";
 
 describe("providerCapabilities (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)", () => {
-  it("PAID2YOU — B0-D ADYEN PHASE 1: the registry contains exactly one entry, 'adyen' — no sandbox/mock provider is registered, and none may be added here", () => {
-    expect(Object.keys(PROVIDER_CAPABILITY_REGISTRY)).toEqual(["adyen"]);
-    expect(PROVIDER_CAPABILITY_REGISTRY.adyen).toMatchObject({ providerName: "adyen", environment: "production" });
+  it("PAID2YOU — MASTER P0 (2026-10-03): the registry holds exactly the two owner-approved production entries — 'middesk' (business verification) and 'stripe' (Paid2You's OWN subscription billing) — no sandbox, no Adyen, no payment-kind entry", () => {
+    expect(Object.keys(PROVIDER_CAPABILITY_REGISTRY).sort()).toEqual(["middesk", "stripe"]);
+    expect(PROVIDER_CAPABILITY_REGISTRY.middesk).toEqual({ providerName: "middesk", environment: "production", capabilities: ["kyb"] });
+    expect(PROVIDER_CAPABILITY_REGISTRY.stripe).toEqual({ providerName: "stripe", environment: "production", capabilities: ["webhook_delivery"] });
   });
 
-  it("PAID2YOU — B0-D ADYEN PHASE 2: adyen's declared capabilities are exactly what AdyenPaymentProvider implements — ach_debit + webhook_delivery + bank_linking, nothing payout/KYC/card-issuing-related yet", () => {
-    expect(PROVIDER_CAPABILITY_REGISTRY.adyen!.capabilities).toEqual(["ach_debit", "webhook_delivery", "bank_linking"]);
-  });
-
-  it("findProviderCapabilityDescriptor returns null for any unregistered name, including undefined and every retired sandbox name", () => {
+  it("findProviderCapabilityDescriptor returns null for any unregistered name, including undefined, every retired sandbox name, and the retired 'adyen' name itself", () => {
     expect(findProviderCapabilityDescriptor(undefined)).toBeNull();
     expect(findProviderCapabilityDescriptor("")).toBeNull();
     expect(findProviderCapabilityDescriptor("sandbox")).toBeNull();
     expect(findProviderCapabilityDescriptor("sandbox_mock")).toBeNull();
     expect(findProviderCapabilityDescriptor("some_future_provider")).toBeNull();
+    expect(findProviderCapabilityDescriptor("adyen")).toBeNull();
   });
 
-  it("findProviderCapabilityDescriptor resolves 'adyen' to the real, production descriptor", () => {
-    expect(findProviderCapabilityDescriptor("adyen")).toMatchObject({ providerName: "adyen", environment: "production" });
+  it("'middesk'/'stripe' are registered ONLY for their own kind's resolution path — this registry performs no kind-isolation itself (assertProviderAvailableForRuntime's own `kind` argument is just a label), so the REAL isolation is structural: getPaymentProvider.ts never passes 'middesk'/'stripe' as a candidate PAYMENT_PROVIDER value, and no production code path does either", () => {
+    // Documented, not re-asserted here mechanically — see getPaymentProvider.ts/getBusinessVerificationProvider.ts/getPlatformBillingProvider.ts's own tests for the per-factory wiring proof.
+    expect(findProviderCapabilityDescriptor("middesk")?.providerName).toBe("middesk");
+    expect(findProviderCapabilityDescriptor("stripe")?.providerName).toBe("stripe");
   });
 
   it("providerSupportsCapability correctly distinguishes capabilities a descriptor does and does not declare", () => {
@@ -76,27 +76,14 @@ describe("providerCapabilities (PAID2YOU — B0-D TOTAL SANDBOX ELIMINATION)", (
       }
     });
 
-    it("PAID2YOU — B0-D ADYEN PHASE 1: 'adyen' resolves successfully in production — the one real, registered, live provider", () => {
-      const descriptor = assertProviderAvailableForRuntime("payment", "adyen", "production");
-      expect(descriptor).toMatchObject({ providerName: "adyen", environment: "production" });
-    });
-
-    it("PAID2YOU — B0-D ADYEN PHASE 1: 'adyen' (a real, environment:'production' descriptor) throws ConfigurationError — not ProviderNotAvailableError — when constructed outside a genuine production deployment", () => {
-      for (const appEnv of ["development", "test", "staging"]) {
-        try {
-          assertProviderAvailableForRuntime("payment", "adyen", appEnv);
-          expect.unreachable();
-        } catch (error) {
-          expect(error).toBeInstanceOf(ConfigurationError);
-          expect(error).not.toBeInstanceOf(ProviderNotAvailableError);
-        }
+    it("PAID2YOU OWNER DIRECTIVE (2026-10-03) — ADYEN RETIRED: 'adyen' no longer resolves in ANY environment, including production — it throws ProviderNotAvailableError exactly like any other unregistered name now", () => {
+      for (const appEnv of ["development", "test", "staging", "production"]) {
+        expect(() => assertProviderAvailableForRuntime("payment", "adyen", appEnv)).toThrow(ProviderNotAvailableError);
       }
     });
 
-    it("PAID2YOU — B0-D ADYEN PHASE 1: 'adyen' requested for the wrong kind (e.g. 'kyc') still resolves the descriptor (the registry is a flat name lookup, not partitioned by kind) — the caller (getKycProvider.ts) is responsible for rejecting a descriptor with no matching factory, which it does", () => {
-      const descriptor = assertProviderAvailableForRuntime("kyc", "adyen", "production");
-      expect(descriptor.providerName).toBe("adyen");
-      expect(providerSupportsCapability(descriptor, "kyc")).toBe(false);
+    it("'adyen' requested for any kind (e.g. 'kyc') is likewise always unavailable now — the registry has no entry for it at all", () => {
+      expect(() => assertProviderAvailableForRuntime("kyc", "adyen", "production")).toThrow(ProviderNotAvailableError);
     });
   });
 });

@@ -1,7 +1,8 @@
 import "server-only";
 import { getDb, type Database } from "@/db/client";
-import { businessProfile, businessStaffMember } from "@/db/schema";
+import { businessProfile, businessStaffMember, organizationRole, organizationRolePermission } from "@/db/schema";
 import { ConfigurationError } from "@/lib/errors";
+import { ownerPermissionKeys } from "@/lib/organizations/defaultRoleTemplates";
 import type { StaffRole } from "@/lib/staff/capabilities";
 import type { BusinessStaffMemberRecord } from "@/lib/staff/staffService";
 import type { BusinessProfileRecord } from "./businessProfileService";
@@ -22,6 +23,22 @@ function toProfileRecord(row: BusinessProfileRow): BusinessProfileRecord {
     status: row.status,
     currency: row.currency,
     createdAt: row.createdAt,
+    dbaName: row.dbaName,
+    industry: row.industry,
+    formationJurisdiction: row.formationJurisdiction,
+    businessEmail: row.businessEmail,
+    website: row.website,
+    representative: row.representativeFirstName
+      ? {
+          firstName: row.representativeFirstName,
+          lastName: row.representativeLastName ?? "",
+          title: row.representativeTitle ?? "",
+          email: row.representativeEmail ?? "",
+          phone: row.representativePhone ?? "",
+          relationshipToBusiness: row.representativeRelationship ?? "",
+        }
+      : null,
+    onboardingStep: row.onboardingStep,
   };
 }
 
@@ -32,6 +49,7 @@ function toMembershipRecord(row: BusinessStaffMemberRow): BusinessStaffMemberRec
     userId: row.userId,
     role: row.role as StaffRole,
     customRoleId: row.customRoleId,
+    roleId: row.roleId,
     isAuthorizedRepresentative: row.isAuthorizedRepresentative,
     removedAt: row.removedAt,
     createdAt: row.createdAt,
@@ -93,6 +111,26 @@ export class DrizzleAtomicBusinessProfileCreator implements AtomicBusinessProfil
         throw new ConfigurationError("business_profile insert returned no row during atomic organization creation");
       }
 
+      // "Final RBAC Authorization Cutover", Step 5/6: this organization cannot already have an Owner
+      // organization_role (it didn't exist a moment ago), so this is always a first-time creation —
+      // never a lookup-then-maybe-create race. Inline (rather than
+      // `LegacyRoleMigrationService.resolveOrCreateEquivalentRole`) so it shares this SAME transaction
+      // with the profile/membership inserts above/below: the OWNER membership must never be written
+      // with a null role_id, even transiently between statements (the business_staff_member_active_
+      // role_id_required CHECK constraint would reject an insert-then-update two-step for exactly that
+      // reason).
+      const [ownerRoleRow] = await tx
+        .insert(organizationRole)
+        .values({ organizationId: profileRow.id, displayName: "Owner", description: null, isOwnerRole: true, isProtected: true, sortOrder: 0 })
+        .returning();
+      if (!ownerRoleRow) {
+        throw new ConfigurationError("organization_role insert returned no row during atomic organization creation");
+      }
+      const ownerPermissionRows = ownerPermissionKeys().map((permissionKey) => ({ roleId: ownerRoleRow.id, permissionKey, scope: "organization" as const }));
+      if (ownerPermissionRows.length > 0) {
+        await tx.insert(organizationRolePermission).values(ownerPermissionRows);
+      }
+
       const [membershipRow] = await tx
         .insert(businessStaffMember)
         .values({
@@ -100,6 +138,7 @@ export class DrizzleAtomicBusinessProfileCreator implements AtomicBusinessProfil
           userId: input.ownerUserId,
           role: "OWNER",
           customRoleId: null,
+          roleId: ownerRoleRow.id,
           isAuthorizedRepresentative: true,
         })
         .returning();

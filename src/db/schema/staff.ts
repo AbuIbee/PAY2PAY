@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { approvalRequestStatusEnum, organizationRoleEnum, staffInvitationStatusEnum } from "./enums";
 import { businessProfile, businessStaffMember, customRole, userAccount } from "./identity";
+import { organizationRole } from "./organizationRoles";
 
 /**
  * Sprint 4 (docs/sprints/SPRINT_04_BusinessStaff_Permissions.md) staff
@@ -40,6 +41,12 @@ export const businessStaffInvitation = pgTable(
     email: text("email").notNull(),
     role: organizationRoleEnum("role").notNull(), // OWNER | FINANCE_ADMIN | AR_MANAGER | AR_AGENT | VIEWER
     customRoleId: uuid("custom_role_id").references(() => customRole.id),
+    // "PAID2YOU PLATFORM EXPANSION" (2026-10-02), corrected by the Final RBAC Authorization Cutover:
+    // see `business_staff_member.roleId`'s own doc comment in identity.ts — identical purpose/status
+    // here. `StaffService.inviteStaff` now resolves this up front for every new invitation; a null
+    // value is an exception only for invitations issued before that change, enforced for `pending`
+    // rows (the only status acceptance ever reads `roleId` from) by the CHECK constraint below.
+    roleId: uuid("role_id").references(() => organizationRole.id),
     invitedByUserId: uuid("invited_by_user_id")
       .notNull()
       .references(() => userAccount.id),
@@ -55,6 +62,10 @@ export const businessStaffInvitation = pgTable(
     uniqueIndex("business_staff_invitation_business_email_pending_unique")
       .on(table.businessProfileId, table.email)
       .where(sql`${table.status} = 'pending'`),
+    // "Final RBAC Authorization Cutover", Step 6/32: the analogous exception-not-steady-state rule
+    // for invitations — only a still-`pending` row can ever be accepted (and have its role_id copied
+    // onto the resulting membership), so only `pending` rows are required to carry one.
+    check("business_staff_invitation_pending_role_id_required", sql`${table.status} != 'pending' OR ${table.roleId} IS NOT NULL`),
   ],
 ).enableRLS();
 

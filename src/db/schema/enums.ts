@@ -44,6 +44,31 @@ export const businessProfileStatusEnum = pgEnum("business_profile_status", [
   "deleted",
 ]);
 
+/**
+ * "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Requirement 16: closed industry vocabulary.
+ * "THREE_PL" is the SQL-safe identifier (an enum value cannot start with a digit); the UI label is
+ * "3PL" — see businessIndustryLabels.ts, the one place that mapping lives. Industry may influence
+ * onboarding copy/terminology/suggestions only — it must never alter the authorization system
+ * (Requirement 16's own guardrail).
+ */
+export const businessIndustryEnum = pgEnum("business_industry", ["TRUCKING", "FREIGHT", "THREE_PL", "RETAIL", "OTHER"]);
+
+/**
+ * "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Section 3: tracks ONLY which onboarding step has been
+ * completed, for resumability — never the activation decision itself (see businessActivationService.ts,
+ * which computes ACTIVE independently from this plus verification status plus subscription status,
+ * Requirement 29's "VERIFIED does not mean SUBSCRIPTION ACTIVE" / "SUBSCRIPTION PAID does not mean
+ * VERIFIED"). A step here only ever advances forward (BusinessOnboardingService's own monotonic
+ * guard) — never regresses merely because a later step is retried.
+ */
+export const businessOnboardingStepEnum = pgEnum("business_onboarding_step", [
+  "details_pending",
+  "details_complete",
+  "verification_submitted",
+  "tier_selected",
+  "billing_setup_complete",
+]);
+
 /** Sprint 3 (master spec §19): personal vs. business pricing catalogs are distinct. */
 export const pricingPlanKindEnum = pgEnum("pricing_plan_kind", ["personal", "business"]);
 export const subscriptionStatusEnum = pgEnum("subscription_status", ["active", "canceled"]);
@@ -860,7 +885,20 @@ export const payoutAttemptStatusEnum = pgEnum("payout_attempt_status", ["pending
  * `(user_id, business_profile_id) -> this role -> a centralized permission policy` — never a bare
  * role-string comparison scattered through the application (see src/lib/organizations/authorization.ts).
  */
-export const organizationRoleEnum = pgEnum("organization_role", [
+/**
+ * "PAID2YOU PLATFORM EXPANSION" (2026-10-02): the underlying Postgres type is named
+ * "legacy_staff_role" here, NOT "organization_role" — a real naming collision surfaced by running
+ * the full disposable-Postgres suite: `src/db/schema/organizationRoles.ts`'s new `organization_role`
+ * TABLE implicitly creates a Postgres row type of that same name, which collided with this enum's
+ * original identical type name (`CREATE TABLE "organization_role"` vs. `CREATE TYPE "organization_role"`
+ * both attempting to claim the one Postgres identifier). Renaming the already-deployed type (migration
+ * 20261002010000) is lossless and has zero effect on any existing column's data — Postgres tracks a
+ * column's type by OID, never by name, so `business_staff_member.role`/`business_staff_invitation.role`
+ * (and every value already stored in them) are completely unaffected. The exported TypeScript binding
+ * name (`organizationRoleEnum`) and every value in it are unchanged; only this one SQL-level identifier
+ * moved.
+ */
+export const organizationRoleEnum = pgEnum("legacy_staff_role", [
   "OWNER",
   "FINANCE_ADMIN",
   "AR_MANAGER",

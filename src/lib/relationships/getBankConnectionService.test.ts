@@ -1,19 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * PAID2YOU — B0-D ADYEN PHASE 2A (final bank-security correction, item 3 — ACH VALIDATION EXTERNAL
- * BLOCKER). Proves the real production factory body — never a hand-assembled substitute — fails
- * closed (ProviderNotAvailableError, not a silent "bank-linking enabled anyway") whenever
- * `ADYEN_ACH_TOKENIZATION_VERIFIED` is not explicitly `"true"`, regardless of how complete the rest of
- * the Adyen configuration is. This env var is the concrete gate standing in for an external,
- * Adyen-side, unverifiable-by-this-codebase fact (zero-value ACH authorization + GIACT activation for
- * the real merchant account) — see that var's own doc comment in src/config/env.ts. Mirrors
- * getPaymentProvider.test.ts's identical `vi.resetModules()` pattern so both this module's own
- * `cached` singleton and src/config/env.ts's `cachedServerEnv` start fresh, exactly like a real cold
- * server process.
+ * PAID2YOU OWNER DIRECTIVE (2026-10-03) — ADYEN RETIRED: bank-linking (`BankConnectionService`) was
+ * built entirely on top of Adyen's own bank-account tokenization capability (B0-D ADYEN PHASE 2/2A) —
+ * with Adyen retired from `providerCapabilities.ts`'s registry, `getPaymentProvider()` now always
+ * throws `ProviderNotAvailableError` before `getBankConnectionService()` ever reaches its own
+ * `ADYEN_ACH_TOKENIZATION_VERIFIED` check, so bank-linking is now unconditionally unavailable —
+ * proven below even with an otherwise-complete-looking legacy Adyen configuration. The owner-approved
+ * repayment-money-movement direction going forward (Direct Banking: FedNow/RTP/Request for Payment)
+ * has not yet been implemented — this factory has no live bank-linking path at all right now, which is
+ * the correct, honest, fail-closed state, never a silent "bank-linking enabled anyway." Mirrors
+ * getPaymentProvider.test.ts's identical `vi.resetModules()` pattern.
  */
-describe("getBankConnectionService / getBankConnectionServiceIfAvailable (PAID2YOU — B0-D ADYEN PHASE 2A)", () => {
-  const FULL_ADYEN_CONFIG: Record<string, string> = {
+describe("getBankConnectionService / getBankConnectionServiceIfAvailable (PAID2YOU OWNER DIRECTIVE — ADYEN RETIRED)", () => {
+  const LEGACY_ADYEN_CONFIG: Record<string, string> = {
     DATABASE_URL: "postgres://test:test@localhost:5432/pay2pay_test",
     AUDIT_HASH_SECRET: "test-only-audit-hash-secret-value",
     AUTH_PASSWORD_PEPPER: "test-only-auth-password-pepper-value",
@@ -28,7 +28,7 @@ describe("getBankConnectionService / getBankConnectionServiceIfAvailable (PAID2Y
   let savedEnv: Record<string, string | undefined> = {};
 
   function setEnv(overrides: Record<string, string | undefined>) {
-    const merged = { ...FULL_ADYEN_CONFIG, ...overrides };
+    const merged = { ...LEGACY_ADYEN_CONFIG, ...overrides };
     for (const [key, value] of Object.entries(merged)) {
       savedEnv[key] ??= process.env[key];
       if (value === undefined) delete process.env[key];
@@ -50,7 +50,7 @@ describe("getBankConnectionService / getBankConnectionServiceIfAvailable (PAID2Y
     vi.resetModules();
   });
 
-  it("fails closed with ProviderNotAvailableError when ADYEN_ACH_TOKENIZATION_VERIFIED is unset, even with otherwise-complete Adyen configuration", async () => {
+  it("fails closed with ProviderNotAvailableError when ADYEN_ACH_TOKENIZATION_VERIFIED is unset", async () => {
     setEnv({});
     const { getBankConnectionService } = await import("./getBankConnectionService");
     const { ProviderNotAvailableError } = await import("@/lib/errors");
@@ -71,23 +71,19 @@ describe("getBankConnectionService / getBankConnectionServiceIfAvailable (PAID2Y
     expect(() => getBankConnectionService()).toThrow(ProviderNotAvailableError);
   });
 
-  it("constructs a real BankConnectionService once an operator has explicitly set ADYEN_ACH_TOKENIZATION_VERIFIED=true, on top of complete Adyen configuration", async () => {
+  it("ADYEN RETIRED: fails closed EVEN with the legacy ADYEN_ACH_TOKENIZATION_VERIFIED=true flag set — Adyen's own registry entry is gone, so that flag alone can no longer make bank-linking available", async () => {
     setEnv({ ADYEN_ACH_TOKENIZATION_VERIFIED: "true" });
     const { getBankConnectionService } = await import("./getBankConnectionService");
-    const { BankConnectionService } = await import("./bankConnectionService");
-    expect(getBankConnectionService()).toBeInstanceOf(BankConnectionService);
+    const { ProviderNotAvailableError } = await import("@/lib/errors");
+    expect(() => getBankConnectionService()).toThrow(ProviderNotAvailableError);
   });
 
-  it("getBankConnectionServiceIfAvailable returns null (never throws) while bank-linking is gated off — so ordinary payment webhook processing never breaks", async () => {
-    setEnv({});
-    const { getBankConnectionServiceIfAvailable } = await import("./getBankConnectionService");
-    expect(getBankConnectionServiceIfAvailable()).toBeNull();
-  });
-
-  it("getBankConnectionServiceIfAvailable returns a real instance once verified", async () => {
-    setEnv({ ADYEN_ACH_TOKENIZATION_VERIFIED: "true" });
-    const { getBankConnectionServiceIfAvailable } = await import("./getBankConnectionService");
-    const { BankConnectionService } = await import("./bankConnectionService");
-    expect(getBankConnectionServiceIfAvailable()).toBeInstanceOf(BankConnectionService);
+  it("getBankConnectionServiceIfAvailable returns null (never throws) regardless of the legacy Adyen flag — so ordinary payment webhook processing never breaks", async () => {
+    for (const verified of [undefined, "false", "true"]) {
+      vi.resetModules();
+      setEnv({ ADYEN_ACH_TOKENIZATION_VERIFIED: verified });
+      const { getBankConnectionServiceIfAvailable } = await import("./getBankConnectionService");
+      expect(getBankConnectionServiceIfAvailable()).toBeNull();
+    }
   });
 });

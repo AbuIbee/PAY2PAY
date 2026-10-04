@@ -20,4 +20,10 @@ export interface PricingPlanEntitlementRecord {
 export interface PricingPlanEntitlementRepository {
   findByPlanAndFeature(pricingPlanId: string, featureKey: string): Promise<PricingPlanEntitlementRecord | null>;
   listByPlan(pricingPlanId: string): Promise<PricingPlanEntitlementRecord[]>;
+  /**
+   * "PAID2YOU PLATFORM EXPANSION" (2026-10-02), DB-5: seeds a plan's entitlement rows (e.g.
+   * `new_arrangements_monthly`). Intended caller: seedCanonicalBusinessPlans.ts — never invented
+   * elsewhere, matching PricingPlanRepository.insert's own doc comment.
+   */
+  insert(input: { pricingPlanId: string; featureKey: string; enabled: boolean; limitValue: number | null }): Promise<PricingPlanEntitlementRecord>;
 }

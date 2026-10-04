@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb, type Database } from "@/db/client";
 import { agreement, agreementVersion, signatureEvent } from "@/db/schema";
 import { ConfigurationError, ConflictError, CounterpartyMustSignFirstError, ScheduleRevisionRequiredError } from "@/lib/errors";
+import { recordQualifyingArrangementUsage } from "@/lib/organizations/arrangementUsageMetering";
 import { isPastDate } from "./schedule";
 import { computeVersionHash } from "./documentHash";
 import type { AgreementTerms, SigningApplicationRepository, SigningApplicationResult } from "./agreementService";
@@ -178,6 +179,18 @@ export class DrizzleSigningApplicationRepository implements SigningApplicationRe
         (input.role === "debtor" || versionRow.debtorSignedAt !== null);
       if (!bothSigned) {
         return { alreadySigned: false, bothSigned: false, documentHash: null, signatureEventId, agreementHashAtSigning };
+      }
+
+      // "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Requirement 5/24: this IS the canonical
+      // "successfully established/active arrangement" transition Requirement 5 asks for — the
+      // agreement's transition INTO "signed" below, happening exactly once, inside this same
+      // transaction. Only business-tenant agreements (organizationId set) are metered/limited —
+      // Personal agreements (organizationId null) are explicitly unaffected (Section 8). This call
+      // can throw ArrangementUsageLimitExceededError, which rolls back this entire transaction —
+      // including the signature just recorded above — so a limit-reached organization's agreement
+      // stays unsigned/awaiting-signatures rather than ending up in a half-applied state.
+      if (agreementRow.organizationId) {
+        await recordQualifyingArrangementUsage(tx, { organizationId: agreementRow.organizationId, agreementId: input.agreementId });
       }
 
       const documentHash = computeVersionHash({

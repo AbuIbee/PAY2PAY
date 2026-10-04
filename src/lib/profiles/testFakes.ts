@@ -7,7 +7,14 @@ import { InMemoryPersonalProfileRepository } from "@/lib/auth/testFakes";
 import { InMemoryBusinessStaffMemberRepository } from "@/lib/staff/testFakes";
 import type { AtomicBusinessProfileCreator, AtomicBusinessProfileCreatorInput, AtomicBusinessProfileCreatorResult } from "./atomicBusinessProfileCreator";
 import { BusinessProfileService } from "./businessProfileService";
-import type { BusinessProfileRecord, BusinessProfileRepository, BusinessProfileStatus } from "./businessProfileService";
+import type {
+  BusinessIndustry,
+  BusinessOnboardingStep,
+  BusinessProfileRecord,
+  BusinessProfileRepository,
+  BusinessProfileStatus,
+  BusinessRepresentativeDetails,
+} from "./businessProfileService";
 import { ProfileAccessService } from "./profileAccessService";
 import { VerificationService } from "./verificationService";
 import type {
@@ -137,7 +144,7 @@ export class InMemoryProfileOwnerReader implements ProfileOwnerReader {
   }
 }
 
-class InMemoryAuditEventRepositoryForProfiles implements AuditEventRepository {
+export class InMemoryAuditEventRepositoryForProfiles implements AuditEventRepository {
   events: AuditEventRecord[] = [];
   private nextId = 1;
 
@@ -169,6 +176,13 @@ export class InMemoryBusinessProfileRepository implements BusinessProfileReposit
       status: "active",
       currency: "USD",
       createdAt: new Date(),
+      dbaName: null,
+      industry: null,
+      formationJurisdiction: null,
+      businessEmail: null,
+      website: null,
+      representative: null,
+      onboardingStep: "details_pending",
       ...input,
     };
     this.byId.set(record.id, record);
@@ -191,6 +205,26 @@ export class InMemoryBusinessProfileRepository implements BusinessProfileReposit
 
   async updateStatus(id: string, status: BusinessProfileStatus): Promise<void> {
     this.setStatus(id, status);
+  }
+
+  async updateOnboardingDetails(
+    id: string,
+    input: {
+      dbaName: string | null;
+      industry: BusinessIndustry;
+      formationJurisdiction: string;
+      businessEmail: string;
+      website: string | null;
+      representative: BusinessRepresentativeDetails;
+    },
+  ): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) Object.assign(record, input);
+  }
+
+  async setOnboardingStep(id: string, step: BusinessOnboardingStep): Promise<void> {
+    const record = this.byId.get(id);
+    if (record) record.onboardingStep = step;
   }
 }
 

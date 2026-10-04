@@ -78,13 +78,34 @@ describe("PricingService", () => {
     expect(usage).toEqual({ agreementsUsed: 0, paymentsUsed: 0 });
   });
 
+  it("listPlans is a thin pass-through to the catalog's listActiveByKind — never a second, UI-side catalog", async () => {
+    await ctx.plans.insert({
+      kind: "business",
+      code: "paid2you_business_core",
+      name: "Core",
+      monthlyFeeMinorUnits: 19_900,
+      annualFeeMinorUnits: null,
+      perAgreementFeeMinorUnits: null,
+      perSuccessfulPaymentFeeMinorUnits: null,
+      freeAgreementAllowance: null,
+      freeIncludedPaymentsAllowance: null,
+      isActive: true,
+    });
+    const plans = await ctx.pricingService.listPlans("business");
+    expect(plans).toHaveLength(1);
+    expect(plans[0]!.code).toBe("paid2you_business_core");
+    expect(await ctx.pricingService.listPlans("personal")).toEqual([]);
+  });
+
   it("has no capability to terminate or mutate an agreement (structural, not just untested)", () => {
     const service = ctx.pricingService as unknown as Record<string, unknown>;
     expect(typeof service.terminateAgreement).toBe("undefined");
     expect(typeof service.cancelAgreement).toBe("undefined");
     expect(typeof service.deleteAgreement).toBe("undefined");
-    // The only methods this service has at all:
+    // The only methods this service has at all. "listPlans" ("PAID2YOU PLATFORM EXPANSION",
+    // 2026-10-02, Section 4) is a thin pass-through to the plan catalog's own `listActiveByKind` for
+    // the onboarding Tier step — it reads the catalog, never an agreement/subscription mutation.
     const methodNames = Object.getOwnPropertyNames(PricingService.prototype).filter((n) => n !== "constructor");
-    expect(methodNames.sort()).toEqual(["getActivePlan", "getFreeTierUsage", "subscribe"]);
+    expect(methodNames.sort()).toEqual(["getActivePlan", "getFreeTierUsage", "listPlans", "subscribe"]);
   });
 });

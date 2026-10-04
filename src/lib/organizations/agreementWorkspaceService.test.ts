@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ForbiddenError } from "@/lib/errors";
+import type { StaffRole } from "@/lib/staff/capabilities";
 import { ORGANIZATION_AGREEMENTS_FEATURE_KEY } from "./entitlementFeatureKeys";
 import { createTestAgreementWorkspaceService } from "./testFakes";
 
@@ -40,10 +41,30 @@ describe("AgreementWorkspaceService", () => {
     };
   }
 
+  /**
+   * "Final RBAC Authorization Cutover" (2026-10-02): `OrganizationPermissionService` no longer
+   * self-heals a null `role_id` (no authorization-time repair) — seeding a legacy-role membership
+   * alone is no longer enough to pass permission checks. This helper performs the EXPLICIT,
+   * separate migration/backfill step (`LegacyRoleMigrationService.migrateOrganization`) right after
+   * seeding, exactly mirroring how production would run it, so these tests keep exercising the real
+   * legacy-role-equivalence behavior rather than self-healing that no longer exists.
+   */
+  async function seedMember(input: { businessProfileId: string; userId: string; role: StaffRole }) {
+    ctx.orgAuthCtx.staffMembers.seed(input);
+    await ctx.orgAuthCtx.legacyMigration.migrateOrganization(input.businessProfileId);
+    return (await ctx.orgAuthCtx.staffMembers.findActiveByBusinessAndUser(input.businessProfileId, input.userId))!;
+  }
+
   async function seedEntitledPlan(organizationId: string, featureKey = ORGANIZATION_AGREEMENTS_FEATURE_KEY) {
     const plan = ctx.entitlementCtx.plans.seed({ kind: "business", code: `plan-${organizationId}`, name: "Growth" });
     await ctx.entitlementCtx.subscriptions.insert({ profileKind: "business", profileId: organizationId, pricingPlanId: plan.id });
     ctx.entitlementCtx.entitlements.seed({ pricingPlanId: plan.id, featureKey, enabled: true, limitValue: null });
+    // "PAID2YOU — SURGICAL FINAL P0 REMEDIATION" (2026-10-04), P0-5: EntitlementService now also
+    // requires onboarding_step = "billing_setup_complete" (provider-confirmed billing) — this
+    // helper's whole purpose is to make an organization genuinely entitled, so it must reach that
+    // state too. `ctx.entitlementCtx.businessProfiles` is the SAME in-memory store `ctx.orgAuthCtx.
+    // businessProfiles` already seeded `organizationId` into (see createTestAgreementWorkspaceService).
+    await ctx.entitlementCtx.businessProfiles.setOnboardingStep(organizationId, "billing_setup_complete");
     return plan;
   }
 
@@ -131,7 +152,7 @@ describe("AgreementWorkspaceService", () => {
 
   describe("organization workspace", () => {
     it("an active, entitled OWNER can create an organization agreement, and the server assigns the correct organizationId", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "OWNER" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "OWNER" });
       await seedEntitledPlan(orgAId);
 
       const result = await ctx.agreementWorkspaceService.createDraftForWorkspace({
@@ -143,7 +164,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("FINANCE_ADMIN can create if entitled", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "FINANCE_ADMIN" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "FINANCE_ADMIN" });
       await seedEntitledPlan(orgAId);
       const result = await ctx.agreementWorkspaceService.createDraftForWorkspace({
         userId,
@@ -154,7 +175,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("AR_MANAGER can create if entitled", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "AR_MANAGER" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "AR_MANAGER" });
       await seedEntitledPlan(orgAId);
       const result = await ctx.agreementWorkspaceService.createDraftForWorkspace({
         userId,
@@ -165,7 +186,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("AR_AGENT cannot create an organization agreement under the conservative Phase-8 policy, even when entitled", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "AR_AGENT" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "AR_AGENT" });
       await seedEntitledPlan(orgAId);
       await expect(
         ctx.agreementWorkspaceService.createDraftForWorkspace({
@@ -177,7 +198,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("VIEWER cannot create an organization agreement", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "VIEWER" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "VIEWER" });
       await seedEntitledPlan(orgAId);
       await expect(
         ctx.agreementWorkspaceService.createDraftForWorkspace({
@@ -200,7 +221,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("a removed member cannot create an organization agreement", async () => {
-      const member = ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "FINANCE_ADMIN" });
+      const member = await seedMember({ businessProfileId: orgAId, userId, role: "FINANCE_ADMIN" });
       await ctx.orgAuthCtx.staffMembers.markRemoved(member.id, new Date());
       await seedEntitledPlan(orgAId);
       await expect(
@@ -234,7 +255,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("an Org A member cannot create an agreement scoped to Org B", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "OWNER" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "OWNER" });
       await seedEntitledPlan(orgBId);
       await expect(
         ctx.agreementWorkspaceService.createDraftForWorkspace({
@@ -246,7 +267,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("the browser cannot substitute another organizationId by smuggling one inside draftInput — the server-resolved workspace id always wins", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "OWNER" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "OWNER" });
       await seedEntitledPlan(orgAId);
       const pollutedDraftInput = { ...draftInput(), organizationId: orgBId } as unknown as ReturnType<typeof draftInput>;
 
@@ -262,7 +283,7 @@ describe("AgreementWorkspaceService", () => {
 
   describe("entitlement", () => {
     it("active membership + missing entitlement catalog entirely = denied", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "FINANCE_ADMIN" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "FINANCE_ADMIN" });
       // No plan/subscription/entitlement seeded at all for orgA.
       await expect(
         ctx.agreementWorkspaceService.createDraftForWorkspace({
@@ -274,7 +295,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("OWNER + missing entitlement = denied — OWNER never bypasses the plan entitlement check", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "OWNER" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "OWNER" });
       const plan = ctx.entitlementCtx.plans.seed({ kind: "business", code: "starter", name: "Starter" });
       await ctx.entitlementCtx.subscriptions.insert({ profileKind: "business", profileId: orgAId, pricingPlanId: plan.id });
       // Active subscription exists, but no organization_agreements entitlement row for this plan.
@@ -288,7 +309,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("an inactive (canceled) subscription denies organization agreement creation even though the plan's catalog would otherwise allow it", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "OWNER" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "OWNER" });
       await seedEntitledPlan(orgAId);
       const sub = await ctx.entitlementCtx.subscriptions.findActiveByProfile("business", orgAId);
       await ctx.entitlementCtx.subscriptions.cancel(sub!.id);
@@ -316,7 +337,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("a cross-tenant selector throws, and never falls back to creating a personal agreement", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "OWNER" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "OWNER" });
       await seedEntitledPlan(orgBId);
       await expect(
         ctx.agreementWorkspaceService.createDraftForWorkspace({
@@ -329,7 +350,7 @@ describe("AgreementWorkspaceService", () => {
     });
 
     it("a removed-membership selector throws, and never falls back to creating a personal agreement", async () => {
-      const member = ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "OWNER" });
+      const member = await seedMember({ businessProfileId: orgAId, userId, role: "OWNER" });
       await ctx.orgAuthCtx.staffMembers.markRemoved(member.id, new Date());
       await seedEntitledPlan(orgAId);
       await expect(
@@ -345,7 +366,7 @@ describe("AgreementWorkspaceService", () => {
 
   describe("persistence", () => {
     it("organization agreement is persisted with exactly the validated organizationId, retrievable via the tenant-scoped repository method", async () => {
-      ctx.orgAuthCtx.staffMembers.seed({ businessProfileId: orgAId, userId, role: "OWNER" });
+      await seedMember({ businessProfileId: orgAId, userId, role: "OWNER" });
       await seedEntitledPlan(orgAId);
       const result = await ctx.agreementWorkspaceService.createDraftForWorkspace({
         userId,

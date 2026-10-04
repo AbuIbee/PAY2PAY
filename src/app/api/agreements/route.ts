@@ -11,11 +11,22 @@ import { getAuthService } from "@/lib/auth/getAuthService";
 import { requireSession } from "@/lib/auth/requireSession";
 import { ValidationError } from "@/lib/errors";
 import { parsePageParams, toPage } from "@/lib/pagination";
+import type { AgreementWorkspaceService } from "@/lib/organizations/agreementWorkspaceService";
+import { getAgreementWorkspaceService } from "@/lib/organizations/getAgreementWorkspaceService";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export function createAgreementCreateHandler(authService: AuthService, agreementService: AgreementService) {
+/**
+ * "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE", Phase 9 (2026-10-02): the
+ * ONLY production HTTP entry point wired through AgreementWorkspaceService so far — see that
+ * service's own doc comment for the full membership/capability/entitlement pipeline. This handler
+ * itself implements NONE of that: it authenticates, validates the request shape, and forwards the
+ * caller's (untrusted) workspace intent straight through — every authorization decision happens
+ * inside the orchestrator, never here. `workspace` defaults to personal when omitted, exactly
+ * preserving every existing caller's behavior unchanged.
+ */
+export function createAgreementCreateHandler(authService: AuthService, agreementWorkspaceService: AgreementWorkspaceService) {
   return async function handleCreate(request: NextRequest): Promise<Response> {
     const { userId } = await requireSession(request, authService);
     const rawBody: unknown = await request.json().catch(() => null);
@@ -24,12 +35,17 @@ export function createAgreementCreateHandler(authService: AuthService, agreement
       throw new ValidationError(parsed.error.issues[0]?.message ?? "A valid agreement draft is required.");
     }
 
-    const result = await agreementService.createDraft({ creatorUserId: userId, ...parsed.data });
+    const { workspace, ...draftInput } = parsed.data;
+    const result = await agreementWorkspaceService.createDraftForWorkspace({
+      userId,
+      workspaceSelector: workspace ?? { kind: "personal" },
+      draftInput,
+    });
     return NextResponse.json(
       {
         id: result.agreement.id,
         status: result.agreement.status,
-        relationshipShape: agreementService.relationshipShape(result.agreement),
+        relationshipShape: agreementWorkspaceService.relationshipShape(result.agreement),
         version: {
           id: result.version.id,
           versionNumber: result.version.versionNumber,
@@ -103,7 +119,7 @@ export function createAgreementListHandler(
 }
 
 async function handleCreate(request: NextRequest): Promise<Response> {
-  return createAgreementCreateHandler(getAuthService(), getAgreementService())(request);
+  return createAgreementCreateHandler(getAuthService(), getAgreementWorkspaceService())(request);
 }
 
 async function handleList(request: NextRequest): Promise<Response> {

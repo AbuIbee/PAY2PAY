@@ -1,4 +1,4 @@
-import { boolean, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { pricingPlanKindEnum, profileKindEnum, subscriptionStatusEnum } from "./enums";
 
@@ -67,8 +67,39 @@ export const subscription = pgTable("subscription", {
   endedAt: timestamp("ended_at", { withTimezone: true }),
   currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+  // "PAID2YOU PLATFORM EXPANSION" (2026-10-02), DB-6/Requirement 24/25: cancellation defaults to
+  // end-of-period (never an immediate destructive cancel) — `cancelAtPeriodEnd = true` with `status`
+  // still "active" means "will not renew," not "canceled now." `canceledAt` is the audit timestamp
+  // of the cancellation REQUEST, independent of whether the period has actually ended yet.
+  cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+  canceledAt: timestamp("canceled_at", { withTimezone: true }),
+  // Opaque references into PlatformBillingProvider's own system (e.g. a payment processor's
+  // customer/subscription id) — never a secret, never raw payment-method data (see
+  // subscriptionPaymentMethod's own doc comment in platformExpansion.ts for where that lives
+  // instead). Nullable: unset whenever the production billing provider is NOT_CONFIGURED (see
+  // platformBillingProvider.ts).
+  providerCustomerReference: text("provider_customer_reference"),
+  providerSubscriptionReference: text("provider_subscription_reference"),
+  // "PAID2YOU PLATFORM EXPANSION" (2026-10-02), DB-4/Requirement 23/26: Enterprise's "starting
+  // $5,000/month, custom contractual price" — this is the ORGANIZATION-SPECIFIC negotiated amount,
+  // deliberately a separate column from `pricing_plan.monthly_fee_minor_units` (the catalog's
+  // starting/reference price), never overwriting it. NULL (the default for every Core/Growth/Scale
+  // subscription, and for an Enterprise subscription before a contract price has been negotiated)
+  // means "use the catalog price" — see PricingService/PlatformBillingService's own resolution
+  // logic. Never used to represent interest/a recurring increase — this is the flat negotiated
+  // monthly fee itself (Riba guardrail, master order §32).
+  negotiatedMonthlyFeeMinorUnits: integer("negotiated_monthly_fee_minor_units"),
+  // Requirement 23/DB-5: Enterprise's "2,000+ / custom arrangements" — an organization-specific
+  // override of the catalog plan's `new_arrangements_monthly` entitlement limit (which stays NULL/
+  // unlimited at the catalog level for Enterprise — see seedCanonicalBusinessPlans.ts). NULL means
+  // "use the catalog entitlement's limit," never a silently-invented default; see
+  // arrangementUsageMetering.ts's own resolution order.
+  negotiatedNewArrangementsMonthlyLimit: integer("negotiated_new_arrangements_monthly_limit"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}).enableRLS();
+}, (table) => [
+  check("subscription_negotiated_fee_positive", sql`${table.negotiatedMonthlyFeeMinorUnits} IS NULL OR ${table.negotiatedMonthlyFeeMinorUnits} > 0`),
+  check("subscription_negotiated_limit_positive", sql`${table.negotiatedNewArrangementsMonthlyLimit} IS NULL OR ${table.negotiatedNewArrangementsMonthlyLimit} > 0`),
+]).enableRLS();
 
 /**
  * B2B Organization architecture: the entitlement catalog — which features/limits come bundled with

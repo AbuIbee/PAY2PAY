@@ -39,3 +39,5 @@ export * from "./agreementPartySnapshot";
 export * from "./preferredEmailVerification";
 export * from "./payoutAttempt";
 export * from "./businessReceivables";
+export * from "./organizationRoles";
+export * from "./platformExpansion";

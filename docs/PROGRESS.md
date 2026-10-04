@@ -2396,3 +2396,366 @@ Not applicable yet — no commit, no branch push, no PR opened.
 ### ChatGPT/Product Owner review
 
 **NOT YET REVIEWED.**
+
+## PAID2YOU PLATFORM EXPANSION — Business Onboarding + Workspace Frontend (2026-10-02)
+
+Continuation of the uncommitted "PAID2YOU PLATFORM EXPANSION" backend-foundation work (organization
+roles/permissions, BusinessVerificationProvider/PlatformBillingProvider architecture, canonical
+Business pricing plans, arrangement usage metering — all previously validated). This phase built the
+frontend and remaining server routes the backend foundation had no UI/route surface for yet: the
+resumable Business onboarding wizard, the protected organization route shell, and real (or honestly
+empty) content for every Business-nav destination. On branch
+`architecture/b2b-organization-workspaces-v2`; still **uncommitted**.
+
+### Fixed first: AppNav test regression
+
+`src/components/AppNav.test.tsx`'s Business-navigation test ambiguously queried
+`getByRole("link", { name: "Dashboard" })`, matching both the Personal and Business "Dashboard" links
+once both render. Fixed by giving the Business-nav section its own accessible landmark
+(`<nav aria-label="{org} navigation">` in `AppNav.tsx`) and scoping the test's assertions to it via
+`within(...)` — neither nav label was renamed, neither link was removed.
+
+### Files added
+
+Onboarding wizard: `src/components/organizations/BusinessOnboardingWizard.tsx` (+`.test.tsx`) — Business
+Details → Verification → Tier Selection → Billing → Activation, resuming from the server's own
+`onboardingStep`/`activation` fields on every mount, never local progression state. New read endpoint
+`src/app/api/organizations/onboarding/plans/route.ts` (+`.test.ts`) lists the canonical Business plan
+catalog (`PricingService.listPlans`, a new thin pass-through method added to `pricingService.ts`, with
+its own test and the service's "closed API surface" test updated to include it).
+
+Organization route shell: `src/components/organizations/OrganizationWorkspaceGate.tsx` (+`.test.tsx`)
+— a client-side presence check (mirrors `OnboardingGate`'s pattern) that re-validates membership via
+the existing `/api/workspace/active` before rendering protected children, redirecting to `/dashboard`
+otherwise. Mounted from `src/app/(app)/organizations/[organizationId]/layout.tsx`. This is UX only —
+every nested page's own data route independently re-checks membership/capability and fails closed on
+its own.
+
+Twelve Business-nav destination pages under `src/app/(app)/organizations/[organizationId]/` (`page.tsx`,
+`balances/`, `customers/`, `agreements/`, `payments/`, `employees/`, `reports/`, `reconciliation/`,
+`documents/`, `audit/`, `integrations/`, `settings/`), each backed by one of:
+- **Real data**: Dashboard (`OrganizationDashboard.tsx`, reuses `/api/workspace/active`), Outstanding
+  Balances (`OrganizationBalances.tsx` + `/api/organizations/balances`, reading the pre-existing,
+  previously-unexposed `BusinessObligationRepository`), Customers (`OrganizationCustomers.tsx` +
+  `/api/organizations/customers`, reading the pre-existing `BusinessCustomerRepository`), Agreements
+  (`OrganizationAgreements.tsx`, reuses the existing, already-authorized
+  `GET /api/agreements?profileKind=business` — no new agreement-listing authorization path), Employees
+  (`OrganizationEmployees.tsx` + `/api/organizations/employees`, reading `BusinessStaffMemberRepository`),
+  Organization Settings (`OrganizationSettings.tsx` + `/api/organizations/settings`, read-only).
+- **Honest unavailable state** (`OrganizationUnavailableResource.tsx`, +`.test.tsx`, shared): Payments
+  (org-level view), Reports, Reconciliation, Documents, Audit History, Integrations — no backend exists
+  for any of these yet; each still calls the real `canReadOrganizationResource` check (via the new
+  `/api/organizations/resource-access` route, +`.test.ts`) before showing its empty-state text, so a
+  member lacking the resource's required capability sees "you don't have permission," never the
+  feature's own empty message.
+
+New shared module `src/lib/organizations/organizationResourceTypes.ts` — `OrganizationResourceType`
+extracted out of the "server-only" `organizationAuthorizationService.ts` so client components can
+import the type/list without pulling in server code.
+
+Structural test `src/components/organizations/businessNavRoutes.test.ts` — asserts every
+`AppNav.BUSINESS_NAV_ITEMS` href (now exported) resolves to an implemented `page.tsx`, so enabling
+`FEATURE_B2B_ORGANIZATIONS_ENABLED` can never produce a dead link.
+
+`/organizations/new` (`src/app/(app)/organizations/new/page.tsx`) hosts the wizard. Business
+organization creation/onboarding continues to go exclusively through `BusinessOnboardingService` +
+`POST /api/organizations` — the pre-existing `SignupForm`/`/api/auth/signup` initial-account-entry path
+was left untouched; no third provisioning architecture was introduced.
+
+### Files modified
+
+`src/components/AppNav.tsx`/`.test.tsx` (regression fix above; `BUSINESS_NAV_ITEMS` exported),
+`src/lib/organizations/organizationAuthorizationService.ts` (`OrganizationResourceType` now
+re-exported from the new shared module instead of defined inline), `src/lib/pricing/pricingService.ts`
+(+`listPlans`) and its test file (closed-method-list assertion updated).
+
+### Known, deliberate scope boundaries (not gaps)
+
+Verification and billing steps always surface the real `ProviderNotAvailableError` (503) today — both
+providers are genuinely unregistered in every environment (`getBusinessVerificationProvider.ts`/
+`getPlatformBillingProvider.ts` always throw), so a live run cannot currently progress past the
+Verification step. This is correct per this phase's own instructions, not a bug; the happy-path
+activation flow is proven instead at the service layer against the sandbox test fakes
+(`businessOnboardingService.test.ts`, "correct activation when all domain requirements are satisfied").
+The Billing step collects no raw card/bank fields — no provider-hosted tokenization widget exists yet.
+No RBAC/permission-editing UI, no new business-creation path, no full dashboards/reports/reconciliation/
+documents features — all explicitly out of this phase's scope per its own "stop after this phase" list.
+
+### Tests
+
+Full non-Postgres suite: 2464/2465 passing (up from 2413/2414 before this phase — 51 net new passing),
+the sole failure being the pre-existing, accepted `AgreementCreateWizard.test.tsx` ("...creates a draft
+and navigates", line 249, `TestingLibraryElementError`) — same test, same assertion, same line, same
+error shape. Full Postgres suite run via `npm run test:postgres`; no Postgres-dependent code was added
+or changed (no new migrations — every new route reads existing, already-migrated tables).
+
+New coverage: AppNav (regression fix verified, existing workspace-selector/flag coverage untouched);
+onboarding wizard (fresh start, URL-driven resume on reload, Business Details submit, Verification/
+Billing NOT_CONFIGURED represented honestly without fabricating success, Tier Selection showing
+canonical prices/limits with Enterprise never shown as a fixed price, activation reasons shown
+honestly, activation-true workspace link); `OrganizationWorkspaceGate` (member allowed, removed/invalid
+membership denied+redirected, stale-cookie cross-organization mismatch denied, failed/unauthenticated
+request denied); `OrganizationUnavailableResource` (allowed vs. denied vs. never inferring access from
+the nav link); the four new data routes and the resource-access route (member allowed for
+non-sensitive resources including VIEWER, non-member/cross-tenant denied with 403, OWNER-only sensitive
+resources denied to FINANCE_ADMIN as well as VIEWER — proving permission-key enforcement rather than
+"privileged-looking role" inference); the onboarding plans route and `PricingService.listPlans`.
+
+### Verification commands run
+
+`npx tsc --noEmit` — pass, 0 errors. `npx eslint .` — pass, 0 errors (27 pre-existing warnings,
+unrelated to this phase). `npm run build` (Turbopack) — pass; all 12 new organization routes + layout +
+`/organizations/new` + 6 new API routes present in the build output as expected (`ƒ` dynamic for the
+`[organizationId]` tree and API routes, `○` static for `/organizations/new`). `npx vitest run` (full
+non-Postgres suite) — 2464/2465, the one accepted pre-existing failure only. `npm run test:postgres`
+(full Postgres suite, disposable container) — see this session's own completion report for the exact
+pass count.
+
+### Git commit
+
+**Not yet committed** — per this session's explicit instruction not to commit, push, rebase, or merge.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**
+
+## Custom RBAC Runtime Cutover + Employees / Roles & Permissions (2026-10-02)
+
+Closes the gap the prior checkpoint explicitly flagged: `organization_role`/`organization_role_permission`
+now become the actual runtime authorization source for every organization route built so far, replacing
+the transitional `OrganizationAuthorizationService.canReadOrganizationResource` capability boundary for
+all but one deliberately-preserved call site (below). Still on
+`architecture/b2b-organization-workspaces-v2`, still **uncommitted**.
+
+### Audit findings (before implementation)
+
+`membership.role` (legacy enum) remained the sole runtime authorization source; `membership.role_id`
+existed but was never read back — `BusinessStaffMemberRecord`/`StaffInvitationRecord` didn't even expose
+it as a field (a real gap, not just "unused"). The old model's ordinary-resource read rule ("any active
+member may read a non-sensitive resource") was never captured by `translatedPermissionKeysForLegacyRole`
+— it only translated *capabilities* (mutation-oriented), so a literal translation would have left legacy
+VIEWER with zero effective permissions post-cutover, a real regression once these rows became
+load-bearing. Fixed first (see below) before building anything on top of it.
+
+### Files added
+
+Canonical resolver: `src/lib/organizations/organizationPermissionService.ts` (+`getOrganizationPermissionService.ts`,
++`.test.ts`, 15 tests) — `can`/`require`/`isProtectedOwner`, membership → role_id → organization_role →
+organization_role_permission, self-healing a null role_id via the existing `LegacyRoleMigrationService`
+scoped to just that one organization (never a bulk/global migration triggered from a request path), falling
+back to `translatedPermissionKeysForLegacyRole` if that still leaves it unresolved. Protected-Owner status
+is read from the role's own structural `isOwnerRole` flag, never `displayName`.
+
+Membership mutations: `src/lib/organizations/organizationMembershipService.ts` (+factory, +`.test.ts`, 12
+tests) — `changeMemberRole`/`removeMember`, authorized via the resolver (`roles.assign`/`members.remove`),
+enforcing "cannot act on yourself" and "the organization's last protected Owner can never be reassigned
+away or removed." Deliberately a NEW seam, not a reuse of `StaffService.updateStaffRole`/`removeStaff`
+(the legacy, MFA-step-up-enforcing flow behind the still-disabled `/organization/staff` page) — that flow
+is untouched.
+
+New API routes (all gated through the resolver): `src/app/api/organizations/roles/route.ts` (GET/POST/PATCH/DELETE,
++`.test.ts`, 11 tests — a thin layer over the already-tested `OrganizationRoleService`), `.../roles/permissions/route.ts`
+(POST/DELETE, +`.test.ts`, 6 tests), `.../members/route.ts` (PATCH/DELETE, +`.test.ts`, 6 tests),
+`.../invitations/route.ts` (GET/POST, +`.test.ts`, 4 tests — organization_role-based, independent of the
+legacy `StaffService.inviteStaff` capability gating), `.../invitations/revoke/route.ts` (POST, +`.test.ts`,
+2 tests).
+
+Employees UI restructured into three tabs under the existing design system: `OrganizationEmployeesTabs.tsx`
+(+`.test.tsx`, 4 tests) hosting `OrganizationEmployees.tsx` (Team Members — now shows real role names via
+`organization_role`, plus role-change/remove controls gated server-side), `OrganizationInvitations.tsx` (new
+— list + create + revoke), `OrganizationRolesPermissions.tsx` (new — list/create/rename/delete roles, edit
+permissions via checkboxes rendered directly from the server's own `PERMISSION_CATALOG`, protected roles
+shown read-only).
+
+### Files modified
+
+`legacyRoleMigration.ts`/`.test.ts` — added `AMBIENT_VIEW_KEYS_FOR_ANY_ACTIVE_MEMBER` (dashboard/balances/
+customers/agreements/payments/members/reports/documents `.view` keys) to `translatedPermissionKeysForLegacyRole`,
+granted to every legacy role including VIEWER, reproducing the old "any active member reads an ordinary
+resource" rule now that these rows are actually consulted; updated the one test that had asserted VIEWER's
+migrated permissions were empty (correct pre-cutover, not after).
+
+`src/lib/staff/staffService.ts` — `BusinessStaffMemberRecord`/`StaffInvitationRecord` gained a real `roleId`
+field (previously absent from both, despite the DB columns existing); `acceptInvitation` now copies
+`invitation.roleId` onto the new membership when present (no-op for the legacy invite flow, which never
+sets it) — the one targeted, additive change to this file. Matching updates to
+`drizzleBusinessStaffMemberRepository.ts`, `drizzleStaffInvitationRepository.ts` (+`listPendingForBusiness`,
++`revoke`), `atomicBusinessProfileCreator.ts`, and both in-memory test fakes (`src/lib/staff/testFakes.ts`'s
+`InMemoryBusinessStaffMemberRepository`/`InMemoryStaffInvitationRepository` — the former previously tracked
+`roleId` in a side map never read back by `findActiveByBusinessAndUser` et al., a real bug now fixed).
+
+Route cutover (Step 20): `balances`, `customers`, `employees`, `settings`, `resource-access` routes now call
+`OrganizationPermissionService` with the matching stable key (`balances.view`/`customers.view`/`members.view`/
+`organization.view`/caller-supplied key) instead of `canReadOrganizationResource`. `resource-access` itself
+now takes a `permission` query param (a real catalog key) instead of the old `resource` enum param;
+`OrganizationUnavailableResource.tsx` and its six pages (payments/reports/reconciliation/documents/audit/
+integrations) updated to match. `OrganizationDashboard.tsx` adds an explicit `dashboard.view` check
+alongside its existing `/api/workspace/active` read. `src/lib/organizations/organizationResourceTypes.ts`
+(the shared client-safe type) is now consumed only by `organizationAuthorizationService.ts` itself — that
+service and its own 16 tests are otherwise untouched, kept as a legacy artifact, not deleted.
+
+### Deliberately NOT migrated (and why)
+
+`AgreementWorkspaceService.createDraftForWorkspace`'s organization-level gate still calls
+`OrganizationAuthorizationService.can(..., "manage_agreements")` — unchanged. Every catalog permission key
+reachable from the legacy translation table is a many-to-one collapse of multiple distinct legacy
+capabilities: `agreements.create` comes from `create_agreement`, `agreements.edit` comes from
+`manage_agreements` **and** `propose_amendment`/`approve_agreement`/`approve_hardship`/`approve_settlement`.
+AR_AGENT holds `create_agreement` and `propose_amendment` but never held `manage_agreements`, and Phase 8
+deliberately excludes AR_AGENT from organization agreement creation (`agreementWorkspaceService.test.ts`:
+"AR_AGENT cannot create an organization agreement... even when entitled"). Both candidate stable keys were
+tried and reverted after that exact test failed — no currently-catalogued key reproduces `manage_agreements`'s
+role set without either widening access to AR_AGENT or restructuring the shared translation table (risking
+every other call site that depends on it). Preserving the existing, correct, already-tested check was safer
+than forcing an imprecise migration; flagged here as a genuine open item for a future permission-catalog
+refinement, not an oversight. Phase 9's own `create_agreement` party-authorization semantics are completely
+unaffected either way.
+
+### Tests
+
+Full non-Postgres suite: 2526/2527 passing (up from 2464/2465 before this phase — 62 net new passing), the
+sole failure being the same pre-existing, accepted `AgreementCreateWizard.test.tsx` baseline. Full Postgres
+suite re-run via `npm run test:postgres` — no Postgres-dependent code changed (no new migrations).
+
+New coverage highlights: `OrganizationPermissionService` (custom-role permission grants/denies, role display
+name never authorizes, renamed role retains access, same-named role in a different organization has no
+effect, permission change takes effect immediately, inactive/cross-tenant membership denied, cross-tenant
+role_id denied, legacy OWNER/VIEWER/FINANCE_ADMIN equivalence, protected-Owner structural check surviving a
+rename); `OrganizationMembershipService` (authorized role-change/removal, cross-tenant role rejected,
+self-action rejected, last-Owner protection on both change-role and remove); role CRUD routes (create/rename/
+edit-permissions/delete, unknown permission and unsupported scope rejected, protected-role edit/delete
+rejected, delete-with-active-members requires reassignment, cross-org role edit rejected); members/invitations
+routes (role-change, removal, cross-tenant role/invitation rejected, invite + list + revoke, VIEWER denied);
+`StaffService.acceptInvitation` role_id copy-through (and the legacy no-roleId path staying null, never
+fabricated); the Employees tab UI (each tab independently loads and independently reports a permission denial).
+
+### Verification commands run
+
+`npx tsc --noEmit` — pass, 0 errors. `npx eslint .` — pass, 0 errors (27 pre-existing warnings, unrelated).
+`npm run build` (Turbopack) — pass; `/api/organizations/{roles,roles/permissions,members,invitations,
+invitations/revoke}` all present as dynamic routes. `npx vitest run` (full non-Postgres suite) — 2526/2527,
+the one accepted pre-existing failure only. `npm run test:postgres` (full Postgres suite, disposable
+container) — see this session's own completion report for the exact pass count.
+
+### Git commit
+
+**Not yet committed** — per this session's explicit instruction not to commit, push, rebase, or merge.
+
+### GitHub CI / Vercel preview
+
+Not applicable yet — no commit, no branch push, no PR opened.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**
+
+## PAID2YOU — MASTER P0 CLOSURE REMEDIATION (account-switch continuation) (2026-10-03)
+
+Continuation of the Master P0 phase above after a previous Claude session hit its usage limit
+mid-edit (interface extended with `createCheckoutSession`/`retrieveSubscriptionPaymentMethod`, no
+implementation yet — `npx tsc --noEmit` failed with 32 errors at this session's start). Full detail
+in `docs/CODEX_P0_VERIFICATION_HANDOFF.md`'s own "P0 CLOSURE REMEDIATION" section; summary:
+
+- **Confirmed already complete** (no change needed): Middesk `in_review` → `review_required` mapping
+  (never activates a Business), and Middesk verification audit events — both already correctly
+  implemented and tested from the Master P0 phase.
+- **Closed this phase:** the real Stripe-hosted Checkout billing flow end to end (adapter, sandbox
+  test double, `SubscriptionRepository.findByProviderCustomerReference`,
+  `PlatformBillingService.beginHostedCheckout`, `PlatformBillingWebhookService`'s
+  `checkout.session.completed` handling, a new onboarding route, and the onboarding wizard UI —
+  replacing a fake hardcoded `"pending-provider-integration"` payment-method token that could never
+  have worked against a live Stripe account); Stripe billing lifecycle audit events (subscription
+  started/activated, payment failed, cancel-at-period-end, reactivated, plan upgraded); removal of the
+  production legal-placeholder banner (`LegalPlaceholder.tsx`) while preserving
+  `OWNER APPROVED: NO` / `LEGAL APPROVED: NO` in `docs/PRODUCTION_LEGAL_REVIEW.md`; a launch-critical
+  email inventory (`docs/LAUNCH_EMAIL_INVENTORY.md`).
+- **Still open, not fabricated as done:** a representative pre-upgrade database migration rehearsal,
+  and a dedicated Supabase cross-tenant signed-document-URL test at the `SignatureService`/
+  `AgreementService` boundary. Both require real additional work, not something this phase could
+  honestly check off by re-running existing tests.
+
+### Tests
+
+`npx tsc --noEmit` — clean (was 32 errors at phase start). `npx eslint .` — 0 errors, 35 warnings (all
+pre-existing). `npm run build` — succeeds, includes the new
+`/api/organizations/onboarding/billing/checkout` route. `npx vitest run --exclude
+'**/*.postgres.test.ts'` — 2891/2892, the one accepted pre-existing `AgreementCreateWizard.test.tsx`
+baseline failure only, zero new failures. `npm run test:postgres` — 332/332 passed, 13 files, full
+fresh migration chain (no new migration this phase). `node --test
+scripts/check-production-readiness.test.mjs` — 8/8. `npm run test:tooling` — 100/100.
+
+### Git commit
+
+**Not committed** — per this session's explicit instruction not to commit, push, rebase, or merge.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**
+
+## PAID2YOU — FINAL TWO P0 CLOSURE ITEMS (2026-10-03)
+
+Closed the two items the prior continuation left open rather than fabricate: Item F (a TRUE
+representative pre-upgrade database migration rehearsal — historical data seeded BEFORE the Final
+RBAC/commercial-catalog/provider-webhook migrations, then migrated forward, then verified preserved)
+and Item G (an executable cross-tenant signed-document authorization proof, asserting
+`DocumentStorage.createSignedUrl` invocation counts directly, not merely HTTP status codes). Full
+detail in `docs/CODEX_P0_VERIFICATION_HANDOFF.md`'s own "FINAL TWO P0 CLOSURE ITEMS" section.
+
+New artifacts: `scripts/run-production-upgrade-rehearsal.mjs` + `scripts/productionUpgradeRehearsal.ts`
+(run via `npm run db:upgrade-rehearsal`), and
+`src/app/api/agreements/pdf/route.tenantIsolation.postgres.test.ts` (5 new tests, run via
+`npm run test:postgres`). No accepted architecture was reopened or redesigned.
+
+### Tests
+
+`npx tsc --noEmit` — clean. `npx eslint .` — 0 errors, 35 pre-existing warnings. `npm run build` —
+succeeds. `npm run db:upgrade-rehearsal` — PASS, run twice, both clean. `npm run test:postgres` —
+337/337 passed, 14 files (was 332/13). `npx vitest run --exclude '**/*.postgres.test.ts'` —
+2891/2892, the one accepted pre-existing `AgreementCreateWizard.test.tsx` baseline failure only.
+
+### Git commit
+
+**Not committed** — per this session's explicit instruction not to commit, push, rebase, or merge.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**
+
+## PAID2YOU — CODEX P0 DEFECT REMEDIATION (2026-10-04)
+
+Reproduced, fixed, and tested 7 independent defects a separate Codex read-only verification pass
+found in the previously-accepted P0 closure work: (P0-1) production migration/backfill ordering —
+new `npm run db:upgrade-production` orchestrator guarantees the backfill runs before the role_id
+constraint; (P0-2) raw Middesk business-object/TIN data could reach persistent webhook JSONB and
+provider-error text could reach logs — now allowlisted/sanitized; (P0-3) a failed webhook processing
+attempt (Middesk or Stripe) was permanently treated as a duplicate — now an atomic claim/retry
+mechanism (`claimEvent`, new `claimed_at` column); (P0-4) a canceled/incomplete Stripe subscription
+could still activate a Business via `checkout.session.completed` — now gated on genuine provider
+status; (P0-5) onboarding tier reentry could bypass billing entirely (including reaching Enterprise
+or downgrading for free) — now blocked once onboarding/billing has genuinely progressed; (P0-6)
+cancel/reactivate reported local success even when the Stripe call failed — now provider-first,
+truthful ordering; (P0-7) the production-readiness script could report `READY` with a localhost
+APP_URL or missing Stripe price IDs — now `CONFIGURATION_READY`/`CONFIGURATION_INCOMPLETE` with the
+missing checks added. Full detail in `docs/CODEX_P0_VERIFICATION_HANDOFF.md`'s own "CODEX P0 DEFECT
+REMEDIATION" section. No accepted architecture was reopened or redesigned.
+
+### Tests
+
+`npx tsc --noEmit` — clean. `npx eslint .` — 0 errors, 35 pre-existing warnings. `npm run build` —
+succeeds. Combined targeted P0-1..P0-7 suite — 114/114. `npm run db:upgrade-orchestrator-rehearsal` —
+PASS. `node --test scripts/check-production-readiness.test.mjs` — 19/19. `npx vitest run --exclude
+'**/*.postgres.test.ts'` — 2918/2919 (the one accepted pre-existing baseline failure only; +27 net
+new passing tests). `npm run test:postgres` — 342/342 passed, 15 files (+5 new:
+`webhookEventClaim.postgres.test.ts`).
+
+### Git commit
+
+**Not committed** — per this session's explicit instruction not to commit, push, rebase, or merge.
+
+### ChatGPT/Product Owner review
+
+**NOT YET REVIEWED.**

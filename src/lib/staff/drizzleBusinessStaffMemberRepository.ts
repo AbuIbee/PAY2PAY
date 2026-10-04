@@ -15,6 +15,7 @@ function toRecord(row: Row): BusinessStaffMemberRecord {
     userId: row.userId,
     role: row.role as StaffRole,
     customRoleId: row.customRoleId,
+    roleId: row.roleId,
     isAuthorizedRepresentative: row.isAuthorizedRepresentative,
     removedAt: row.removedAt,
     createdAt: row.createdAt,
@@ -68,6 +69,15 @@ export class DrizzleBusinessStaffMemberRepository implements BusinessStaffMember
     return rows.map(toRecord);
   }
 
+  async listActiveByUser(userId: string): Promise<BusinessStaffMemberRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(businessStaffMember)
+      .where(and(eq(businessStaffMember.userId, userId), isNull(businessStaffMember.removedAt)));
+    return rows.map(toRecord);
+  }
+
   async updateRole(id: string, input: { role: StaffRole; customRoleId: string | null }): Promise<void> {
     const db = getDb();
     await db
@@ -79,5 +89,10 @@ export class DrizzleBusinessStaffMemberRepository implements BusinessStaffMember
   async markRemoved(id: string, removedAt: Date): Promise<void> {
     const db = getDb();
     await db.update(businessStaffMember).set({ removedAt }).where(eq(businessStaffMember.id, id));
+  }
+
+  async setRoleId(id: string, roleId: string): Promise<void> {
+    const db = getDb();
+    await db.update(businessStaffMember).set({ roleId, updatedAt: new Date() }).where(eq(businessStaffMember.id, id));
   }
 }

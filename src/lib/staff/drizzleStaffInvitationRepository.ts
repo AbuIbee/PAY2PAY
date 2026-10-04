@@ -15,6 +15,7 @@ function toRecord(row: Row): StaffInvitationRecord {
     email: row.email,
     role: row.role as StaffRole,
     customRoleId: row.customRoleId,
+    roleId: row.roleId,
     invitedByUserId: row.invitedByUserId,
     tokenHash: row.tokenHash,
     status: row.status,
@@ -32,14 +33,29 @@ export class DrizzleStaffInvitationRepository implements StaffInvitationReposito
     email: string;
     role: StaffRole;
     customRoleId: string | null;
+    roleId?: string | null;
     invitedByUserId: string;
     tokenHash: string;
     expiresAt: Date;
   }): Promise<StaffInvitationRecord> {
     const db = getDb();
-    const [row] = await db.insert(businessStaffInvitation).values(input).returning();
+    const [row] = await db.insert(businessStaffInvitation).values({ ...input, roleId: input.roleId ?? null }).returning();
     if (!row) throw new ConfigurationError("business_staff_invitation insert returned no row");
     return toRecord(row);
+  }
+
+  async listPendingForBusiness(businessProfileId: string): Promise<StaffInvitationRecord[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(businessStaffInvitation)
+      .where(and(eq(businessStaffInvitation.businessProfileId, businessProfileId), eq(businessStaffInvitation.status, "pending")));
+    return rows.map(toRecord);
+  }
+
+  async revoke(id: string, revokedAt: Date): Promise<void> {
+    const db = getDb();
+    await db.update(businessStaffInvitation).set({ status: "revoked", revokedAt }).where(eq(businessStaffInvitation.id, id));
   }
 
   async findByTokenHash(tokenHash: string): Promise<StaffInvitationRecord | null> {

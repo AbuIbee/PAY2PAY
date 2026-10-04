@@ -5,6 +5,20 @@ import type { AtomicBusinessProfileCreator } from "./atomicBusinessProfileCreato
 
 export type BusinessProfileStatus = "active" | "disabled" | "deleted";
 
+export type BusinessIndustry = "TRUCKING" | "FREIGHT" | "THREE_PL" | "RETAIL" | "OTHER";
+
+/** Section 3: resumability marker only — see businessOnboardingStepEnum's own doc comment (src/db/schema/enums.ts). */
+export type BusinessOnboardingStep = "details_pending" | "details_complete" | "verification_submitted" | "tier_selected" | "billing_setup_complete";
+
+export interface BusinessRepresentativeDetails {
+  firstName: string;
+  lastName: string;
+  title: string;
+  email: string;
+  phone: string;
+  relationshipToBusiness: string;
+}
+
 export interface BusinessProfileRecord {
   id: string;
   ownerUserId: string;
@@ -17,6 +31,13 @@ export interface BusinessProfileRecord {
   status: BusinessProfileStatus;
   currency: string;
   createdAt: Date;
+  dbaName: string | null;
+  industry: BusinessIndustry | null;
+  formationJurisdiction: string | null;
+  businessEmail: string | null;
+  website: string | null;
+  representative: BusinessRepresentativeDetails | null;
+  onboardingStep: BusinessOnboardingStep;
 }
 
 export interface BusinessProfileRepository {
@@ -48,6 +69,20 @@ export interface BusinessProfileRepository {
    * business the same way it already does for a user account.
    */
   updateStatus(id: string, status: BusinessProfileStatus): Promise<void>;
+  /** Requirement 3: persists the Business Details onboarding step's fields this table didn't already have. */
+  updateOnboardingDetails(
+    id: string,
+    input: {
+      dbaName: string | null;
+      industry: BusinessIndustry;
+      formationJurisdiction: string;
+      businessEmail: string;
+      website: string | null;
+      representative: BusinessRepresentativeDetails;
+    },
+  ): Promise<void>;
+  /** Section 3: monotonic resumability marker — see businessOnboardingStepEnum's own doc comment. */
+  setOnboardingStep(id: string, step: BusinessOnboardingStep): Promise<void>;
 }
 
 /**

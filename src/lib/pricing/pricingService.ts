@@ -23,6 +23,25 @@ export interface PricingPlanRepository {
   findById(id: string): Promise<PricingPlanRecord | null>;
   findByCode(code: string): Promise<PricingPlanRecord | null>;
   listActiveByKind(kind: PricingPlanKind): Promise<PricingPlanRecord[]>;
+  /**
+   * "PAID2YOU PLATFORM EXPANSION" (2026-10-02): this table was previously, deliberately, seed-free
+   * ("do not hard-code speculative prices applies to seed rows too" — docs/PROGRESS.md). This method
+   * exists specifically because the platform expansion order's own Section 7 now provides the real,
+   * authorized canonical prices (Core $199/Growth $699/Scale $1,999/Enterprise starting $5,000) — see
+   * seedCanonicalBusinessPlans.ts, the one intended caller, never invented elsewhere.
+   */
+  insert(input: {
+    kind: PricingPlanKind;
+    code: string;
+    name: string;
+    monthlyFeeMinorUnits: number | null;
+    annualFeeMinorUnits: number | null;
+    perAgreementFeeMinorUnits: number | null;
+    perSuccessfulPaymentFeeMinorUnits: number | null;
+    freeAgreementAllowance: number | null;
+    freeIncludedPaymentsAllowance: number | null;
+    isActive: boolean;
+  }): Promise<PricingPlanRecord>;
 }
 
 export type SubscriptionStatus = "active" | "canceled";
@@ -35,12 +54,51 @@ export interface SubscriptionRecord {
   status: SubscriptionStatus;
   startedAt: Date;
   endedAt: Date | null;
+  currentPeriodStart: Date | null;
+  currentPeriodEnd: Date | null;
+  cancelAtPeriodEnd: boolean;
+  canceledAt: Date | null;
+  providerCustomerReference: string | null;
+  providerSubscriptionReference: string | null;
+  /**
+   * "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Requirement 23/26: the organization-specific
+   * negotiated Enterprise contract price, independent of the catalog plan's own starting/reference
+   * price (`PricingPlanRecord.monthlyFeeMinorUnits`). NULL means "use the catalog price" — see
+   * PlatformBillingService's own resolution order. Never set for Core/Growth/Scale in practice.
+   */
+  negotiatedMonthlyFeeMinorUnits: number | null;
+  /** Requirement 23/DB-5: organization-specific override of the catalog entitlement's `new_arrangements_monthly` limit. NULL means "use the catalog limit." */
+  negotiatedNewArrangementsMonthlyLimit: number | null;
 }
 
 export interface SubscriptionRepository {
   insert(input: { profileKind: ProfileKind; profileId: string; pricingPlanId: string }): Promise<SubscriptionRecord>;
+  findById(id: string): Promise<SubscriptionRecord | null>;
   findActiveByProfile(profileKind: ProfileKind, profileId: string): Promise<SubscriptionRecord | null>;
+  /** "PAID2YOU — MASTER P0" (2026-10-03), Section 24/25: resolves an incoming Stripe webhook's own subscription id back to the local row it belongs to — trusted-reference lookup, never derived from client-supplied organization/display identity. */
+  findByProviderSubscriptionReference(providerSubscriptionReference: string): Promise<SubscriptionRecord | null>;
+  /**
+   * "PAID2YOU — MASTER P0 CLOSURE REMEDIATION" (2026-10-03), Section 7/11: resolves a `checkout.session.completed`
+   * webhook's own `customer` field back to the local row it belongs to — the provider customer
+   * reference is already persisted on this row by `PlatformBillingService.beginHostedCheckout` BEFORE
+   * the Business is ever redirected to the provider's hosted page, so this, too, is a trusted-reference
+   * lookup, never derived from client-supplied identity. Used instead of `findByProviderSubscriptionReference`
+   * specifically for checkout completion, because the local row has no `providerSubscriptionReference`
+   * yet the first time this event fires.
+   */
+  findByProviderCustomerReference(providerCustomerReference: string): Promise<SubscriptionRecord | null>;
   cancel(id: string): Promise<void>;
+  /** PlatformBillingProvider's own customer/subscription identifiers — never a secret (see that file's own doc comment). */
+  setProviderReferences(id: string, input: { providerCustomerReference: string | null; providerSubscriptionReference: string | null }): Promise<void>;
+  setBillingPeriod(id: string, input: { currentPeriodStart: Date; currentPeriodEnd: Date }): Promise<void>;
+  /** Requirement 24: defaults to end-of-period, never an immediate destructive cancel — `status` stays "active". */
+  requestCancelAtPeriodEnd(id: string): Promise<void>;
+  /** Requirement 25: Owner reactivates a cancel-at-period-end (not yet lapsed) subscription. */
+  reactivate(id: string): Promise<void>;
+  /** Requirement 23/26: sets/clears the organization-specific negotiated Enterprise price and/or arrangement-limit override. */
+  setNegotiatedTerms(id: string, input: { negotiatedMonthlyFeeMinorUnits: number | null; negotiatedNewArrangementsMonthlyLimit: number | null }): Promise<void>;
+  /** Requirement 26: an immediate plan change on the SAME subscription row (preserves provider customer/subscription continuity) — distinct from `subscribe()`, which cancels-and-recreates for the no-live-billing personal/initial-subscribe path. */
+  setPricingPlan(id: string, pricingPlanId: string): Promise<void>;
 }
 
 /**
@@ -64,6 +122,16 @@ export class PricingService {
     const subscription = await this.subscriptions.findActiveByProfile(profileKind, profileId);
     if (!subscription) return null;
     return this.plans.findById(subscription.pricingPlanId);
+  }
+
+  /**
+   * "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Section 4: the onboarding Tier step's own catalog
+   * read — a thin pass-through to the repository's existing `listActiveByKind`, never a second,
+   * UI-side copy of the canonical plan catalog (seedCanonicalBusinessPlans.ts remains the one place
+   * prices/codes are defined).
+   */
+  async listPlans(kind: PricingPlanKind): Promise<PricingPlanRecord[]> {
+    return this.plans.listActiveByKind(kind);
   }
 
   /**

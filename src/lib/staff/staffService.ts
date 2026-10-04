@@ -5,6 +5,7 @@ import type { SessionRepository } from "@/lib/auth/authService";
 import { generateOpaqueToken, hashOpaqueToken } from "@/lib/auth/token";
 import { ConflictError, ForbiddenError, StepUpRequiredError, ValidationError } from "@/lib/errors";
 import type { EmailSender } from "@/lib/notify/emailSender";
+import type { EquivalentRoleResolver } from "@/lib/organizations/legacyRoleMigration";
 import { DEFAULT_ROLE_CAPABILITIES, HIGH_RISK_CAPABILITIES, isCapability } from "./capabilities";
 import type { Capability, StaffRole } from "./capabilities";
 
@@ -14,6 +15,17 @@ export interface BusinessStaffMemberRecord {
   userId: string;
   role: StaffRole;
   customRoleId: string | null;
+  /**
+   * "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Custom RBAC Runtime Cutover, later corrected by the
+   * Final RBAC Authorization Cutover: the canonical organization_role assignment — the ONLY thing
+   * `OrganizationPermissionService` reads for an authorization decision. Null means "not yet
+   * migrated"; `OrganizationPermissionService` never writes this (an authorization question must
+   * never modify authorization state) — `inviteStaff`/`acceptInvitation`/`updateStaffRole` below
+   * resolve it explicitly at mutation time via `EquivalentRoleResolver`, and
+   * `LegacyRoleMigrationService.migrateOrganization` is the separate, explicit bulk backfill for any
+   * pre-existing row these mutation-time call sites never touched.
+   */
+  roleId: string | null;
   isAuthorizedRepresentative: boolean;
   removedAt: Date | null;
   createdAt: Date;
@@ -32,8 +44,12 @@ export interface BusinessStaffMemberRepository {
   /** Excludes removed members — the single seam "removed staff lose access" relies on. */
   findActiveByBusinessAndUser(businessProfileId: string, userId: string): Promise<BusinessStaffMemberRecord | null>;
   listActiveByBusiness(businessProfileId: string): Promise<BusinessStaffMemberRecord[]>;
+  /** "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Section 7/8: every organization this user may select as a workspace — the workspace selector's own listing source. */
+  listActiveByUser(userId: string): Promise<BusinessStaffMemberRecord[]>;
   updateRole(id: string, input: { role: StaffRole; customRoleId: string | null }): Promise<void>;
   markRemoved(id: string, removedAt: Date): Promise<void>;
+  /** "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Section 12: points this membership at its new organization_role row — additive, never removes the legacy `role` enum value (see organizationRoles.ts's own doc comment on the deliberately separate, later authorization cutover). */
+  setRoleId(id: string, roleId: string): Promise<void>;
 }
 
 export interface CustomRoleRecord {
@@ -59,6 +75,14 @@ export interface StaffInvitationRecord {
   email: string;
   role: StaffRole;
   customRoleId: string | null;
+  /**
+   * "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Custom RBAC Runtime Cutover, Section 6: the
+   * organization-owned role this invitation will assign on acceptance — set by the new Invitations
+   * flow (organization_role-based), left null by the legacy `StaffService.inviteStaff` flow (which
+   * continues to assign only the legacy `role` enum). `acceptInvitation` copies this onto the new
+   * membership when present, never fabricating one when absent.
+   */
+  roleId: string | null;
   invitedByUserId: string;
   tokenHash: string;
   status: StaffInvitationStatus;
@@ -76,6 +100,7 @@ export interface StaffInvitationRepository {
     email: string;
     role: StaffRole;
     customRoleId: string | null;
+    roleId?: string | null;
     invitedByUserId: string;
     tokenHash: string;
     expiresAt: Date;
@@ -83,6 +108,9 @@ export interface StaffInvitationRepository {
   findByTokenHash(tokenHash: string): Promise<StaffInvitationRecord | null>;
   findPendingByBusinessAndEmail(businessProfileId: string, email: string): Promise<StaffInvitationRecord | null>;
   markAccepted(id: string, input: { acceptedByUserId: string; acceptedAt: Date }): Promise<void>;
+  /** Custom RBAC Runtime Cutover, Section 12: the Invitations tab's own listing source. */
+  listPendingForBusiness(businessProfileId: string): Promise<StaffInvitationRecord[]>;
+  revoke(id: string, revokedAt: Date): Promise<void>;
 }
 
 /**
@@ -126,6 +154,13 @@ export class StaffService {
     private readonly audit: AuditService,
     private readonly emailSender: EmailSender,
     private readonly options: StaffServiceOptions,
+    /**
+     * "Final RBAC Authorization Cutover", Step 5/6: resolves (creating if necessary) the
+     * `organization_role` equivalent to a legacy `StaffRole`, so every new/changed legacy-role
+     * membership gets a non-null `role_id` at mutation time rather than relying solely on the
+     * separate bulk `LegacyRoleMigrationService.migrateOrganization` backfill.
+     */
+    private readonly equivalentRoles: EquivalentRoleResolver,
   ) {}
 
   /**
@@ -203,11 +238,15 @@ export class StaffService {
 
     const rawToken = generateOpaqueToken();
     const expiresAt = new Date(Date.now() + (this.options.invitationTtlMs ?? DEFAULT_INVITATION_TTL_MS));
+    // "Final RBAC Authorization Cutover", Step 5: resolve the equivalent organization_role up front so
+    // this (legacy-role-flow) invitation never ends up with a null `roleId` pending acceptance.
+    const roleId = await this.equivalentRoles.resolveOrCreateEquivalentRole(input.businessProfileId, input.role);
     const invitation = await this.invitations.insert({
       businessProfileId: input.businessProfileId,
       email,
       role: input.role,
       customRoleId: null, // custom roles are deferred — see capabilities.ts's own doc comment.
+      roleId,
       invitedByUserId: input.invitedByUserId,
       tokenHash: hashOpaqueToken(rawToken),
       expiresAt,
@@ -250,13 +289,19 @@ export class StaffService {
       customRoleId: invitation.customRoleId,
       isAuthorizedRepresentative: false,
     });
+    // Custom RBAC Runtime Cutover, Section 6 / Final RBAC Authorization Cutover, Step 5: the
+    // resulting membership must never end up with a null `role_id`. `inviteStaff` now always sets
+    // `invitation.roleId` up front; this fallback only matters for invitations that were already
+    // pending before that change shipped.
+    const roleId = invitation.roleId ?? (await this.equivalentRoles.resolveOrCreateEquivalentRole(invitation.businessProfileId, invitation.role));
+    await this.staffMembers.setRoleId(member.id, roleId);
 
     const acceptedAt = new Date();
     await this.invitations.markAccepted(invitation.id, { acceptedByUserId: acceptingUserId, acceptedAt });
     await this.recordAudit(invitation.businessProfileId, acceptingUserId, "staff_invitation_accepted", null, {
       role: invitation.role,
     });
-    return member;
+    return { ...member, roleId };
   }
 
   /**
@@ -334,6 +379,11 @@ export class StaffService {
 
     // Custom roles are deferred (see capabilities.ts's own doc comment) — never set going forward.
     await this.staffMembers.updateRole(target.id, { role: input.newRole, customRoleId: null });
+    // "Final RBAC Authorization Cutover", Step 5: a legacy role CHANGE must also repoint `role_id` at
+    // the new legacy role's equivalent — otherwise the membership would keep resolving permissions
+    // for its PREVIOUS role until the next bulk migration run.
+    const roleId = await this.equivalentRoles.resolveOrCreateEquivalentRole(input.businessProfileId, input.newRole);
+    await this.staffMembers.setRoleId(target.id, roleId);
     await this.recordAudit(input.businessProfileId, input.actingUserId, "staff_role_updated", "step_up", {
       targetStaffId: target.id,
       previousRole: target.role,

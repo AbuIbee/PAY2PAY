@@ -97,6 +97,49 @@ const serverEnvSchema = z.object({
   PAYMENT_PROVIDER: z.string().min(1).optional(),
   KYC_PROVIDER: z.string().min(1).optional(),
   CARD_ISSUING_PROVIDER: z.string().min(1).optional(),
+  // "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Section 9/10: identical shape/fail-closed contract
+  // as the three provider-name vars above — see getBusinessVerificationProvider.ts/
+  // getPlatformBillingProvider.ts. Neither has a registered descriptor in providerCapabilities.ts,
+  // so leaving these unset (the production default today) resolves to ProviderNotAvailableError.
+  BUSINESS_VERIFICATION_PROVIDER: z.string().min(1).optional(),
+  PLATFORM_BILLING_PROVIDER: z.string().min(1).optional(),
+  // "PAID2YOU — MASTER P0" (2026-10-03), Section 11: Middesk production business-verification
+  // adapter (src/lib/organizations/middeskBusinessVerificationProvider.ts) — required only when
+  // BUSINESS_VERIFICATION_PROVIDER=middesk; that adapter's own factory
+  // (getBusinessVerificationProvider.ts) throws a clear ConfigurationError at construction time if
+  // this is missing, mirroring every other provider secret's "optional at the schema level, enforced
+  // at the point of use" established pattern. Bearer token from the Middesk dashboard — never a
+  // placeholder/invented value.
+  MIDDESK_API_KEY: z.string().min(1).optional(),
+  // HMAC-SHA256 webhook signing secret (Middesk's "X-Middesk-Signature-256" header) — a SEPARATE
+  // secret from MIDDESK_API_KEY, configured when registering the webhook endpoint in the Middesk
+  // dashboard/API (see docs/OWNER_LAUNCH_ACTIONS.md).
+  MIDDESK_WEBHOOK_SECRET: z.string().min(16).optional(),
+  // Only needed if Middesk's API base URL ever needs to differ from the documented production
+  // default (https://api.middesk.com) — e.g. a future API version path. Optional; the adapter falls
+  // back to the documented default when unset. Never a sandbox/test host — see this schema's own
+  // superRefine FORBIDDEN_PROVIDER_VALUE_PATTERN check, which does not exempt this field from the
+  // general "no sandbox/test/mock/demo host" review expectation during operator configuration.
+  MIDDESK_API_BASE_URL: z.string().url().optional(),
+  // "PAID2YOU — MASTER P0" (2026-10-03), Section 19: Stripe Billing production adapter
+  // (src/lib/organizations/stripePlatformBillingProvider.ts) — required only when
+  // PLATFORM_BILLING_PROVIDER=stripe; mirrors MIDDESK_API_KEY's identical "optional at the schema
+  // level, enforced at the point of use" pattern. This is Paid2You's OWN subscription-billing
+  // secret — entirely separate from any future customer-repayment/direct-banking credential.
+  STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  // Signing secret for the Stripe webhook endpoint subscription (Dashboard > Webhooks), verified via
+  // the official `stripe.webhooks.constructEvent` — never a hand-rolled signature check.
+  STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // One live Stripe Price ID per STANDARD Paid2You Business plan (Section 19/21) — Enterprise
+  // deliberately has NO corresponding variable here; it is negotiated/custom and never
+  // self-service-checkoutable (Section 21's own "reject an attempt to self-enroll Enterprise through
+  // the normal standard-plan route"). All four optional at the schema level; StripePlatformBillingProvider
+  // throws a clear ConfigurationError if a plan code it is actually asked to start/change to has no
+  // configured price ID — never silently substitutes a different price.
+  STRIPE_STARTER_PRICE_ID: z.string().min(1).optional(),
+  STRIPE_CORE_PRICE_ID: z.string().min(1).optional(),
+  STRIPE_GROWTH_PRICE_ID: z.string().min(1).optional(),
+  STRIPE_SCALE_PRICE_ID: z.string().min(1).optional(),
   // PAID2YOU — B0-D ADYEN PHASE 1 (Payment Provider Foundation): required only when
   // PAYMENT_PROVIDER=adyen — src/lib/payments/getPaymentProvider.ts throws a clear ConfigurationError
   // at construction time if any of these four are missing, mirroring every other provider secret in
@@ -238,7 +281,7 @@ const serverEnvSchema = z.object({
   // factories, is the runtime half). Case-insensitive substring match, not exact-equality, so a value
   // like "sandbox_v2" or "stripe-test-mode" is caught too, not just the bare literal.
   const FORBIDDEN_PROVIDER_VALUE_PATTERN = /sandbox|mock|fake|demo|dummy|stub|simulat|test/i;
-  for (const field of ["PAYMENT_PROVIDER", "KYC_PROVIDER", "CARD_ISSUING_PROVIDER"] as const) {
+  for (const field of ["PAYMENT_PROVIDER", "KYC_PROVIDER", "CARD_ISSUING_PROVIDER", "BUSINESS_VERIFICATION_PROVIDER", "PLATFORM_BILLING_PROVIDER"] as const) {
     const value = data[field];
     if (value && FORBIDDEN_PROVIDER_VALUE_PATTERN.test(value)) {
       ctx.addIssue({

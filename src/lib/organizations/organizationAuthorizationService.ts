@@ -2,6 +2,7 @@ import "server-only";
 import type { BusinessProfileRepository } from "@/lib/profiles/businessProfileService";
 import type { Capability } from "@/lib/staff/capabilities";
 import type { BusinessStaffMemberRecord, BusinessStaffMemberRepository, StaffService } from "@/lib/staff/staffService";
+import type { OrganizationResourceType } from "./organizationResourceTypes";
 
 /**
  * "PAID2YOU — B2B IDENTITY / ORGANIZATION / SUBSCRIPTION ARCHITECTURE", Phase 2 (2026-10-02),
@@ -27,20 +28,7 @@ export const SENSITIVE_ORGANIZATION_RESOURCE_CAPABILITY = {
   organization_settings: "manage_organization_settings",
 } as const satisfies Partial<Record<OrganizationResourceType, Capability>>;
 
-export type OrganizationResourceType =
-  | "dashboard"
-  | "outstanding_balances"
-  | "customers"
-  | "agreements"
-  | "payments"
-  | "employees"
-  | "reports"
-  | "reconciliation"
-  | "documents"
-  | "audit_history"
-  | "integrations"
-  | "organization_settings"
-  | "subscription";
+export type { OrganizationResourceType };
 
 export class OrganizationAuthorizationService {
   constructor(

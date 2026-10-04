@@ -14,10 +14,14 @@
  * runtime capability:
  *
  *   - an import/require whose module specifier resolves to one of the retired sandbox provider
- *     implementation files (sandboxPaymentProvider / sandboxKycProvider / sandboxCardIssuingProvider),
- *     from any file OUTSIDE src/test-support/ (their sanctioned test-only home) or a *.test.ts(x) file
+ *     implementation files (sandboxPaymentProvider / sandboxKycProvider / sandboxCardIssuingProvider /
+ *     sandboxBusinessVerificationProvider / sandboxPlatformBillingProvider — the latter two added for
+ *     "PAID2YOU PRODUCTION LAUNCH", Phase 1, Section 10, covering the B2B organization-workspace
+ *     sandbox providers the same way), from any file OUTSIDE src/test-support/ (their sanctioned
+ *     test-only home) or a *.test.ts(x) file
  *   - a re-declaration of a class literally named SandboxPaymentProvider/SandboxKycProvider/
- *     SandboxCardIssuingProvider outside src/test-support/
+ *     SandboxCardIssuingProvider/SandboxBusinessVerificationProvider/SandboxPlatformBillingProvider
+ *     outside src/test-support/
  *   - any reference to the retired /api/admin/sandbox route path
  *   - the literal env-var value "sandbox" being assigned to PAYMENT_PROVIDER/KYC_PROVIDER/
  *     CARD_ISSUING_PROVIDER inside application source (as opposed to a *.test.ts fixture, which is
@@ -32,8 +36,8 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const srcDir = path.join(__dirname, "..", "src");
 
-const SANDBOX_MODULE_SPECIFIER_PATTERN = /sandbox(?:Payment|Kyc|CardIssuing)Provider/;
-const SANDBOX_CLASS_DECLARATION_PATTERN = /\bclass\s+Sandbox(?:PaymentProvider|KycProvider|CardIssuingProvider)\b/;
+const SANDBOX_MODULE_SPECIFIER_PATTERN = /sandbox(?:Payment|Kyc|CardIssuing|BusinessVerification|PlatformBilling)Provider/;
+const SANDBOX_CLASS_DECLARATION_PATTERN = /\bclass\s+Sandbox(?:PaymentProvider|KycProvider|CardIssuingProvider|BusinessVerificationProvider|PlatformBillingProvider)\b/;
 const RETIRED_ADMIN_SANDBOX_ROUTE_PATTERN = /\/api\/admin\/sandbox\b/;
 /** Matches PAYMENT_PROVIDER="sandbox" style literal assignment/property patterns actually written as CODE (not prose) — quoted "sandbox" immediately after one of the three provider env-var names. */
 const FORBIDDEN_PROVIDER_LITERAL_PATTERN = /(PAYMENT_PROVIDER|KYC_PROVIDER|CARD_ISSUING_PROVIDER)\s*[:=]\s*["']sandbox["']/;
@@ -60,7 +64,9 @@ export function findSandboxRuntimeViolations(fileText) {
     // Narrow the module-specifier check to an actual import/require statement, not just the bare
     // identifier appearing in a doc comment (which every provider-factory file's own explanatory
     // comment legitimately does, post-B0-D-remediation).
-    const importLines = fileText.split("\n").filter((line) => /\bimport\b.*sandbox(?:Payment|Kyc|CardIssuing)Provider/i.test(line) || /require\(.*sandbox(?:Payment|Kyc|CardIssuing)Provider/i.test(line));
+    const importLines = fileText
+      .split("\n")
+      .filter((line) => /\bimport\b.*sandbox(?:Payment|Kyc|CardIssuing|BusinessVerification|PlatformBilling)Provider/i.test(line) || /require\(.*sandbox(?:Payment|Kyc|CardIssuing|BusinessVerification|PlatformBilling)Provider/i.test(line));
     if (importLines.length > 0) violations.push({ rule: "sandbox-provider-import", detail: importLines[0].trim() });
   }
   if (SANDBOX_CLASS_DECLARATION_PATTERN.test(fileText)) {

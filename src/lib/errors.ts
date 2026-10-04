@@ -97,10 +97,10 @@ export class AuthenticationError extends AppError {
 }
 
 export class ConflictError extends AppError {
-  constructor(message: string) {
+  constructor(message: string, code = "CONFLICT") {
     super(message, {
       statusCode: 409,
-      code: "CONFLICT",
+      code,
       isOperational: true,
     });
     this.name = "ConflictError";
@@ -186,6 +186,34 @@ export class ProfileIncompleteError extends ForbiddenError {
   constructor(message = "Complete your profile before reviewing and signing this agreement.") {
     super(message, "PROFILE_INCOMPLETE");
     this.name = "ProfileIncompleteError";
+  }
+}
+
+/**
+ * "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Requirement 24/Section 24: thrown when a business
+ * organization's qualifying-arrangement usage for its current billing period has already reached
+ * its plan's `new_arrangements_monthly` entitlement limit — the completing signature that would
+ * establish one more arrangement is refused server-side, never silently allowed through as an
+ * overage. Still an instanceof ConflictError (the request is well-formed; the organization's own
+ * current state is what blocks it, mirroring ConflictError's existing "someone/something else
+ * changed state first" semantics), with its own code and structured fields so a client can render a
+ * specific "upgrade your plan or wait for your next billing period" action instead of a generic
+ * conflict message.
+ */
+export class ArrangementUsageLimitExceededError extends ConflictError {
+  readonly planCode: string;
+  readonly limit: number;
+  readonly periodEnd: Date;
+
+  constructor(input: { planCode: string; limit: number; periodEnd: Date }) {
+    super(
+      `This organization has reached its "${input.planCode}" plan's limit of ${input.limit} new arrangement(s) for the current billing period. Upgrade the plan or wait until the next billing period (resets ${input.periodEnd.toISOString().slice(0, 10)}) to establish another arrangement.`,
+      "ARRANGEMENT_USAGE_LIMIT_REACHED",
+    );
+    this.name = "ArrangementUsageLimitExceededError";
+    this.planCode = input.planCode;
+    this.limit = input.limit;
+    this.periodEnd = input.periodEnd;
   }
 }
 

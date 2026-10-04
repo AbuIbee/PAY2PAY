@@ -3,6 +3,9 @@ import { AuditService, type AuditEventRecord, type AuditEventRepository } from "
 import { InMemorySessionRepository, InMemoryEmailSender } from "@/lib/auth/testFakes";
 import { createTestMfaService } from "@/lib/auth/mfaTestFakes";
 import type { MfaService } from "@/lib/auth/mfaService";
+import { LegacyRoleMigrationService } from "@/lib/organizations/legacyRoleMigration";
+import { BridgingLegacyRoleMigrationRepository } from "@/lib/organizations/legacyRoleMigrationTestFakes";
+import { InMemoryOrganizationRoleRepository } from "@/lib/organizations/organizationRoleTestFakes";
 import type { BusinessApprovalPolicyRecord, BusinessApprovalPolicyRepository, StaffApprovalRequestRecord, StaffApprovalRequestRepository } from "./approvalService";
 import { ApprovalService } from "./approvalService";
 import type { Capability, StaffRole } from "./capabilities";
@@ -31,6 +34,7 @@ export class InMemoryBusinessStaffMemberRepository implements BusinessStaffMembe
   }): Promise<BusinessStaffMemberRecord> {
     const record: BusinessStaffMemberRecord = {
       id: randomUUID(),
+      roleId: null,
       removedAt: null,
       createdAt: new Date(),
       ...input,
@@ -56,6 +60,10 @@ export class InMemoryBusinessStaffMemberRepository implements BusinessStaffMembe
     return [...this.byId.values()].filter((m) => m.businessProfileId === businessProfileId && !m.removedAt);
   }
 
+  async listActiveByUser(userId: string): Promise<BusinessStaffMemberRecord[]> {
+    return [...this.byId.values()].filter((m) => m.userId === userId && !m.removedAt);
+  }
+
   async updateRole(id: string, input: { role: StaffRole; customRoleId: string | null }): Promise<void> {
     const member = this.byId.get(id);
     if (member) {
@@ -69,12 +77,18 @@ export class InMemoryBusinessStaffMemberRepository implements BusinessStaffMembe
     if (member) member.removedAt = removedAt;
   }
 
+  async setRoleId(id: string, roleId: string): Promise<void> {
+    const member = this.byId.get(id);
+    if (member) member.roleId = roleId;
+  }
+
   /** Test-only helper: directly seed a staff member without going through invitations. */
   seed(input: {
     businessProfileId: string;
     userId: string;
     role: StaffRole;
     customRoleId?: string | null;
+    roleId?: string | null;
     isAuthorizedRepresentative?: boolean;
   }): BusinessStaffMemberRecord {
     const record: BusinessStaffMemberRecord = {
@@ -83,6 +97,7 @@ export class InMemoryBusinessStaffMemberRepository implements BusinessStaffMembe
       userId: input.userId,
       role: input.role,
       customRoleId: input.customRoleId ?? null,
+      roleId: input.roleId ?? null,
       isAuthorizedRepresentative: input.isAuthorizedRepresentative ?? false,
       removedAt: null,
       createdAt: new Date(),
@@ -125,6 +140,7 @@ export class InMemoryStaffInvitationRepository implements StaffInvitationReposit
     email: string;
     role: StaffRole;
     customRoleId: string | null;
+    roleId?: string | null;
     invitedByUserId: string;
     tokenHash: string;
     expiresAt: Date;
@@ -137,9 +153,22 @@ export class InMemoryStaffInvitationRepository implements StaffInvitationReposit
       revokedAt: null,
       createdAt: new Date(),
       ...input,
+      roleId: input.roleId ?? null,
     };
     this.byId.set(record.id, record);
     return record;
+  }
+
+  async listPendingForBusiness(businessProfileId: string): Promise<StaffInvitationRecord[]> {
+    return [...this.byId.values()].filter((i) => i.businessProfileId === businessProfileId && i.status === "pending");
+  }
+
+  async revoke(id: string, revokedAt: Date): Promise<void> {
+    const invitation = this.byId.get(id);
+    if (invitation) {
+      invitation.status = "revoked";
+      invitation.revokedAt = revokedAt;
+    }
   }
 
   async findByTokenHash(tokenHash: string): Promise<StaffInvitationRecord | null> {
@@ -289,6 +318,12 @@ export function createTestStaffService() {
   const auditRepo = new InMemoryAuditEventRepositoryForStaff();
   const audit = new AuditService(auditRepo);
   const emailSender = new InMemoryEmailSender();
+  // "Final RBAC Authorization Cutover", Step 5: the SAME equivalent-role resolution `StaffService`
+  // uses in production (via `getLegacyRoleMigrationService()`), wired to THIS fixture's own
+  // staffMembers/invitations/roles — so `inviteStaff`/`acceptInvitation`/`updateStaffRole` exercise the
+  // real mutation-time role_id behavior rather than a no-op stub.
+  const organizationRoles = new InMemoryOrganizationRoleRepository();
+  const equivalentRoles = new LegacyRoleMigrationService(new BridgingLegacyRoleMigrationRepository(staffMembers, invitations), organizationRoles);
 
   const staffService = new StaffService(
     staffMembers,
@@ -300,9 +335,10 @@ export function createTestStaffService() {
     audit,
     emailSender,
     { appUrl: TEST_APP_URL },
+    equivalentRoles,
   );
 
-  return { staffService, staffMembers, customRoles, invitations, sessions, mfaService, mfaCredentials, stepUps, userEmails, auditRepo, emailSender };
+  return { staffService, staffMembers, customRoles, invitations, sessions, mfaService, mfaCredentials, stepUps, userEmails, auditRepo, emailSender, organizationRoles };
 }
 
 export function createTestApprovalService(staffService: StaffService, mfaService: MfaService) {

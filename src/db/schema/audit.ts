@@ -57,6 +57,15 @@ export const auditEvent = pgTable(
     // than uuid since the target resource type varies (matches `action`'s own text column).
     targetResourceType: text("target_resource_type"),
     targetResourceId: text("target_resource_id"),
+    // "PAID2YOU PLATFORM EXPANSION" (2026-10-02), DB-15: WHICH business_staff_member row performed
+    // an organization-scoped action — `actorUserId` above already identifies WHO (the human), and
+    // `profileId` (when profileKind = 'business') already identifies the organization; this is the
+    // one piece DB-15 asks for that neither already covers. Nullable: every pre-existing audit event
+    // (personal actions, platform-admin actions with no organization membership at all) correctly
+    // has none. No FK — business_staff_member rows are soft-removed, never hard-deleted, but a raw
+    // uuid avoids this append-only table ever being blocked by a future FK-constraint change to that
+    // table, matching `agreementId`'s own established precedent above.
+    actorMembershipId: uuid("actor_membership_id"),
     eventHash: text("event_hash").notNull(),
     previousEventHash: text("previous_event_hash"),
     // R09 corrective pass (Codex blocker 9 — audit effect recovery/idempotency): a durable, stable

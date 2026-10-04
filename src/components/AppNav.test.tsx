@@ -1,14 +1,15 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppNav } from "./AppNav";
 
 const push = vi.fn();
 const refresh = vi.fn();
+const mockUsePathname = vi.fn(() => "/dashboard");
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, refresh }),
-  usePathname: () => "/dashboard",
+  usePathname: () => mockUsePathname(),
 }));
 
 /**
@@ -23,6 +24,8 @@ vi.mock("next/navigation", () => ({
 function stubNavFetches(
   activeProfile: { kind: "personal" | "business"; displayName: string } = { kind: "personal", displayName: "Personal" },
   liveCardIssuanceEnabled = false,
+  b2bOrganizationsEnabled = false,
+  organizations: Array<{ organizationId: string; displayName: string }> = [],
 ) {
   return vi.fn().mockImplementation(async (input: string) => {
     if (input === "/api/auth/me") return { ok: true, status: 200, json: async () => ({ email: "user@example.com" }) };
@@ -30,7 +33,8 @@ function stubNavFetches(
     if (input === "/api/notifications") return { ok: true, status: 200, json: async () => ({ notifications: [] }) };
     if (input === "/api/auth/logout") return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
     if (input === "/api/profiles/active") return { ok: true, status: 200, json: async () => activeProfile };
-    if (input === "/api/feature-flags") return { ok: true, status: 200, json: async () => ({ liveCardIssuanceEnabled }) };
+    if (input === "/api/feature-flags") return { ok: true, status: 200, json: async () => ({ liveCardIssuanceEnabled, b2bOrganizationsEnabled }) };
+    if (input === "/api/organizations") return { ok: true, status: 200, json: async () => ({ organizations }) };
     throw new Error(`Unhandled fetch: ${input}`);
   });
 }
@@ -40,6 +44,7 @@ describe("AppNav", () => {
     vi.unstubAllGlobals();
     push.mockClear();
     refresh.mockClear();
+    mockUsePathname.mockReturnValue("/dashboard");
   });
 
   it("always renders a topbar Log out control (present in the DOM unconditionally — jsdom doesn't evaluate the CSS media query that shows it only on narrow viewports), independent of the mobile menu drawer", async () => {
@@ -272,6 +277,68 @@ describe("AppNav", () => {
       expect(screen.getByRole("link", { name: /^dashboard$/i })).toHaveAttribute("href", "/dashboard");
       expect(screen.getByRole("link", { name: /^connections$/i })).toHaveAttribute("href", "/connections");
       expect(screen.getByRole("link", { name: /^settings$/i })).toHaveAttribute("href", "/account");
+    });
+  });
+
+  describe("PAID2YOU PLATFORM EXPANSION: workspace selector (Section 7/8/14)", () => {
+    it("hides the workspace selector entirely when FEATURE_B2B_ORGANIZATIONS_ENABLED is off (the default)", async () => {
+      vi.stubGlobal("fetch", stubNavFetches(undefined, false, false));
+      render(<AppNav />);
+      await screen.findByRole("button", { name: /^menu$/i });
+      expect(screen.queryByText("My Paid2You")).not.toBeInTheDocument();
+      expect(screen.queryByText("+ Create Business Account")).not.toBeInTheDocument();
+    });
+
+    it("shows My Paid2You and every organization the user is a member of when the flag is on", async () => {
+      vi.stubGlobal(
+        "fetch",
+        stubNavFetches(undefined, false, true, [
+          { organizationId: "org-a", displayName: "ABC Trucking LLC" },
+          { organizationId: "org-b", displayName: "XYZ Logistics LLC" },
+        ]),
+      );
+      render(<AppNav />);
+      await screen.findByText("My Paid2You");
+      expect(screen.getByRole("link", { name: "My Paid2You" })).toHaveAttribute("href", "/dashboard");
+      expect(screen.getByRole("link", { name: "ABC Trucking LLC" })).toHaveAttribute("href", "/organizations/org-a");
+      expect(screen.getByRole("link", { name: "XYZ Logistics LLC" })).toHaveAttribute("href", "/organizations/org-b");
+      expect(screen.getByRole("link", { name: "+ Create Business Account" })).toHaveAttribute("href", "/organizations/new");
+    });
+
+    it("renders the Business navigation section (Dashboard, Outstanding Balances, Customers, Agreements, Employees, Organization Settings) only while inside an organization's workspace route", async () => {
+      mockUsePathname.mockReturnValue("/organizations/org-a/customers");
+      vi.stubGlobal("fetch", stubNavFetches(undefined, false, true, [{ organizationId: "org-a", displayName: "ABC Trucking LLC" }]));
+      render(<AppNav />);
+      await screen.findByText("ABC Trucking LLC", { selector: ".app-nav__section-label" });
+
+      // Scoped to the Business navigation's own landmark (aria-label="<org> navigation") rather than
+      // the full document — the Personal nav also has its own "Dashboard" link, and both are
+      // intentionally present at once (Step 1 fix: ambiguous unscoped query previously matched both).
+      const businessNav = screen.getByRole("navigation", { name: "ABC Trucking LLC navigation" });
+      // "PAID2YOU PRODUCTION LAUNCH", Phase 1, Section 15/20: Payments/Reports/Reconciliation/
+      // Documents/Audit History/Integrations are deliberately NOT in this list for initial launch —
+      // each was only ever an honest "not available yet" placeholder, and Section 15/20 explicitly
+      // prefers a narrower, professional launch nav over "a forest of coming-soon production pages."
+      const expectedLabels = ["Dashboard", "Outstanding Balances", "Customers", "Agreements", "Employees", "Organization Settings", "Billing & Subscription"];
+      for (const label of expectedLabels) {
+        expect(within(businessNav).getByRole("link", { name: label })).toBeInTheDocument();
+      }
+      for (const hiddenLabel of ["Payments", "Reports", "Reconciliation", "Documents", "Audit History", "Integrations"]) {
+        expect(within(businessNav).queryByRole("link", { name: hiddenLabel })).not.toBeInTheDocument();
+      }
+      expect(within(businessNav).getByRole("link", { name: "Customers" })).toHaveAttribute("href", "/organizations/org-a/customers");
+      expect(within(businessNav).getByRole("link", { name: "Customers" })).toHaveAttribute("aria-current", "page");
+
+      // Both the Personal primary "Dashboard" link and the Business "Dashboard" link coexist.
+      expect(screen.getAllByRole("link", { name: "Dashboard" })).toHaveLength(2);
+    });
+
+    it("does not render the Business navigation section while in the Personal workspace, even with the flag on", async () => {
+      vi.stubGlobal("fetch", stubNavFetches(undefined, false, true, [{ organizationId: "org-a", displayName: "ABC Trucking LLC" }]));
+      render(<AppNav />);
+      await screen.findByText("My Paid2You");
+      expect(screen.queryByRole("navigation", { name: /navigation$/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Outstanding Balances" })).not.toBeInTheDocument();
     });
   });
 });

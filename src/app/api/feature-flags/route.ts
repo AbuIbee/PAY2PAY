@@ -15,7 +15,16 @@ export const dynamic = "force-dynamic";
  * must be reachable from the nav shell that renders on every authenticated page.
  */
 async function handleGet(): Promise<Response> {
-  return NextResponse.json({ liveCardIssuanceEnabled: isFeatureEnabled("liveCardIssuanceEnabled") }, { status: 200 });
+  return NextResponse.json(
+    {
+      liveCardIssuanceEnabled: isFeatureEnabled("liveCardIssuanceEnabled"),
+      // "PAID2YOU PLATFORM EXPANSION" (2026-10-02), Section 14: controls EXPOSURE of the workspace
+      // selector/Business navigation only — never the security boundary (see feature-flags.ts's own
+      // doc comment on b2bOrganizationsEnabled).
+      b2bOrganizationsEnabled: isFeatureEnabled("b2bOrganizationsEnabled"),
+    },
+    { status: 200 },
+  );
 }
 
 export const GET = withErrorHandling("client_feature_flags", handleGet);

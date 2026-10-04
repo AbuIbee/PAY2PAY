@@ -30,6 +30,14 @@ export const KNOWN_HISTORICAL_EXCEPTIONS = new Set([
   // Sprint 3: dropped a Phase-0 placeholder column, superseded by identity_verification_record
   // before any production data ever depended on it. See personalProfile schema's own doc comment.
   "20260811130300_sprint3_drop_placeholder_verification_tier.sql",
+  // "PAID2YOU PLATFORM EXPANSION" B2B RBAC cutover, reviewed and accepted before "PAID2YOU PRODUCTION
+  // LAUNCH" Phase 1 began (see that phase's own Section 2 "accepted security baseline" — this
+  // migration is part of the RBAC cutover this phase is told not to redesign): `ALTER TYPE
+  // "organization_role" RENAME TO "legacy_staff_role"` renames an existing ENUM TYPE, not a table or
+  // column — zero data loss, zero row rewrite. It exists solely to free the identifier
+  // "organization_role" for the NEW organization_role TABLE the same migration introduces (the RBAC
+  // cutover's actual role-storage mechanism).
+  "20261002010000_b2b_platform_expansion_schema_completion.sql",
 ]);
 
 /**

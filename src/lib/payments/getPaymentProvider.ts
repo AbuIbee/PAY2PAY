@@ -15,14 +15,17 @@ let cached: PaymentProvider | null = null;
  * getPaymentService.ts/getPaymentWebhookService.ts/getBankConnectionService.ts/etc.) therefore fails
  * closed before doing anything else whenever no provider is available.
  *
- * PAID2YOU — B0-D ADYEN PHASE 1: `adyen` is now a real, registered descriptor
- * (providerCapabilities.ts) — the ONLY concrete case below. Selecting it (`PAYMENT_PROVIDER=adyen`)
- * additionally requires `ADYEN_API_KEY`/`ADYEN_MERCHANT_ACCOUNT`/`ADYEN_LIVE_PREFIX`/
- * `ADYEN_PAYMENTS_HMAC_KEY` to all be configured — missing any of them throws `ConfigurationError`
- * here (a real, actionable "selected but not configured" wiring bug), distinct from
- * `ProviderNotAvailableError` (the "nothing selected yet" state). Adding a further real provider later
- * remains additive: a new `case` below, a new registry entry, no change to PaymentService or any
- * other consumer.
+ * PAID2YOU OWNER DIRECTIVE (2026-10-03) — ADYEN RETIRED: `providerCapabilities.ts`'s registry is now
+ * empty, so `assertProviderAvailableForRuntime` below always throws `ProviderNotAvailableError` before
+ * the `descriptor.providerName === "adyen"` branch could ever be reached, for ANY `PAYMENT_PROVIDER`
+ * value including `"adyen"` — this function can no longer construct a real `AdyenPaymentProvider`
+ * under any configuration. That branch (and the `AdyenPaymentProvider` import) is left in place as
+ * retired/legacy material per the owner directive's "treat as legacy/dead... unless explicitly
+ * required for safe removal" — never delete outright without a separate, explicit instruction to do
+ * so — but it is dead code: unreachable from this factory, and this factory is the only place that
+ * could ever construct it in production. The owner-approved repayment-money-movement direction going
+ * forward is Direct Banking (FedNow/RTP/Request for Payment) — not yet implemented, not this file's
+ * concern until a separate, explicit implementation directive arrives for it.
  */
 export function getPaymentProvider(): PaymentProvider {
   if (!cached) {
@@ -49,8 +52,9 @@ export function getPaymentProvider(): PaymentProvider {
       });
       return cached;
     }
-    // Unreachable today (the registry has only the "adyen" entry above) — kept as an explicit, loud
-    // failure for the day a further descriptor is registered before its concrete adapter is wired here.
+    // Unreachable today (the registry is empty — see this file's own module doc comment, Adyen
+    // retired) — kept as an explicit, loud failure for the day a real descriptor is registered before
+    // its concrete adapter is wired here.
     throw new ConfigurationError(`No payment provider factory is registered for "${descriptor.providerName}".`);
   }
   return cached;

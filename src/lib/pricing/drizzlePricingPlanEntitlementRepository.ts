@@ -17,6 +17,13 @@ function toRecord(row: Row): PricingPlanEntitlementRecord {
 }
 
 export class DrizzlePricingPlanEntitlementRepository implements PricingPlanEntitlementRepository {
+  async insert(input: { pricingPlanId: string; featureKey: string; enabled: boolean; limitValue: number | null }): Promise<PricingPlanEntitlementRecord> {
+    const db = getDb();
+    const [row] = await db.insert(pricingPlanEntitlement).values(input).returning();
+    if (!row) throw new Error("pricing_plan_entitlement insert returned no row");
+    return toRecord(row);
+  }
+
   async findByPlanAndFeature(pricingPlanId: string, featureKey: string): Promise<PricingPlanEntitlementRecord | null> {
     const db = getDb();
     const rows = await db

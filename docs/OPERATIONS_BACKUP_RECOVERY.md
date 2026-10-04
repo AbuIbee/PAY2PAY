@@ -97,6 +97,32 @@ history:
   COLUMN`, a type narrowing) should be preceded by a Product-Owner-reviewed plan — none has been
   required so far.
 
+## 2a. Master P0 launch addendum (2026-10-03)
+
+"PAID2YOU — MASTER P0", Section 61/65. For the specific launch this addendum covers (Middesk
+business verification, Stripe Billing, existing Resend/Supabase):
+
+- **A tenant isolation anomaly discovered during or after this launch is an IMMEDIATE STOP-LAUNCH
+  condition** — stricter than this document's own general SEV-2 classification below for "a single
+  tenant's data exposed to another." Do not continue onboarding additional Businesses, and do not
+  proceed with any remaining `docs/PRODUCTION_LAUNCH_RUNBOOK.md` step, until root-caused. This does
+  not change the SEV table below for ordinary incident response once the acute launch window has
+  passed — it specifically governs Days 4-5 and the controlled-first-Business period.
+- **Provider outage behavior for the two new integrations, by design (never a silent "success"):**
+  - Middesk unavailable (network/outage/5xx) → `MiddeskBusinessVerificationProvider` throws
+    `ConfigurationError`/`ProviderCapabilityUnsupportedError`; `BusinessVerificationService` never
+    marks a submission "verified" without a real provider response. Verification remains visibly
+    pending, never silently fabricated.
+  - Stripe unavailable → `StripePlatformBillingProvider`'s calls throw; `PlatformBillingService`
+    never marks a subscription active or an invoice paid without a real Stripe confirmation.
+  - Resend unavailable / unconfigured in production → `ConsoleEmailSender({failClosed: true})`
+    throws rather than logging-and-pretending-sent (unchanged from the existing PRSprint 14
+    behavior this document already describes elsewhere).
+  - Supabase Storage unavailable / unconfigured → `SupabaseDocumentStorage` throws
+    `ConfigurationError`; there is no local-disk fallback branch to silently drop into.
+- Do not automate destructive rollback (a down-migration, a bulk delete) in response to any of the
+  above without explicit owner authorization — the forward-fix convention in §2 above still applies.
+
 ## 3. Incident severity categories
 
 | Severity | Definition | Example | Response |

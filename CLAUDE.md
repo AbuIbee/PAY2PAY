@@ -2,10 +2,6 @@
 
 This is an independent greenfield project.
 
-Authorized project root:
-
-C:\Users\solod\Desktop\PAY2PAY
-
 The canonical product specification is:
 
 docs/PAY2PAY_MASTER_SPEC.md
@@ -23,18 +19,42 @@ For every task:
 7. Stop at the end of the requested phase.
 8. Never access or reference files outside the PAY2PAY directory.
 
-## Absolute filesystem restriction
+## Filesystem / Git Worktree Boundary
 
-Claude may only access paths underneath:
+Claude is authorized to operate only inside the Git worktree in which the current Claude session was started.
 
-C:\Users\solod\Desktop\PAY2PAY
+Before modifying files, Claude must verify:
 
-Claude must not read, inspect, list, stat, search, compare, modify, or reference files outside that directory, even for diagnostics, dependency investigation, Git checks, package-manager warnings, environment discovery, or security verification.
+    Get-Location
+    git rev-parse --show-toplevel
+    git branch --show-current
 
-If a command, warning, dependency, tool, or package manager references a path outside PAY2PAY:
+The path returned by:
 
-1. Do not access that path.
-2. Do not request permission to access it.
-3. Record the warning in docs/OPEN_ISSUES.md.
-4. Continue using only PAY2PAY-local information.
-5. Stop if the phase cannot be completed without crossing the project boundary.
+    git rev-parse --show-toplevel
+
+is the only authorized filesystem root for that session.
+
+Claude must not read, inspect, list, stat, search, compare, modify, copy, delete, or otherwise access files outside that Git worktree root.
+
+Sibling Git worktrees are separate project boundaries and are forbidden from the current session.
+
+Examples of sibling worktrees may include:
+
+    C:\Development\PAY2PAY
+    C:\Development\PAY2PAY-bank-v3
+    C:\Development\PAY2PAY-b0d-integration
+    C:\Development\PAY2PAY-enhancement-sprint
+
+The existence of a sibling worktree does not authorize access to it.
+
+If a task requires another worktree, Claude must STOP and require the user to start a separate Claude session from that worktree.
+
+Claude must never infer authorization from:
+- a sibling directory name
+- another branch
+- another worktree
+- historical absolute paths
+- prior session context
+
+If the current worktree root cannot be verified, Claude must STOP before making changes.

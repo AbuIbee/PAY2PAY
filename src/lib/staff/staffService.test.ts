@@ -267,6 +267,65 @@ describe("StaffService", () => {
     void invitation;
   });
 
+  it("Custom RBAC Runtime Cutover (Section 6): an invitation created with role_id set (the new, organization_role-based Invitations flow) copies that role_id onto the resulting membership on acceptance", async () => {
+    const acceptingUserId = randomUUID();
+    ctx.userEmails.set(acceptingUserId, "new-hire2@example.com");
+    const organizationRoleId = randomUUID();
+
+    const invitation = await ctx.invitations.insert({
+      businessProfileId: BUSINESS_A,
+      email: "new-hire2@example.com",
+      role: "VIEWER",
+      customRoleId: null,
+      roleId: organizationRoleId,
+      invitedByUserId: ownerUserId,
+      tokenHash: hashOpaqueToken("raw-token-for-test"),
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+    });
+
+    const member = await ctx.staffService.acceptInvitation("raw-token-for-test", acceptingUserId);
+    expect(member.roleId).toBe(organizationRoleId);
+    const persisted = await ctx.staffMembers.findActiveByBusinessAndUser(BUSINESS_A, acceptingUserId);
+    expect(persisted!.roleId).toBe(organizationRoleId);
+    void invitation;
+  });
+
+  it("Final RBAC Authorization Cutover (Step 5): the legacy StaffService.inviteStaff flow now resolves a real organization_role up front, so the resulting membership never ends up with a null role_id", async () => {
+    const acceptingUserId = randomUUID();
+    ctx.userEmails.set(acceptingUserId, "legacy-hire@example.com");
+    const invitation = await ctx.staffService.inviteStaff({ businessProfileId: BUSINESS_A, invitedByUserId: ownerUserId, email: "legacy-hire@example.com", role: "AR_AGENT" });
+    // Resolved and persisted on the invitation itself, before acceptance.
+    expect(invitation.roleId).not.toBeNull();
+
+    const rawToken = ctx.emailSender.lastTokenFor("legacy-hire@example.com");
+    const member = await ctx.staffService.acceptInvitation(rawToken!, acceptingUserId);
+    expect(member.roleId).toBe(invitation.roleId);
+
+    // The resolved role is a genuine AR_AGENT-equivalent organization_role, not an arbitrary id.
+    const role = await ctx.organizationRoles.findRoleById(invitation.roleId!);
+    expect(role?.displayName).toBe("AR Agent");
+  });
+
+  it("Final RBAC Authorization Cutover (Step 5): updateStaffRole repoints role_id at the new legacy role's equivalent, never leaving it stale or null", async () => {
+    const target = ctx.staffMembers.seed({ businessProfileId: BUSINESS_A, userId: randomUUID(), role: "VIEWER" });
+    expect(target.roleId).toBeNull();
+    await grantStepUp(ctx, ownerUserId, "session-1");
+
+    await ctx.staffService.updateStaffRole({
+      businessProfileId: BUSINESS_A,
+      actingUserId: ownerUserId,
+      actingSessionId: "session-1",
+      targetStaffId: target.id,
+      newRole: "FINANCE_ADMIN",
+    });
+
+    const persisted = await ctx.staffMembers.findActiveByBusinessAndUser(BUSINESS_A, target.userId);
+    expect(persisted!.role).toBe("FINANCE_ADMIN");
+    expect(persisted!.roleId).not.toBeNull();
+    const role = await ctx.organizationRoles.findRoleById(persisted!.roleId!);
+    expect(role?.displayName).toBe("Finance Administrator");
+  });
+
   it(
     "PRSprint 03: a business can re-invite and re-accept a previously removed staff member " +
       "(the live schema's uniqueness constraint on business_staff_member used to be a full, not " +
