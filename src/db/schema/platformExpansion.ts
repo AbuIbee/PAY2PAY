@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, date, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, date, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { agreement } from "./agreement";
-import { businessCustomer } from "./businessReceivables";
+import { businessCustomer, businessObligation } from "./businessReceivables";
 import { businessProfile, userAccount } from "./identity";
 import { subscription } from "./pricing";
 
@@ -264,26 +264,52 @@ export const organizationDocumentStatusEnum = pgEnum("organization_document_stat
  * lives in Supabase Storage, accessed only through the server-mediated pattern this codebase already
  * established for agreement evidence/signed PDFs (SupabaseDocumentStorage), never a direct
  * client-supplied path.
+ *
+ * "PAID2YOU — SECURE BUSINESS ATTACHMENTS ITERATION" (2026-10-05): this table was prepared in a prior
+ * phase (DB-14) but never wired to any repository/service/route until now — the architecture audit
+ * for this iteration found it was the correct, already-matching shape (organization-scoped,
+ * `document_type` already the exact required vocabulary, already linked to `agreement`/
+ * `business_customer`) and reused it rather than creating a second, competing document/attachment
+ * table. `relatedObligationId` is the one genuinely new column this iteration adds — the existing
+ * table had no link to Business Obligation ("Outstanding Balance"), the third required attachment
+ * parent. `relatedAgreementId`/`relatedCustomerId`/`relatedObligationId` are mutually exclusive (a
+ * document's "parent resource," singular, per this iteration's own requirement) — enforced by the
+ * `organization_document_single_related_parent` CHECK below, never left to application code alone.
  */
-export const organizationDocument = pgTable("organization_document", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  organizationId: uuid("organization_id")
-    .notNull()
-    .references(() => businessProfile.id),
-  documentType: organizationDocumentTypeEnum("document_type").notNull(),
-  fileName: text("file_name").notNull(),
-  storagePath: text("storage_path").notNull(),
-  mimeType: text("mime_type"),
-  sizeBytes: integer("size_bytes"),
-  uploadedByUserId: uuid("uploaded_by_user_id")
-    .notNull()
-    .references(() => userAccount.id),
-  relatedAgreementId: uuid("related_agreement_id").references(() => agreement.id),
-  relatedCustomerId: uuid("related_customer_id").references(() => businessCustomer.id),
-  status: organizationDocumentStatusEnum("status").notNull().default("active"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}).enableRLS();
+export const organizationDocument = pgTable(
+  "organization_document",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => businessProfile.id),
+    documentType: organizationDocumentTypeEnum("document_type").notNull(),
+    fileName: text("file_name").notNull(),
+    storagePath: text("storage_path").notNull(),
+    mimeType: text("mime_type"),
+    sizeBytes: integer("size_bytes"),
+    uploadedByUserId: uuid("uploaded_by_user_id")
+      .notNull()
+      .references(() => userAccount.id),
+    relatedAgreementId: uuid("related_agreement_id").references(() => agreement.id),
+    relatedCustomerId: uuid("related_customer_id").references(() => businessCustomer.id),
+    /** "SECURE BUSINESS ATTACHMENTS ITERATION" (2026-10-05): new, nullable, additive — Outstanding Balance attachments. */
+    relatedObligationId: uuid("related_obligation_id").references(() => businessObligation.id),
+    status: organizationDocumentStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "organization_document_single_related_parent",
+      sql`(case when ${table.relatedAgreementId} is null then 0 else 1 end + case when ${table.relatedCustomerId} is null then 0 else 1 end + case when ${table.relatedObligationId} is null then 0 else 1 end) <= 1`,
+    ),
+    index("organization_document_organization_id_idx").on(table.organizationId),
+    index("organization_document_related_agreement_id_idx").on(table.relatedAgreementId),
+    index("organization_document_related_customer_id_idx").on(table.relatedCustomerId),
+    index("organization_document_related_obligation_id_idx").on(table.relatedObligationId),
+  ],
+).enableRLS();
 
 /**
  * DB-16: acceptance of a VERSIONED legal document — Terms/Privacy/Business Subscription Policy/

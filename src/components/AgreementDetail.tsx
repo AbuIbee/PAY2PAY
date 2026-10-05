@@ -9,6 +9,7 @@ import {
 } from "./AgreementTermsFields";
 import { StepUpChallenge } from "./StepUpChallenge";
 import { AgreementProgress } from "./AgreementProgress";
+import { AttachmentsPanel } from "./organizations/AttachmentsPanel";
 import type { AgreementProgress as AgreementProgressData } from "@/lib/agreements/agreementProgressService";
 import type { SelectableProfile } from "./ProfileSwitcher";
 import { apiFetch, ApiError, isScheduleRevisionRequired } from "@/lib/ui/apiFetch";
@@ -65,6 +66,8 @@ interface AgreementDetailData {
   id: string;
   status: string;
   currency: string;
+  /** "SECURE BUSINESS ATTACHMENTS ITERATION" (2026-10-05): null for a personal agreement. */
+  organizationId: string | null;
   relationshipShape: "P2P" | "B2C" | "C2B" | "B2B";
   relationshipId: string | null;
   creditor: { kind: "personal" | "business"; id: string };
@@ -692,6 +695,8 @@ export function AgreementDetail() {
         witnesses={witnesses}
         onChanged={() => void load()}
       />
+
+      {data.organizationId && <AttachmentsPanel organizationId={data.organizationId} parentKind="agreement" parentId={data.id} />}
 
       {versions.length > 1 && (
         <div className="card">

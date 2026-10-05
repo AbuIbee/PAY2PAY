@@ -36,6 +36,11 @@ export function createAgreementDetailHandler(
         id: result.agreement.id,
         status: result.agreement.status,
         currency: result.agreement.currency,
+        // "SECURE BUSINESS ATTACHMENTS ITERATION" (2026-10-05): a safe, read-only tenancy tag already
+        // present on this row (null for a personal agreement) — exposed so the Agreement detail page
+        // can show its contextual Attachments section only for organization-scoped agreements. Never
+        // used by this route for authorization; `agreementService.getAgreement` above already did that.
+        organizationId: result.agreement.organizationId,
         relationshipShape: agreementService.relationshipShape(result.agreement),
         // Production defect remediation (existing payment methods must be recognized): the agreement
         // page's own inline "use an existing verified account" panel needs this to call
