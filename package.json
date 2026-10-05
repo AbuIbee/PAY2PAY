@@ -23,6 +23,7 @@
     "test:postgres": "node scripts/postgres-test-db.mjs",
     "db:upgrade-rehearsal": "node scripts/run-production-upgrade-rehearsal.mjs",
     "db:upgrade-orchestrator-rehearsal": "node scripts/run-production-upgrade-orchestrator-rehearsal.mjs",
+    "db:upgrade-legacy-schema-rehearsal": "node scripts/run-production-upgrade-legacy-schema-rehearsal.mjs",
     "db:upgrade-production": "node scripts/run-production-upgrade.mjs",
     "e2e": "playwright test"
   },

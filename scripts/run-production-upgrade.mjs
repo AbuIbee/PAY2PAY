@@ -29,6 +29,18 @@
  * invocation finds `.sql.deferred` files already present and resumes correctly rather than
  * re-deferring (or double-deferring) anything.
  *
+ * "PAID2YOU — P0-8 PRODUCTION UPGRADE ORCHESTRATOR HOTFIX" (2026-10-05): the initial state check
+ * (step 1 above) determines ONLY whether the barrier constraint already exists —
+ * `queryBarrierApplied` — and never reads `role_id` at all. On a genuine legacy production
+ * database, `business_staff_member`/`business_staff_invitation` already exist but their `role_id`
+ * columns do not — those are introduced by a pre-barrier migration, so querying them before step 3
+ * crashed with Postgres 42703 ("column does not exist") before the orchestrator ever reached the
+ * migrations that create it. `verifyRoleIdColumnsExist` runs immediately after pre-barrier
+ * migrations apply (and before any `role_id`-reading query) and hard-stops with a clear
+ * `UpgradeFailure` — never a silently-assumed zero count — if a required table exists but its
+ * `role_id` column is still missing at that point, which would indicate a genuine migration-ordering
+ * failure rather than this orchestrator's own precondition being wrong.
+ *
  * APPLY MECHANISM: defaults to the REAL production path, `npx supabase db push --linked` — this
  * script never bypasses or duplicates Supabase's own migration-tracking. For this repository's own
  * disposable-Postgres rehearsal (no linked Supabase project exists for a throwaway container — see
@@ -176,6 +188,64 @@ async function applyMigrations(explicitFilesForTestApplier) {
   applyViaSupabaseCli();
 }
 
+/**
+ * "PAID2YOU — P0-8 PRODUCTION UPGRADE ORCHESTRATOR HOTFIX" (2026-10-05): the ONLY state fact that is
+ * ever safe to ask BEFORE any pre-barrier migration has run — whether the final barrier constraint
+ * already exists. Deliberately never touches `role_id` at all: on a legacy production database, the
+ * `business_staff_member`/`business_staff_invitation` tables already exist, but their `role_id`
+ * columns do not yet — those are introduced by a pre-barrier migration. Querying `role_id` here (the
+ * P0-8 defect) crashed with Postgres 42703 ("column does not exist") before the orchestrator ever
+ * reached the migrations that create it.
+ */
+async function queryBarrierApplied(databaseUrl) {
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    const constraintRows = await sql`
+      SELECT 1 FROM pg_constraint WHERE conname = ${BARRIER_CONSTRAINT_NAME}
+    `;
+    return constraintRows.length > 0;
+  } finally {
+    await sql.end({ timeout: 1 }).catch(() => {});
+  }
+}
+
+/**
+ * P0-8: must be called — and must pass — AFTER pre-barrier migrations have applied and BEFORE any
+ * query that reads `role_id` (queryBarrierState below). Never infers "no null role_id rows" from a
+ * missing column; a missing column after the pre-barrier phase is a genuine migration-ordering
+ * failure and must hard-stop, never be silently treated as a count of zero.
+ */
+async function verifyRoleIdColumnsExist(databaseUrl) {
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    const tablesExist = await sql`
+      SELECT to_regclass('public.business_staff_member') AS members, to_regclass('public.business_staff_invitation') AS invitations
+    `;
+    const requiredTables = [
+      { table: "business_staff_member", exists: Boolean(tablesExist[0]?.members) },
+      { table: "business_staff_invitation", exists: Boolean(tablesExist[0]?.invitations) },
+    ];
+    for (const { table, exists } of requiredTables) {
+      // A table that does not exist at all yet (e.g. a genuinely fresh database still mid-migration)
+      // has no role_id column to verify either way — nothing to check, nothing to hard-stop on.
+      if (!exists) continue;
+      const columnRows = await sql`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ${table} AND column_name = 'role_id'
+      `;
+      if (columnRows.length === 0) {
+        throw new UpgradeFailure(`pre-barrier migrations completed but required role_id column is still missing on "${table}".`);
+      }
+    }
+  } finally {
+    await sql.end({ timeout: 1 }).catch(() => {});
+  }
+}
+
+/**
+ * Safe to call ONLY once `verifyRoleIdColumnsExist` has already passed for this run (i.e. after
+ * pre-barrier migrations have applied) — every call site below is ordered to guarantee that.
+ */
 async function queryBarrierState(databaseUrl) {
   const sql = postgres(databaseUrl, { max: 1 });
   try {
@@ -218,8 +288,11 @@ async function main() {
 
   undeferAnyLeftoverFromPriorRun();
 
-  const state = await queryBarrierState(databaseUrl);
-  if (state.barrierAlreadyApplied) {
+  // P0-8: the INITIAL state check must determine ONLY whether the final barrier constraint already
+  // exists — it must NEVER require role_id to exist, since on a legacy production database the
+  // table exists but the column does not yet (it is introduced by a pre-barrier migration below).
+  const barrierAlreadyApplied = await queryBarrierApplied(databaseUrl);
+  if (barrierAlreadyApplied) {
     log(`"${BARRIER_CONSTRAINT_NAME}" already exists — the backfill barrier was already safely crossed. Applying anything still pending and exiting.`);
     await applyMigrations(currentMigrationFiles());
     log("--- DONE — nothing pending required the backfill barrier. ---");
@@ -240,6 +313,9 @@ async function main() {
   } finally {
     undefer(deferredNames);
   }
+
+  log("--- verifying the role_id schema actually exists before any null-role_id query runs ---");
+  await verifyRoleIdColumnsExist(databaseUrl);
 
   log(`--- STEP 2/4: checking whether the legacy-role backfill is actually required (real-time query, not a guess) ---`);
   const preBackfill = await queryBarrierState(databaseUrl);
@@ -270,14 +346,22 @@ async function main() {
   log(`CONFIRMED: "${BARRIER_CONSTRAINT_NAME}" now exists. PASS — production upgrade complete in the required safe order.`);
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    if (error instanceof UpgradeFailure) {
-      fail(error.message);
-      process.exitCode = error.exitCode || 1;
-    } else {
-      console.error("[upgrade-production] fatal error:", error);
-      process.exitCode = 1;
-    }
-  });
+// "PAID2YOU — P0-8 PRODUCTION UPGRADE ORCHESTRATOR HOTFIX" (2026-10-05): guarded, mirroring
+// check-production-readiness.mjs's own identical pattern, so this module can be imported (to exercise
+// its exported functions directly from a regression rehearsal) WITHOUT also triggering a real run —
+// `main()` only executes when this file is the actual process entry point.
+export { queryBarrierApplied, verifyRoleIdColumnsExist, queryBarrierState, UpgradeFailure, BARRIER_FILE, BARRIER_CONSTRAINT_NAME };
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      if (error instanceof UpgradeFailure) {
+        fail(error.message);
+        process.exitCode = error.exitCode || 1;
+      } else {
+        console.error("[upgrade-production] fatal error:", error);
+        process.exitCode = 1;
+      }
+    });
+}
