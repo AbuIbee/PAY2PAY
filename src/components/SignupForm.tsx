@@ -53,22 +53,11 @@ function businessPayload(business: BusinessDetailsState) {
  * the rest of the form is conditional on it. The profile page (PersonalProfileForm) remains available
  * afterward for reviewing/updating this same information — it is no longer the first place it's set.
  */
-function isAccountType(value: string | null): value is AccountType {
-  return value === "personal" || value === "business";
-}
-
 export function SignupForm() {
   const formId = useId();
   const router = useRouter();
   const searchParams = useSearchParams();
-  // P0-11 (Homepage Visual Parity): the homepage's "Create Business Account" / "Create Personal
-  // Account" CTAs link here with ?accountType=business|personal so the form opens on the right
-  // tab instead of always defaulting to Personal — read once on mount, same as any other initial
-  // state derived from the URL.
-  const [accountType, setAccountType] = useState<AccountType>(() => {
-    const requested = searchParams.get("accountType");
-    return isAccountType(requested) ? requested : "personal";
-  });
+  const [accountType, setAccountType] = useState<AccountType>("personal");
   const [email, setEmail] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [identity, setIdentity] = useState<PersonalIdentityState>(BLANK_PERSONAL_IDENTITY);

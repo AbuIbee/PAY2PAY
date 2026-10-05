@@ -29,22 +29,13 @@ export function AuthNavCta() {
 
   if (loggedIn === null) return null;
 
-  if (loggedIn) {
-    return (
-      <Link href="/dashboard" className="button button--primary">
-        Dashboard
-      </Link>
-    );
-  }
-
-  return (
-    <>
-      <Link href="/login" className="button button--ghost">
-        Sign in
-      </Link>
-      <Link href="/signup" className="button button--primary">
-        Get Started
-      </Link>
-    </>
+  return loggedIn ? (
+    <Link href="/dashboard" className="button button--ghost" style={{ marginInlineEnd: "0.75rem" }}>
+      Dashboard
+    </Link>
+  ) : (
+    <Link href="/login" className="button button--ghost" style={{ marginInlineEnd: "0.75rem" }}>
+      Sign in
+    </Link>
   );
 }
