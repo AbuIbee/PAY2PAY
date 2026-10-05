@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -22,7 +23,11 @@ export const viewport: Viewport = {
  * header/footer, (app)/layout.tsx is the new authenticated nav — so this
  * root layout only supplies the document skeleton both share.
  */
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: ReactNode;
+}>) {
   return (
     <html lang="en">
       <body>
