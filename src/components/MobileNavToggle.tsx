@@ -2,11 +2,16 @@
 
 import { useState } from "react";
 
+/**
+ * P0-11 (Homepage Visual Parity): the approved header design authority specifies a center nav of
+ * exactly Personal / Business / Support — replaces the prior anchor-link set. Personal/Business
+ * point at the homepage's own workspace-comparison cards (real ids set on page.tsx); Support points
+ * at the existing, real /support route.
+ */
 const NAV_ITEMS = [
-  { href: "#how-it-works", label: "How it works" },
-  { href: "#use-cases", label: "Use cases" },
-  { href: "#main-content", label: "Why PAY2PAY" },
-  { href: "/demo", label: "Try the demo" },
+  { href: "/#personal-workspace", label: "Personal" },
+  { href: "/#business-workspace", label: "Business" },
+  { href: "/support", label: "Support" },
 ];
 
 export function MobileNavToggle() {

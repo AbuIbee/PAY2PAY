@@ -25,7 +25,8 @@ describe("MobileNavToggle", () => {
 
   it("renders primary navigation links", () => {
     render(<MobileNavToggle />);
-    expect(screen.getAllByRole("link", { name: /how it works/i }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("link", { name: /use cases/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /^personal$/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /^business$/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /^support$/i }).length).toBeGreaterThan(0);
   });
 });

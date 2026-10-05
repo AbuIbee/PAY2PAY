@@ -2,18 +2,26 @@ import Link from "next/link";
 import { AuthNavCta } from "@/components/AuthNavCta";
 import { MobileNavToggle } from "@/components/MobileNavToggle";
 
+function Wordmark() {
+  return (
+    <span className="brand-word">
+      <span className="brand-word__dark">Paid2</span>
+      <span className="brand-word__accent">You</span>
+    </span>
+  );
+}
+
 export default function MarketingLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="header-inner">
-          <Link className="brand" href="/" aria-label="PAY2PAY home">
-            <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-            <span>PAY2PAY</span>
+          <Link className="brand" href="/" aria-label="Paid2You home">
+            <Wordmark />
           </Link>
-          <div style={{ marginInlineStart: "auto", display: "flex", alignItems: "center" }}>
+          <MobileNavToggle />
+          <div className="header-actions">
             <AuthNavCta />
-            <MobileNavToggle />
           </div>
         </div>
       </header>
@@ -22,18 +30,19 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
       </main>
       <footer className="app-footer">
         <div className="footer-inner">
-          <Link className="brand brand--footer" href="/">
-            <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-            <span>PAY2PAY</span>
-          </Link>
-          <p>Clear terms. Mutual approval. Documented repayment.</p>
+          <div className="footer-inner__brand">
+            <Link className="brand brand--footer" href="/">
+              <Wordmark />
+            </Link>
+            <p>Moving business forward.</p>
+            <small>© 2026 Paid2You.</small>
+          </div>
           <nav aria-label="Footer navigation">
             <Link href="/privacy">Privacy</Link>
             <Link href="/terms">Terms</Link>
-            <Link href="/support">Support</Link>
             <Link href="/accessibility">Accessibility</Link>
+            <Link href="/support">Support</Link>
           </nav>
-          <small>© 2026 PAY2PAY.</small>
         </div>
       </footer>
     </div>
