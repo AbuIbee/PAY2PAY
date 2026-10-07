@@ -1,44 +1,4 @@
-"use client";
-
+﻿"use client";
 import { useState } from "react";
-
-const NAV_ITEMS = [
-  { href: "#how-it-works", label: "How it works" },
-  { href: "#use-cases", label: "Use cases" },
-  { href: "#main-content", label: "Why PAY2PAY" },
-  { href: "/demo", label: "Try the demo" },
-];
-
-export function MobileNavToggle() {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="nav-shell">
-      <nav className="desktop-nav" aria-label="Primary navigation">
-        {NAV_ITEMS.map((item) => (
-          <a key={item.label} href={item.href}>{item.label}</a>
-        ))}
-      </nav>
-      <button
-        type="button"
-        className="menu-button"
-        aria-expanded={open}
-        aria-controls="mobile-navigation"
-        aria-label={open ? "Close menu" : "Open menu"}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span />
-        <span />
-      </button>
-      <nav
-        id="mobile-navigation"
-        className={`mobile-nav${open ? " mobile-nav--open" : ""}`}
-        aria-label="Mobile navigation"
-      >
-        {NAV_ITEMS.map((item) => (
-          <a key={item.label} href={item.href} onClick={() => setOpen(false)}>{item.label}</a>
-        ))}
-      </nav>
-    </div>
-  );
-}
+const ITEMS=[{href:"#personal",label:"Personal"},{href:"#business",label:"Business"},{href:"/support",label:"Support"}];
+export function MobileNavToggle(){const[open,setOpen]=useState(false);return <div className="nav-shell"><nav className="desktop-nav" aria-label="Primary navigation">{ITEMS.map(i=><a key={i.label} href={i.href}>{i.label}</a>)}</nav><button type="button" className="menu-button" aria-expanded={open} aria-controls="mobile-navigation" aria-label={open?"Close menu":"Open menu"} onClick={()=>setOpen(v=>!v)}><span/><span/></button><nav id="mobile-navigation" className={`mobile-nav${open?" mobile-nav--open":""}`} aria-label="Mobile navigation">{[...ITEMS,{href:"/login",label:"Sign In"},{href:"/signup?accountType=business",label:"Get Started"}].map(i=><a key={i.label} href={i.href} onClick={()=>setOpen(false)}>{i.label}</a>)}</nav></div>}

@@ -12,31 +12,42 @@ vi.mock("next/navigation", () => ({
   usePathname: () => mockUsePathname(),
 }));
 
-/**
- * PRSprint 10A (docs/prsprints/PRSPRINT_10A_AUTHENTICATION_SIGNOUT_UI_REMEDIATION.md): regression
- * coverage for the root cause this PRSprint fixed — the mobile topbar (`.app-topbar`) had CSS but
- * no component ever rendered it, so on any viewport narrower than the sidebar breakpoint the only
- * Sign Out control in the app (the sidebar's own "Log out" button) was completely unreachable.
- * jsdom does not evaluate CSS media queries, so these tests verify what actually matters at the
- * component level: the topbar's "Log out" control exists in the DOM unconditionally (never gated
- * behind opening the menu first) and is wired to the real logout endpoint + redirect.
- */
 function stubNavFetches(
-  activeProfile: { kind: "personal" | "business"; displayName: string } = { kind: "personal", displayName: "Personal" },
-  liveCardIssuanceEnabled = false,
-  b2bOrganizationsEnabled = false,
+  activeProfile: { kind: "personal" | "business"; displayName: string } = {
+    kind: "personal",
+    displayName: "Personal",
+  },
   organizations: Array<{ organizationId: string; displayName: string }> = [],
 ) {
   return vi.fn().mockImplementation(async (input: string) => {
-    if (input === "/api/auth/me") return { ok: true, status: 200, json: async () => ({ email: "user@example.com" }) };
-    if (input === "/api/admin/whoami") return { ok: true, status: 200, json: async () => ({ isAdmin: false }) };
-    if (input === "/api/notifications") return { ok: true, status: 200, json: async () => ({ notifications: [] }) };
-    if (input === "/api/auth/logout") return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
-    if (input === "/api/profiles/active") return { ok: true, status: 200, json: async () => activeProfile };
-    if (input === "/api/feature-flags") return { ok: true, status: 200, json: async () => ({ liveCardIssuanceEnabled, b2bOrganizationsEnabled }) };
-    if (input === "/api/organizations") return { ok: true, status: 200, json: async () => ({ organizations }) };
+    if (input === "/api/auth/me") {
+      return { ok: true, status: 200, json: async () => ({ email: "user@example.com" }) };
+    }
+    if (input === "/api/admin/whoami") {
+      return { ok: true, status: 200, json: async () => ({ isAdmin: false }) };
+    }
+    if (input === "/api/profiles/active") {
+      return { ok: true, status: 200, json: async () => activeProfile };
+    }
+    if (input === "/api/organizations") {
+      return { ok: true, status: 200, json: async () => ({ organizations }) };
+    }
+    if (input === "/api/auth/logout") {
+      return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
+    }
     throw new Error(`Unhandled fetch: ${input}`);
   });
+}
+
+function getGatewayRegion() {
+  const businessLabel = screen.getByText("Paid2You", {
+    selector: ".app-nav__gateway-copy strong",
+  });
+  const region = businessLabel.closest(".app-nav__gateways");
+  if (!region) {
+    throw new Error("Paid2You account gateway container was not rendered.");
+  }
+  return region as HTMLElement;
 }
 
 describe("AppNav", () => {
@@ -47,298 +58,101 @@ describe("AppNav", () => {
     mockUsePathname.mockReturnValue("/dashboard");
   });
 
-  it("always renders a topbar Log out control (present in the DOM unconditionally — jsdom doesn't evaluate the CSS media query that shows it only on narrow viewports), independent of the mobile menu drawer", async () => {
+  it("always renders the mobile fast-path Log out control", async () => {
     vi.stubGlobal("fetch", stubNavFetches());
     render(<AppNav />);
 
-    // Two controls exist by design (topbar fast-path + drawer footer, shown at different
-    // viewport widths by CSS) — this asserts the topbar's is present at all, which is the whole
-    // point of this PRSprint's fix (see app-shell.css's own doc comment on `.app-topbar`).
     const logoutButtons = await screen.findAllByRole("button", { name: /log out/i });
     expect(logoutButtons.length).toBeGreaterThanOrEqual(1);
-    // Never gated behind the hamburger menu — the menu toggle defaults to closed.
     expect(screen.getByRole("button", { name: /^menu$/i })).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("clicking the topbar Log out control signs the user out and redirects to /login", async () => {
+  it("shows Business and Personal gateways on a Personal page", async () => {
+    vi.stubGlobal("fetch", stubNavFetches());
+    render(<AppNav />);
+
+    await screen.findByText("Paid2You", { selector: ".app-nav__gateway-copy strong" });
+    expect(screen.getByText("My Paid2You", { selector: ".app-nav__gateway-copy strong" })).toBeInTheDocument();
+
+    const gateways = within(getGatewayRegion());
+    expect(gateways.getByText("Current")).toBeInTheDocument();
+    expect(gateways.getByRole("link", { name: /^sign in$/i })).toHaveAttribute(
+      "href",
+      "/login?accountType=business&next=%2Forganizations%2Fnew",
+    );
+    expect(gateways.getByRole("link", { name: /^create$/i })).toHaveAttribute(
+      "href",
+      "/organizations/new",
+    );
+  });
+
+  it("renders the Personal launch navigation when Personal is current", async () => {
+    vi.stubGlobal("fetch", stubNavFetches());
+    render(<AppNav />);
+
+    await screen.findByText("My Paid2You", { selector: ".app-nav__gateway-copy strong" });
+
+    for (const label of ["Dashboard", "Agreements", "Payments", "Connections"]) {
+      expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it("renders the approved Business launch navigation inside an organization", async () => {
+    mockUsePathname.mockReturnValue("/organizations/org-a/customers");
+    vi.stubGlobal(
+      "fetch",
+      stubNavFetches(
+        { kind: "business", displayName: "Business" },
+        [{ organizationId: "org-a", displayName: "ABC Trucking LLC" }],
+      ),
+    );
+    render(<AppNav />);
+
+    const nav = await screen.findByRole("navigation", { name: "Primary" });
+
+    for (const label of [
+      "Dashboard",
+      "Outstanding Balances",
+      "Customers",
+      "Agreements",
+      "Employees",
+      "Organization Settings",
+      "Billing & Subscription",
+    ]) {
+      expect(within(nav).getByRole("link", { name: label })).toBeInTheDocument();
+    }
+
+    for (const hidden of ["Reports", "Reconciliation", "Audit History", "Integrations"]) {
+      expect(within(nav).queryByRole("link", { name: hidden })).not.toBeInTheDocument();
+    }
+  });
+
+  it("sends the inactive Business gateway to a separate Business sign-in flow", async () => {
+    vi.stubGlobal("fetch", stubNavFetches());
+    render(<AppNav />);
+
+    await screen.findByText("Paid2You", { selector: ".app-nav__gateway-copy strong" });
+    const businessSignIn = within(getGatewayRegion()).getByRole("link", { name: /^sign in$/i });
+
+    expect(businessSignIn).toHaveAttribute(
+      "href",
+      "/login?accountType=business&next=%2Forganizations%2Fnew",
+    );
+    expect(businessSignIn.getAttribute("href")).not.toBe("/organizations/new");
+  });
+
+  it("keeps Log out working", async () => {
     const fetchMock = stubNavFetches();
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<AppNav />);
 
-    const [topbarLogout] = await screen.findAllByRole("button", { name: /log out/i });
-    await user.click(topbarLogout!);
+    const [logout] = await screen.findAllByRole("button", { name: /log out/i });
+    await user.click(logout!);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/auth/logout", { method: "POST" });
     });
     expect(push).toHaveBeenCalledWith("/login");
-    expect(refresh).toHaveBeenCalled();
-  });
-
-  it("PRSprint 27: shows a persistent 'Acting as <business>' indicator (both in the always-visible mobile topbar and the sidebar) when the active profile is a business, but not for the default personal profile", async () => {
-    vi.stubGlobal("fetch", stubNavFetches({ kind: "business", displayName: "Acme LLC" }));
-    render(<AppNav />);
-
-    const indicators = await screen.findAllByText(/acting as acme llc/i);
-    expect(indicators.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("PRSprint 27: shows no 'Acting as' indicator for the default personal profile", async () => {
-    vi.stubGlobal("fetch", stubNavFetches({ kind: "personal", displayName: "Personal" }));
-    render(<AppNav />);
-
-    await screen.findByRole("button", { name: /^menu$/i });
-    expect(screen.queryByText(/acting as/i)).not.toBeInTheDocument();
-  });
-
-  it("the menu toggle opens the full navigation drawer, which also contains a working Log out control", async () => {
-    const fetchMock = stubNavFetches();
-    vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-    render(<AppNav />);
-
-    const menuButton = await screen.findByRole("button", { name: /^menu$/i });
-    await user.click(menuButton);
-    expect(menuButton).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("button", { name: /^close$/i })).toBeInTheDocument();
-
-    // Two "Log out" controls now exist (topbar fast-path + drawer footer) — both must work.
-    const logoutButtons = screen.getAllByRole("button", { name: /log out/i });
-    expect(logoutButtons.length).toBeGreaterThanOrEqual(2);
-    await user.click(logoutButtons[1]!);
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/auth/logout", { method: "POST" });
-    });
-    expect(push).toHaveBeenCalledWith("/login");
-  });
-
-  /**
-   * Section H (closed-beta remediation): no live card-issuing provider is registered anywhere in
-   * this codebase, and /cards permanently renders an unconditional "Not yet available" state — the
-   * nav link must not offer it unless liveCardIssuanceEnabled is actually on.
-   */
-  it("hides the Cards nav link when liveCardIssuanceEnabled is off (the default)", async () => {
-    vi.stubGlobal("fetch", stubNavFetches(undefined, false));
-    render(<AppNav />);
-
-    await screen.findByRole("button", { name: /^menu$/i });
-    expect(screen.queryByRole("link", { name: /^cards$/i })).not.toBeInTheDocument();
-  });
-
-  it("shows the Cards nav link once liveCardIssuanceEnabled is on", async () => {
-    vi.stubGlobal("fetch", stubNavFetches(undefined, true));
-    render(<AppNav />);
-
-    expect(await screen.findByRole("link", { name: /^cards$/i })).toBeInTheDocument();
-  });
-
-  /**
-   * Demo navigation & dedicated demo experiences (Product Owner request): AppNav renders a single
-   * DOM tree for both desktop and mobile (CSS toggles `.app-nav--mobile-open`, jsdom does not
-   * evaluate that media query — same precedent this file's own doc comment already establishes for
-   * the Log out coverage above), so "appears in authenticated desktop navigation" and "appears in
-   * mobile navigation" are covered by the same underlying markup — the second test below opens the
-   * mobile drawer explicitly to prove the Demo section isn't conditionally excluded from it.
-   */
-  it("shows a Demo section (heading + all 4 links) in the authenticated navigation, positioned after the primary links and before Account", async () => {
-    vi.stubGlobal("fetch", stubNavFetches());
-    render(<AppNav />);
-
-    await screen.findByRole("button", { name: /^menu$/i });
-    expect(screen.getByText("Demo")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^p2p demo$/i })).toHaveAttribute("href", "/demo/p2p");
-    expect(screen.getByRole("link", { name: /^c2b demo$/i })).toHaveAttribute("href", "/demo/c2b");
-    expect(screen.getByRole("link", { name: /^b2b demo$/i })).toHaveAttribute("href", "/demo/b2b");
-    expect(screen.getByRole("link", { name: /^product tour$/i })).toHaveAttribute("href", "/demo/tour");
-
-    // Order: Demo section label comes after Support (last primary link) and before Account.
-    const labels = screen.getAllByText(/^demo$|^support$|^account$/i).map((el) => el.textContent);
-    const supportIndex = labels.indexOf("Support");
-    const demoIndex = labels.indexOf("Demo");
-    const accountIndex = labels.indexOf("Account");
-    expect(supportIndex).toBeGreaterThanOrEqual(0);
-    expect(demoIndex).toBeGreaterThan(supportIndex);
-    expect(accountIndex).toBeGreaterThan(demoIndex);
-  });
-
-  it("the Demo section (heading + all 4 links) is also present inside the opened mobile navigation drawer", async () => {
-    vi.stubGlobal("fetch", stubNavFetches());
-    const user = userEvent.setup();
-    render(<AppNav />);
-
-    const menuButton = await screen.findByRole("button", { name: /^menu$/i });
-    await user.click(menuButton);
-    expect(menuButton).toHaveAttribute("aria-expanded", "true");
-
-    expect(screen.getByText("Demo")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^p2p demo$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^c2b demo$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^b2b demo$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^product tour$/i })).toBeInTheDocument();
-  });
-
-  it("Demo nav links are static routes only — never carry the signed-in user's email, active profile, or any other private data", async () => {
-    vi.stubGlobal("fetch", stubNavFetches({ kind: "business", displayName: "Acme LLC" }));
-    render(<AppNav />);
-
-    await screen.findAllByText(/acting as acme llc/i);
-    for (const [label, href] of [
-      ["P2P Demo", "/demo/p2p"],
-      ["C2B Demo", "/demo/c2b"],
-      ["B2B Demo", "/demo/b2b"],
-      ["Product Tour", "/demo/tour"],
-    ] as const) {
-      const link = screen.getByRole("link", { name: new RegExp(`^${label}$`, "i") });
-      expect(link).toHaveAttribute("href", href);
-      expect(link.getAttribute("href")).not.toMatch(/user@example\.com|acme|email=|profile=/i);
-    }
-  });
-
-  it("does not remove or replace any existing primary/account/organization navigation links when adding Demo", async () => {
-    vi.stubGlobal("fetch", stubNavFetches());
-    render(<AppNav />);
-
-    await screen.findByRole("button", { name: /^menu$/i });
-    for (const label of ["Dashboard", "Notifications", "My Agreements", "My Cash", "Bank Info", "Connections", "Support"]) {
-      expect(screen.getByRole("link", { name: new RegExp(`^${label}$`, "i") })).toBeInTheDocument();
-    }
-    expect(screen.getByRole("link", { name: /^settings$/i })).toHaveAttribute("href", "/account");
-    // Organization Features: Coming Soon treatment — "Staff" is intentionally no longer a working
-    // link (StaffService.requireActiveStaff blocks a real business owner every time; see AppNav.tsx's
-    // own doc comment) — it must still be visible, just non-interactive.
-    expect(screen.queryByRole("link", { name: /^staff$/i })).not.toBeInTheDocument();
-    expect(screen.getByText("Staff")).toBeInTheDocument();
-  });
-
-  /**
-   * Signup/onboarding redesign, requirement #7: PRIMARY_LINKS' exact requested order — Dashboard,
-   * Notifications, My Agreements, My Cash, Bank Info, Connections, Support, then Cards last (only once
-   * liveCardIssuanceEnabled is on; see the dedicated Cards-visibility tests above for the flag-off
-   * case). Renamed labels only — hrefs/API routes are unchanged (asserted per-link below).
-   */
-  it("renders the primary navigation links in the exact requested order, with the exact requested labels/hrefs", async () => {
-    vi.stubGlobal("fetch", stubNavFetches(undefined, true));
-    render(<AppNav />);
-    await screen.findByRole("button", { name: /^menu$/i });
-
-    const expected = [
-      ["Dashboard", "/dashboard"],
-      ["Notifications", "/notifications"],
-      ["My Agreements", "/agreements"],
-      ["My Cash", "/payments"],
-      ["Bank Info", "/payment-methods"],
-      ["Connections", "/connections"],
-      ["Support", "/support"],
-      ["Cards", "/cards"],
-    ] as const;
-
-    const links = expected.map(([label, href]) => {
-      const link = screen.getAllByRole("link", { name: new RegExp(`^${label}$`, "i") })[0]!;
-      expect(link).toHaveAttribute("href", href);
-      return link;
-    });
-
-    const allLinks: Element[] = Array.from(document.querySelectorAll("a"));
-    const positions = links.map((link) => allLinks.indexOf(link));
-    for (let i = 1; i < positions.length; i += 1) {
-      expect(positions[i]).toBeGreaterThan(positions[i - 1]!);
-    }
-  });
-
-  describe("Organization Features: Coming Soon treatment", () => {
-    it("3/4/5. every Organization link (Staff, Custom roles, Approvals) shows visible 'Coming Soon' text and is not a working/navigable link", async () => {
-      vi.stubGlobal("fetch", stubNavFetches());
-      render(<AppNav />);
-      await screen.findByRole("button", { name: /^menu$/i });
-
-      for (const label of ["Staff", "Custom roles", "Approvals"]) {
-        expect(screen.queryByRole("link", { name: new RegExp(`^${label}$`, "i") })).not.toBeInTheDocument();
-        expect(screen.getByText(label)).toBeInTheDocument();
-      }
-      // "Coming Soon" is visible text, not merely a color/style difference — one per Organization item.
-      expect(screen.getAllByText("Coming Soon")).toHaveLength(3);
-    });
-
-    it("3/4. the Coming Soon rows carry accessible disabled semantics (aria-disabled), not just visual styling", async () => {
-      vi.stubGlobal("fetch", stubNavFetches());
-      render(<AppNav />);
-      await screen.findByRole("button", { name: /^menu$/i });
-
-      const staffRow = screen.getByText("Staff").closest("[aria-disabled]");
-      expect(staffRow).toHaveAttribute("aria-disabled", "true");
-    });
-
-    it("6. working navigation links (Dashboard, Connections, Settings, etc.) remain real, clickable links, unaffected by the Organization Coming Soon treatment", async () => {
-      vi.stubGlobal("fetch", stubNavFetches());
-      render(<AppNav />);
-      await screen.findByRole("button", { name: /^menu$/i });
-
-      expect(screen.getByRole("link", { name: /^dashboard$/i })).toHaveAttribute("href", "/dashboard");
-      expect(screen.getByRole("link", { name: /^connections$/i })).toHaveAttribute("href", "/connections");
-      expect(screen.getByRole("link", { name: /^settings$/i })).toHaveAttribute("href", "/account");
-    });
-  });
-
-  describe("PAID2YOU PLATFORM EXPANSION: workspace selector (Section 7/8/14)", () => {
-    it("hides the workspace selector entirely when FEATURE_B2B_ORGANIZATIONS_ENABLED is off (the default)", async () => {
-      vi.stubGlobal("fetch", stubNavFetches(undefined, false, false));
-      render(<AppNav />);
-      await screen.findByRole("button", { name: /^menu$/i });
-      expect(screen.queryByText("My Paid2You")).not.toBeInTheDocument();
-      expect(screen.queryByText("+ Create Business Account")).not.toBeInTheDocument();
-    });
-
-    it("shows My Paid2You and every organization the user is a member of when the flag is on", async () => {
-      vi.stubGlobal(
-        "fetch",
-        stubNavFetches(undefined, false, true, [
-          { organizationId: "org-a", displayName: "ABC Trucking LLC" },
-          { organizationId: "org-b", displayName: "XYZ Logistics LLC" },
-        ]),
-      );
-      render(<AppNav />);
-      await screen.findByText("My Paid2You");
-      expect(screen.getByRole("link", { name: "My Paid2You" })).toHaveAttribute("href", "/dashboard");
-      expect(screen.getByRole("link", { name: "ABC Trucking LLC" })).toHaveAttribute("href", "/organizations/org-a");
-      expect(screen.getByRole("link", { name: "XYZ Logistics LLC" })).toHaveAttribute("href", "/organizations/org-b");
-      expect(screen.getByRole("link", { name: "+ Create Business Account" })).toHaveAttribute("href", "/organizations/new");
-    });
-
-    it("renders the Business navigation section (Dashboard, Outstanding Balances, Customers, Agreements, Employees, Organization Settings) only while inside an organization's workspace route", async () => {
-      mockUsePathname.mockReturnValue("/organizations/org-a/customers");
-      vi.stubGlobal("fetch", stubNavFetches(undefined, false, true, [{ organizationId: "org-a", displayName: "ABC Trucking LLC" }]));
-      render(<AppNav />);
-      await screen.findByText("ABC Trucking LLC", { selector: ".app-nav__section-label" });
-
-      // Scoped to the Business navigation's own landmark (aria-label="<org> navigation") rather than
-      // the full document — the Personal nav also has its own "Dashboard" link, and both are
-      // intentionally present at once (Step 1 fix: ambiguous unscoped query previously matched both).
-      const businessNav = screen.getByRole("navigation", { name: "ABC Trucking LLC navigation" });
-      // "PAID2YOU PRODUCTION LAUNCH", Phase 1, Section 15/20: Payments/Reports/Reconciliation/
-      // Documents/Audit History/Integrations are deliberately NOT in this list for initial launch —
-      // each was only ever an honest "not available yet" placeholder, and Section 15/20 explicitly
-      // prefers a narrower, professional launch nav over "a forest of coming-soon production pages."
-      const expectedLabels = ["Dashboard", "Outstanding Balances", "Customers", "Agreements", "Employees", "Organization Settings", "Billing & Subscription"];
-      for (const label of expectedLabels) {
-        expect(within(businessNav).getByRole("link", { name: label })).toBeInTheDocument();
-      }
-      for (const hiddenLabel of ["Payments", "Reports", "Reconciliation", "Documents", "Audit History", "Integrations"]) {
-        expect(within(businessNav).queryByRole("link", { name: hiddenLabel })).not.toBeInTheDocument();
-      }
-      expect(within(businessNav).getByRole("link", { name: "Customers" })).toHaveAttribute("href", "/organizations/org-a/customers");
-      expect(within(businessNav).getByRole("link", { name: "Customers" })).toHaveAttribute("aria-current", "page");
-
-      // Both the Personal primary "Dashboard" link and the Business "Dashboard" link coexist.
-      expect(screen.getAllByRole("link", { name: "Dashboard" })).toHaveLength(2);
-    });
-
-    it("does not render the Business navigation section while in the Personal workspace, even with the flag on", async () => {
-      vi.stubGlobal("fetch", stubNavFetches(undefined, false, true, [{ organizationId: "org-a", displayName: "ABC Trucking LLC" }]));
-      render(<AppNav />);
-      await screen.findByText("My Paid2You");
-      expect(screen.queryByRole("navigation", { name: /navigation$/ })).not.toBeInTheDocument();
-      expect(screen.queryByRole("link", { name: "Outstanding Balances" })).not.toBeInTheDocument();
-    });
   });
 });

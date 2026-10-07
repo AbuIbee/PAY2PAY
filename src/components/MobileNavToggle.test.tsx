@@ -6,8 +6,7 @@ import { MobileNavToggle } from "./MobileNavToggle";
 describe("MobileNavToggle", () => {
   it("starts collapsed with correct accessible state", () => {
     render(<MobileNavToggle />);
-    const button = screen.getByRole("button", { name: /open menu/i });
-    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: /open menu/i })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("toggles accessible state and label on click", async () => {
@@ -23,9 +22,10 @@ describe("MobileNavToggle", () => {
     expect(button).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("renders primary navigation links", () => {
+  it("renders Personal, Business, and Support navigation", () => {
     render(<MobileNavToggle />);
-    expect(screen.getAllByRole("link", { name: /how it works/i }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("link", { name: /use cases/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /^personal$/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /^business$/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /^support$/i }).length).toBeGreaterThan(0);
   });
 });

@@ -1,4 +1,4 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { AuthNavCta } from "@/components/AuthNavCta";
 import { MobileNavToggle } from "@/components/MobileNavToggle";
 
@@ -7,35 +7,13 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
     <div className="app-shell">
       <header className="app-header">
         <div className="header-inner">
-          <Link className="brand" href="/" aria-label="PAY2PAY home">
-            <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-            <span>PAY2PAY</span>
-          </Link>
-          <div style={{ marginInlineStart: "auto", display: "flex", alignItems: "center" }}>
-            <AuthNavCta />
-            <MobileNavToggle />
-          </div>
+          <Link className="paid2you-wordmark" href="/" aria-label="Paid2You home"><span>Paid2</span><strong>You</strong></Link>
+          <MobileNavToggle />
+          <div className="marketing-header-actions"><AuthNavCta /><Link className="button button--primary" href="/signup?accountType=business">Get Started</Link></div>
         </div>
       </header>
-      <main id="main-content" className="app-main">
-        <div className="container">{children}</div>
-      </main>
-      <footer className="app-footer">
-        <div className="footer-inner">
-          <Link className="brand brand--footer" href="/">
-            <span className="brand-mark" aria-hidden="true"><i>P</i><i>2</i></span>
-            <span>PAY2PAY</span>
-          </Link>
-          <p>Clear terms. Mutual approval. Documented repayment.</p>
-          <nav aria-label="Footer navigation">
-            <Link href="/privacy">Privacy</Link>
-            <Link href="/terms">Terms</Link>
-            <Link href="/support">Support</Link>
-            <Link href="/accessibility">Accessibility</Link>
-          </nav>
-          <small>© 2026 PAY2PAY.</small>
-        </div>
-      </footer>
+      <main id="main-content" className="app-main"><div className="container">{children}</div></main>
+      <footer className="app-footer"><div className="footer-inner paid2you-footer"><div><Link className="paid2you-wordmark paid2you-wordmark--footer" href="/"><span>Paid2</span><strong>You</strong></Link><p>Business-first account tools. Personal when you need it.</p></div><nav aria-label="Footer navigation"><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/accessibility">Accessibility</Link><Link href="/support">Support</Link></nav><small>Â© 2026 Paid2You.</small></div></footer>
     </div>
   );
 }

@@ -209,7 +209,7 @@ export function BusinessOnboardingWizard() {
 
   const step = stepForServerState(serverState);
   return (
-    <div style={{ display: "grid", gap: "1.5rem", maxWidth: "36rem" }}>
+    <div style={{ display: "grid", gap: "1.5rem", maxWidth: "64rem" }}>
       <OnboardingProgress current={step} />
       {step === "verification" && (
         <VerificationStep organizationId={organizationId} onSubmitted={() => void refreshState(organizationId)} />

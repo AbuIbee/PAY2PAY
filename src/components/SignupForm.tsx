@@ -57,7 +57,8 @@ export function SignupForm() {
   const formId = useId();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [accountType, setAccountType] = useState<AccountType>("personal");
+  const requestedAccountType = searchParams.get("accountType");
+  const [accountType, setAccountType] = useState<AccountType>(requestedAccountType === "business" ? "business" : "personal");
   const [email, setEmail] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [identity, setIdentity] = useState<PersonalIdentityState>(BLANK_PERSONAL_IDENTITY);

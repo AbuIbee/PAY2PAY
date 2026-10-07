@@ -1,24 +1,24 @@
 :root {
   color-scheme: light;
-  --ink: #102522;
-  --ink-soft: #4f625f;
-  --forest-950: #062925;
-  --forest-900: #083a34;
-  --forest-800: #0b5148;
-  --forest-700: #0e6b5e;
-  --forest-100: #dff3ed;
-  --forest-50: #effaf6;
-  --cream: #f8f5ec;
-  --sand: #eee6d2;
-  --gold: #c49343;
-  --gold-soft: #f4e7c9;
+  --ink: #080c43;
+  --ink-soft: #315393;
+  --forest-950: #080c43;
+  --forest-900: #0b1b62;
+  --forest-800: #0068ff;
+  --forest-700: #0084ff;
+  --forest-100: #e8f4ff;
+  --forest-50: #f7fbff;
+  --cream: #f7fbff;
+  --sand: #eaf4ff;
+  --gold: #00a997;
+  --gold-soft: #dff8f3;
   --white: #ffffff;
-  --border: #dce5e2;
-  --border-strong: #c6d3cf;
-  --shadow-sm: 0 10px 30px rgba(11, 60, 53, 0.08);
-  --shadow-lg: 0 32px 80px rgba(5, 43, 38, 0.18);
-  --focus-ring: #2477d4;
-  --max-content-width: 76rem;
+  --border: #dbedff;
+  --border-strong: #bddfff;
+  --shadow-sm: 0 10px 30px rgba(0,104,255,.08);
+  --shadow-lg: 0 32px 80px rgba(8,12,67,.16);
+  --focus-ring: #0068ff;
+  --max-content-width: 86rem;
   --radius-sm: 0.75rem;
   --radius: 1.15rem;
   --radius-lg: 1.75rem;
@@ -367,3 +367,6 @@ img, svg { display: block; max-width: 100%; }
   .closing-cta { margin-bottom: 4rem; padding: 2rem 1.25rem; }
   .early-access-form__row { grid-template-columns: 1fr; }
 }
+
+/* PAID2YOU BLUE BRAND OVERRIDES 2026-10-07 */
+body{background:#f7fbff}.paid2you-wordmark{display:inline-flex;align-items:baseline;color:#080c43;font-size:1.25rem;font-weight:850;letter-spacing:-.055em;text-decoration:none;white-space:nowrap}.paid2you-wordmark strong{color:#0068ff;font:inherit}.paid2you-wordmark--footer{color:#fff}.paid2you-wordmark--footer strong{color:#69adff}.marketing-header-actions{display:flex;align-items:center;gap:.2rem}.marketing-header-actions .button--primary{background:linear-gradient(135deg,#008eff,#0068ff);border-color:#0068ff;box-shadow:0 10px 24px rgba(0,104,255,.18)}.nav-shell{margin-inline-start:auto}.desktop-nav a:hover{color:#0068ff}.app-header{border-bottom-color:rgba(219,237,255,.94)}.app-footer{background:#080c43}.footer-inner>p{color:#afc7ec}.footer-inner nav{color:#c9daf6}.footer-inner small{color:#89a3cf}.paid2you-footer{display:grid;grid-template-columns:1fr auto;gap:1.5rem 3rem;align-items:end}.paid2you-footer small{grid-column:1/-1}@media(max-width:56rem){.marketing-header-actions{display:none}.nav-shell{margin-inline-start:auto}}@media(max-width:40rem){.paid2you-footer{grid-template-columns:1fr}.paid2you-footer small{grid-column:auto}}
