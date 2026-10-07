@@ -370,3 +370,81 @@ img, svg { display: block; max-width: 100%; }
 
 /* PAID2YOU BLUE BRAND OVERRIDES 2026-10-07 */
 body{background:#f7fbff}.paid2you-wordmark{display:inline-flex;align-items:baseline;color:#080c43;font-size:1.25rem;font-weight:850;letter-spacing:-.055em;text-decoration:none;white-space:nowrap}.paid2you-wordmark strong{color:#0068ff;font:inherit}.paid2you-wordmark--footer{color:#fff}.paid2you-wordmark--footer strong{color:#69adff}.marketing-header-actions{display:flex;align-items:center;gap:.2rem}.marketing-header-actions .button--primary{background:linear-gradient(135deg,#008eff,#0068ff);border-color:#0068ff;box-shadow:0 10px 24px rgba(0,104,255,.18)}.nav-shell{margin-inline-start:auto}.desktop-nav a:hover{color:#0068ff}.app-header{border-bottom-color:rgba(219,237,255,.94)}.app-footer{background:#080c43}.footer-inner>p{color:#afc7ec}.footer-inner nav{color:#c9daf6}.footer-inner small{color:#89a3cf}.paid2you-footer{display:grid;grid-template-columns:1fr auto;gap:1.5rem 3rem;align-items:end}.paid2you-footer small{grid-column:1/-1}@media(max-width:56rem){.marketing-header-actions{display:none}.nav-shell{margin-inline-start:auto}}@media(max-width:40rem){.paid2you-footer{grid-template-columns:1fr}.paid2you-footer small{grid-column:auto}}
+
+/* PAID2YOU HOMEPAGE ONE-VIEWPORT 2026-10-07 */
+@media (min-width: 70.001rem) and (min-height: 38rem) {
+  body:has(.paid2you-home-fit) {
+    overflow: hidden;
+  }
+
+  body:has(.paid2you-home-fit) .app-shell {
+    height: 100svh;
+    min-height: 100svh;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: 3.45rem minmax(0, 1fr) 3rem;
+  }
+
+  body:has(.paid2you-home-fit) .app-header {
+    min-height: 0;
+    height: 3.45rem;
+  }
+
+  body:has(.paid2you-home-fit) .header-inner {
+    height: 100%;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  body:has(.paid2you-home-fit) .app-main {
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  body:has(.paid2you-home-fit) .app-main > .container {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  body:has(.paid2you-home-fit) .app-footer {
+    min-height: 0;
+    height: 3rem;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  body:has(.paid2you-home-fit) .paid2you-footer {
+    width: min(calc(100% - 3rem), 86rem);
+    height: 100%;
+    margin-inline: auto;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  body:has(.paid2you-home-fit) .paid2you-footer > div {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  body:has(.paid2you-home-fit) .paid2you-footer p,
+  body:has(.paid2you-home-fit) .paid2you-footer small {
+    display: none;
+  }
+
+  body:has(.paid2you-home-fit) .paid2you-footer nav {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin: 0;
+  }
+}
+/* END PAID2YOU HOMEPAGE ONE-VIEWPORT 2026-10-07 */
